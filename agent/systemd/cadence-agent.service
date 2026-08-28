@@ -1,0 +1,26 @@
+[Unit]
+Description=Cadence patch-management agent (one-shot report)
+Documentation=file:/usr/local/share/doc/cadence/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/cadence/agent.env
+ExecStart=/usr/local/bin/cadence-agent
+
+# Collection may shell out to apt-get; bound the run and keep it low priority.
+TimeoutStartSec=600
+Nice=10
+IOSchedulingClass=idle
+
+# Light sandboxing (the agent only reads dpkg/apt state and POSTs a report;
+# apt-get update, when enabled, still works under these).
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# No [Install] section: this unit is started by cadence-agent.timer
+# (or manually via `systemctl start cadence-agent.service`).

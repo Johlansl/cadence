@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Cadence agent periodically
+
+[Timer]
+# First run shortly after boot, then hourly relative to the last run.
+OnBootSec=5min
+OnUnitActiveSec=1h
+# Spread load across a fleet so reports don't all hit the server at once.
+RandomizedDelaySec=5min
+# Catch up with one run if the machine was off when a run was due.
+Persistent=true
+Unit=cadence-agent.service
+
+[Install]
+WantedBy=timers.target
