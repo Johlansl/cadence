@@ -1,0 +1,38 @@
+export type HostStatus =
+  | 'up_to_date'
+  | 'updates_available'
+  | 'security_updates_available'
+
+export interface HostSummary {
+  id: string
+  hostname: string
+  fqdn: string | null
+  description: string | null
+  os_family: string
+  os_name: string | null
+  os_version: string | null
+  package_manager: string
+  agent_version: string | null
+  reboot_required: boolean
+  is_active: boolean
+  last_seen_at: string | null
+  created_at: string
+  updated_at: string
+  status: HostStatus
+  updates_available_count: number
+  security_updates_count: number
+}
+
+export interface HostPackage {
+  name: string
+  architecture: string
+  installed_version: string
+  candidate_version: string | null
+  is_security_update: boolean
+  update_origin: string | null
+  updated_at: string
+}
+
+export interface HostDetail extends HostSummary {
+  packages: HostPackage[]
+}

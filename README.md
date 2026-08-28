@@ -15,14 +15,14 @@ Incremental build, one testable step at a time (`CLAUDE.md` section 8).
       `GET /api/v1/hosts/{id}`.
 - [x] **Step 4 — Go agent**: collect (dpkg / apt / os-release) + report.
 - [x] **Step 5 — systemd unit + timer** for the agent.
-- [ ] Step 6 — frontend: host list + detail.
+- [x] **Step 6 — frontend**: master-detail dashboard (React + Vite + Tailwind).
 - [ ] Step 7 — end-to-end validation on real VMs.
 
 ## Real-VM test setup
 
-Target topology: one **central server VM** running `db` + `backend` via
-docker-compose, and one or more **monitored Debian VMs** each running the agent
-on a systemd timer. The agent only talks outbound to the server.
+Target topology: one **central server VM** running `db` + `backend` + `frontend`
+via docker-compose, and one or more **monitored Debian VMs** each running the
+agent on a systemd timer. The agent only talks outbound to the server.
 
 ### 1. Central server VM
 
@@ -38,15 +38,18 @@ Edit `.env`:
 | `POSTGRES_PASSWORD` | a real password |
 | `CADENCE_ADMIN_KEY` | `openssl rand -hex 32` |
 | `CADENCE_BACKEND_BIND` | `0.0.0.0` (so monitored VMs can reach the API) |
+| `CADENCE_FRONTEND_BIND` | `0.0.0.0` (so you can open the dashboard) |
 
 ```sh
-docker compose up -d --build db backend
+docker compose up -d --build
 curl -s http://<server-ip>:8000/healthz          # {"status":"ok"}
+# dashboard: http://<server-ip>:8080/
 ```
 
-`restart: unless-stopped` brings both services back after a reboot. Restrict
-port 8000 to your VM subnet at the firewall. TLS is **not** included yet — a
-Caddy reverse proxy in front is the intended next step; ask if you want it now.
+`restart: unless-stopped` brings the services back after a reboot. Restrict
+ports 8000 / 8080 to your VM subnet at the firewall. TLS is **not** included
+yet — a Caddy reverse proxy in front is the intended next step; ask if you want
+it now.
 
 ### 2. Register each monitored VM (run on the server, or anywhere with the admin key)
 
@@ -237,3 +240,29 @@ systemctl start cadence-agent.service                 # run once now
 journalctl -u cadence-agent -n 20 --no-pager          # "report sent to ..."
 systemctl list-timers cadence-agent.timer             # next scheduled run
 ```
+
+## Step 6 — the dashboard
+
+React + Vite + Tailwind, in `frontend/`. One master-detail view (no router),
+polls the API every 30s. Served in production by nginx, which also proxies
+`/api/` to the `backend` service (so the browser hits a single origin, no CORS).
+
+Part of the compose stack — `docker compose up -d --build` builds and runs it.
+With `CADENCE_FRONTEND_BIND=0.0.0.0`, open `http://<server-ip>:8080/`.
+
+The list shows each host with a status badge (green `up to date` / amber
+`updates` / red `security`), the update counts, a **last-report freshness**
+indicator (green ≤ 90 min, amber ≤ 6 h, red beyond — spots a stopped agent),
+and a `reboot` marker. The detail pane shows host metadata and the package
+table (pending updates first, security flagged), with a toggle to show all
+installed packages.
+
+### Local development
+
+```sh
+cd frontend
+npm install
+npm run dev            # http://localhost:5173 , proxies /api to http://localhost:8000
+```
+
+Point the dev proxy elsewhere with `CADENCE_DEV_API=http://<host>:8000 npm run dev`.

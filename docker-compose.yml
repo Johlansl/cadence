@@ -1,7 +1,4 @@
-# Cadence central server -- docker-compose.
-#
-# Increment 2 (see CLAUDE.md section 8): `db` + `backend`. The `frontend`
-# service is added in increment 6.
+# Cadence central server -- docker-compose: db + backend + frontend.
 
 services:
   db:
@@ -44,6 +41,16 @@ services:
       # Interface is configurable: 127.0.0.1 (default) for a local test,
       # 0.0.0.0 to reach the API from other VMs. See CADENCE_BACKEND_BIND.
       - "${CADENCE_BACKEND_BIND:-127.0.0.1}:8000:8000"
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # Same convention as the backend: loopback by default, 0.0.0.0 to expose
+      # the dashboard on the LAN. See CADENCE_FRONTEND_BIND.
+      - "${CADENCE_FRONTEND_BIND:-127.0.0.1}:8080:80"
 
 volumes:
   pgdata:
