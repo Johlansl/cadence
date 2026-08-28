@@ -1,6 +1,7 @@
 import { type ReactNode, useMemo, useState } from 'react'
 import type { HostDetail as HostDetailData, HostPackage } from '../types'
 import { Freshness } from './Freshness'
+import { Jobs } from './Jobs'
 import { StatusBadge } from './StatusBadge'
 
 function Meta({ label, children }: { label: string; children: ReactNode }) {
@@ -49,41 +50,43 @@ export function HostDetail({ host }: { host: HostDetailData }) {
         {host.description && <p className="mt-1 text-sm text-zinc-500">{host.description}</p>}
       </header>
 
-      <dl className="grid grid-cols-2 gap-4 px-6 py-4 sm:grid-cols-3 lg:grid-cols-4">
-        <Meta label="OS">
-          {(host.os_name ?? host.os_family) + (host.os_version ? ` ${host.os_version}` : '')}
-        </Meta>
-        <Meta label="Agent">{host.agent_version ?? '—'}</Meta>
-        <Meta label="Manager">{host.package_manager}</Meta>
-        <Meta label="FQDN">{host.fqdn ?? '—'}</Meta>
-        <Meta label="Last report">
-          <Freshness iso={host.last_seen_at} />
-        </Meta>
-        <Meta label="Updates">
-          {withUpdates}
-          {host.security_updates_count > 0 && (
-            <span className="text-red-400"> · {host.security_updates_count} security</span>
-          )}
-        </Meta>
-      </dl>
-
-      <div className="flex items-center justify-between border-t border-zinc-800 px-6 py-2 text-xs text-zinc-500">
-        <span>
-          {rows.length} package{rows.length === 1 ? '' : 's'} shown
-          {onlyUpdates && withUpdates !== host.packages.length && ` (of ${host.packages.length})`}
-        </span>
-        <label className="flex cursor-pointer items-center gap-1.5 select-none">
-          <input
-            type="checkbox"
-            checked={onlyUpdates}
-            onChange={(e) => setOnlyUpdates(e.target.checked)}
-            className="accent-zinc-400"
-          />
-          only pending updates
-        </label>
-      </div>
-
       <div className="min-h-0 flex-1 overflow-auto">
+        <dl className="grid grid-cols-2 gap-4 px-6 py-4 sm:grid-cols-3 lg:grid-cols-4">
+          <Meta label="OS">
+            {(host.os_name ?? host.os_family) + (host.os_version ? ` ${host.os_version}` : '')}
+          </Meta>
+          <Meta label="Agent">{host.agent_version ?? '—'}</Meta>
+          <Meta label="Manager">{host.package_manager}</Meta>
+          <Meta label="FQDN">{host.fqdn ?? '—'}</Meta>
+          <Meta label="Last report">
+            <Freshness iso={host.last_seen_at} />
+          </Meta>
+          <Meta label="Updates">
+            {withUpdates}
+            {host.security_updates_count > 0 && (
+              <span className="text-red-400"> · {host.security_updates_count} security</span>
+            )}
+          </Meta>
+        </dl>
+
+        <Jobs hostId={host.id} />
+
+        <div className="flex items-center justify-between border-t border-zinc-800 px-6 py-2 text-xs text-zinc-500">
+          <span>
+            {rows.length} package{rows.length === 1 ? '' : 's'} shown
+            {onlyUpdates && withUpdates !== host.packages.length && ` (of ${host.packages.length})`}
+          </span>
+          <label className="flex cursor-pointer items-center gap-1.5 select-none">
+            <input
+              type="checkbox"
+              checked={onlyUpdates}
+              onChange={(e) => setOnlyUpdates(e.target.checked)}
+              className="accent-zinc-400"
+            />
+            only pending updates
+          </label>
+        </div>
+
         <table className="w-full text-left text-sm">
           <thead className="sticky top-0 bg-zinc-950 text-xs uppercase tracking-wide text-zinc-600">
             <tr>

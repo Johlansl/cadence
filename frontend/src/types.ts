@@ -36,3 +36,19 @@ export interface HostPackage {
 export interface HostDetail extends HostSummary {
   packages: HostPackage[]
 }
+
+export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+
+export interface Job {
+  id: string
+  host_id: string
+  job_type: string
+  status: JobStatus
+  params: Record<string, unknown>
+  requested_by: string | null
+  result: { exit_code?: number | null; reboot_required?: boolean | null } | null
+  log: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}

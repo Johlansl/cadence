@@ -266,3 +266,43 @@ npm run dev            # http://localhost:5173 , proxies /api to http://localhos
 ```
 
 Point the dev proxy elsewhere with `CADENCE_DEV_API=http://<host>:8000 npm run dev`.
+
+## Step 8 — apply updates (jobs)
+
+Trigger `apt-get dist-upgrade` on a host from the dashboard; the agent runs it
+on its next check-in and posts the log back.
+
+```
+dashboard --POST /admin/hosts/{id}/jobs (X-Admin-Key)--> job: pending
+agent     --POST /reports--------------------------------> response carries the job
+                                                           job: running
+agent     runs `apt-get dist-upgrade -y` (dist-upgrade, non-interactive)
+agent     --POST /jobs/{id}/result---------------------->  job: succeeded | failed (+ log)
+```
+
+- **One active job per host** (`409` otherwise). The agent runs jobs serially.
+- The job stays **`pending` until the agent's next report** — hourly by
+  default. To apply now: `systemctl start cadence-agent.service` on the host.
+- **No reboot.** If the upgrade needs one, the agent reports `reboot_required`
+  and the badge shows up; rebooting is left to you.
+- Agent kill-switch: `CADENCE_ENABLE_UPGRADES=false` in `agent.env` — a
+  triggered job is then reported back as `failed` with that reason.
+- The dashboard asks for the `X-Admin-Key` once (kept in `sessionStorage`) the
+  first time you trigger a job.
+
+### Test the full flow on a monitored VM
+
+```sh
+# on the VM
+git pull
+cd agent && CGO_ENABLED=0 go build -trimpath -o bin/cadence-agent ./cmd/agent
+sudo systemd/install.sh                          # refreshes the binary (agent 0.2.0)
+
+# from the dashboard: open the host, "trigger dist-upgrade", enter the admin key
+# then apply immediately instead of waiting for the timer:
+systemctl start cadence-agent.service
+journalctl -u cadence-agent -f                   # report sent -> job received -> apt -> result
+```
+
+The job row in the dashboard goes `pending → running → succeeded`, with the
+apt output under "log".
