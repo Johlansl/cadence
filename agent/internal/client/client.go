@@ -56,6 +56,27 @@ func (c *Client) SendReport(ctx context.Context, r report.Report) (*report.JobHa
 	return parsed.Job, nil
 }
 
+// ClaimNextJob asks the server for a pending job without sending a package
+// report (the fast poll path). Returns nil when nothing is pending.
+func (c *Client) ClaimNextJob(ctx context.Context) (*report.JobHandoff, error) {
+	resp, err := c.do(ctx, "/api/v1/agent/next-job", []byte("{}"))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("server returned %s: %s", resp.Status, bytes.TrimSpace(payload))
+	}
+
+	var parsed report.Response // {"job": ...}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding next-job response: %w", err)
+	}
+	return parsed.Job, nil
+}
+
 // JobResult is the body of POST /api/v1/jobs/{id}/result.
 type JobResult struct {
 	Status         string `json:"status"` // "succeeded" | "failed"

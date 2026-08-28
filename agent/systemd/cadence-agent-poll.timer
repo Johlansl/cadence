@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll Cadence for a pending job every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+# Missing a poll is harmless -- no Persistent catch-up.
+Unit=cadence-agent-poll.service
+
+[Install]
+WantedBy=timers.target

@@ -61,6 +61,39 @@ func TestSendReportServerError(t *testing.T) {
 	}
 }
 
+func TestClaimNextJob(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/agent/next-job" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		io.WriteString(w, `{"job":{"id":"job-9","job_type":"apt_upgrade","params":{}}}`)
+	}))
+	defer srv.Close()
+
+	job, err := New(srv.URL, "tok", 5*time.Second).ClaimNextJob(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.ID != "job-9" {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestClaimNextJobEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"job":null}`)
+	}))
+	defer srv.Close()
+
+	job, err := New(srv.URL, "tok", 5*time.Second).ClaimNextJob(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job != nil {
+		t.Fatalf("expected nil, got %+v", job)
+	}
+}
+
 func TestSubmitJobResult(t *testing.T) {
 	var gotPath, gotAuth string
 	var gotBody JobResult

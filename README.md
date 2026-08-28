@@ -20,6 +20,8 @@ Incremental build, one testable step at a time (`CLAUDE.md` section 8).
       collection + report verified against the live stack.
 - [x] **Step 8 — apply updates (jobs)**: trigger endpoint + report piggyback,
       agent runs `apt dist-upgrade`, dashboard trigger button + job log.
+- [x] **Post-V1** — 1-minute job poll (`cadence-agent-poll.timer` +
+      `POST /api/v1/agent/next-job`) so a triggered upgrade starts within a minute.
 
 ## Real-VM test setup
 
@@ -212,16 +214,23 @@ security-vs-normal split is a **heuristic**: the substring `security` in a
 package's apt origin string. No home-grown version comparison — apt decides what
 is an update.
 
-## Step 5 — schedule the agent (systemd timer)
+## Step 5 — schedule the agent (systemd timers)
 
-Files in `agent/systemd/`:
+Two oneshot units on their own timers (`agent/systemd/`):
+
+| Unit | Cadence | Does |
+|---|---|---|
+| `cadence-agent.service` / `.timer` | `OnBootSec=5min`, then **hourly** (`RandomizedDelaySec=5min`, `Persistent=true`) | full package/OS report, runs a piggybacked job if any |
+| `cadence-agent-poll.service` / `.timer` | **every 1 min** (`-poll`) | claims a pending job and runs it — no collection; nothing pending → exits silently |
 
 | File | Installed as |
 |---|---|
-| `cadence-agent.service` | `/etc/systemd/system/` — `Type=oneshot`, reads `/etc/cadence/agent.env` |
-| `cadence-agent.timer` | `/etc/systemd/system/` — `OnBootSec=5min`, then hourly, `RandomizedDelaySec=5min`, `Persistent=true` |
 | `agent.env.example` | `/etc/cadence/agent.env` (chmod 0600, holds the token) |
-| `install.sh` | one-shot installer (copies binary + units, enables the timer) |
+| `install.sh` | installer (binary + all four units, enables both timers) |
+
+The 1-min poll is what makes a dashboard-triggered upgrade start within a
+minute (see Step 8). Don't want it? `systemctl disable --now
+cadence-agent-poll.timer` — jobs then wait for the hourly report instead.
 
 ### Install on a monitored VM
 
@@ -241,7 +250,7 @@ manual `systemctl start`), never at boot directly.
 ```sh
 systemctl start cadence-agent.service                 # run once now
 journalctl -u cadence-agent -n 20 --no-pager          # "report sent to ..."
-systemctl list-timers cadence-agent.timer             # next scheduled run
+systemctl list-timers 'cadence-agent*'                # both timers
 ```
 
 ## Step 6 — the dashboard
@@ -272,26 +281,35 @@ Point the dev proxy elsewhere with `CADENCE_DEV_API=http://<host>:8000 npm run d
 
 ## Step 8 — apply updates (jobs)
 
-Trigger `apt-get dist-upgrade` on a host from the dashboard; the agent runs it
-on its next check-in and posts the log back.
+Trigger `apt-get dist-upgrade` on a host from the dashboard; the agent picks it
+up within ~1 minute (the poll timer) and posts the log back.
 
 ```
 dashboard --POST /admin/hosts/{id}/jobs (X-Admin-Key)--> job: pending
-agent     --POST /reports--------------------------------> response carries the job
-                                                           job: running
-agent     runs `apt-get dist-upgrade -y` (dist-upgrade, non-interactive)
-agent     --POST /jobs/{id}/result---------------------->  job: succeeded | failed (+ log)
+agent     --POST /agent/next-job (every 1 min)---------->  claims it, job: running
+          (also delivered on the hourly POST /reports)
+agent     runs `apt-get dist-upgrade -y` (non-interactive, confold/confdef)
+agent     --POST /jobs/{id}/result--------------------->  job: succeeded | failed (+ log)
 ```
 
-- **One active job per host** (`409` otherwise). The agent runs jobs serially.
-- The job stays **`pending` until the agent's next report** — hourly by
-  default. To apply now: `systemctl start cadence-agent.service` on the host.
-- **No reboot.** If the upgrade needs one, the agent reports `reboot_required`
-  and the badge shows up; rebooting is left to you.
+- **~1-minute latency**, from the `cadence-agent-poll.timer` (Step 5). No push /
+  long-poll — the agent still only makes outbound calls. Impatient? still
+  `systemctl start cadence-agent.service`.
+- **One active job per host** (`409` otherwise). The poll and the report both
+  use `SELECT … FOR UPDATE SKIP LOCKED`, so only one ever claims a given job.
+- **No reboot.** If the upgrade needs one the agent reports `reboot_required`
+  and the badge shows — rebooting is left to you. That flag comes from
+  `/var/run/reboot-required`, which on Debian is only created if
+  **`update-notifier-common`** is installed; without it a kernel upgrade won't
+  raise the flag. `apt install update-notifier-common` on monitored VMs.
 - Agent kill-switch: `CADENCE_ENABLE_UPGRADES=false` in `agent.env` — a
   triggered job is then reported back as `failed` with that reason.
 - The dashboard asks for the `X-Admin-Key` once (kept in `sessionStorage`) the
   first time you trigger a job.
+
+Scheduled / automatic update windows (a cron-like policy, maintenance windows)
+are **out of V1 scope** (CLAUDE.md §2). The schema is ready for it: a future
+scheduler just inserts `jobs` rows, with window options in `jobs.params`.
 
 ### Test the full flow on a monitored VM
 
@@ -299,12 +317,10 @@ agent     --POST /jobs/{id}/result---------------------->  job: succeeded | fail
 # on the VM
 git pull
 cd agent && CGO_ENABLED=0 go build -trimpath -o bin/cadence-agent ./cmd/agent
-sudo systemd/install.sh                          # refreshes the binary (agent 0.2.0)
+sudo systemd/install.sh                          # refreshes the binary + installs the poll timer
 
 # from the dashboard: open the host, "trigger dist-upgrade", enter the admin key
-# then apply immediately instead of waiting for the timer:
-systemctl start cadence-agent.service
-journalctl -u cadence-agent -f                   # report sent -> job received -> apt -> result
+journalctl -u cadence-agent-poll -f              # within ~1 min: job received -> apt -> result
 ```
 
 The job row in the dashboard goes `pending → running → succeeded`, with the

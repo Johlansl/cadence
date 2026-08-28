@@ -145,7 +145,7 @@ export function Jobs({ hostId }: { hostId: string }) {
                   <span className="text-orange-400">· reboot required</span>
                 )}
                 {j.status === 'pending' && (
-                  <span className="text-zinc-600">· waiting for the agent to check in</span>
+                  <span className="text-zinc-600">· the agent picks it up within ~1 min</span>
                 )}
               </div>
               {j.log && (

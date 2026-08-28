@@ -1,10 +1,16 @@
-// Command agent collects the local package / OS state, posts a single report to
-// the Cadence server, and -- if the server hands back a pending job -- runs it
-// and reports the result, then exits. Scheduling is external (a systemd timer).
+// Command agent has two one-shot modes, both driven by systemd timers:
+//
+//	cadence-agent          collect package/OS state, POST a report, and run a
+//	                       job if one is piggybacked on the response
+//	cadence-agent -poll    just ask the server for a pending job and run it
+//	                       (fast path, no collection)
+//
+// Communication stays outbound-only; -poll is a short poll, not a long poll.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -18,27 +24,44 @@ import (
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.2.0"
+const agentVersion = "0.3.0"
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("cadence-agent: ")
 
-	if err := run(); err != nil {
+	pollOnly := flag.Bool("poll", false,
+		"check for a pending job and run it, without collecting or reporting packages")
+	flag.Parse()
+
+	if err := run(*pollOnly); err != nil {
 		log.Printf("error: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(pollOnly bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-
 	c := client.New(cfg.ServerURL, cfg.Token, cfg.HTTPTimeout)
 
-	// Safety ceiling for collection + report.
+	if pollOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+		defer cancel()
+
+		job, err := c.ClaimNextJob(ctx)
+		if err != nil {
+			return err
+		}
+		if job == nil {
+			return nil // nothing pending; stay quiet
+		}
+		return runJob(cfg, c, job)
+	}
+
+	// Full path: collect, report, then run a piggybacked job if there is one.
 	reportCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 

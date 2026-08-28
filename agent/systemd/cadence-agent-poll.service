@@ -1,0 +1,24 @@
+[Unit]
+Description=Cadence agent -- claim and run a pending job (fast poll)
+Documentation=file:/usr/local/share/doc/cadence/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/cadence/agent.env
+ExecStart=/usr/local/bin/cadence-agent -poll
+
+# Does nothing when no job is pending; when one is, it runs apt-get dist-upgrade
+# -- so allow it the same headroom as a piggybacked job.
+TimeoutStartSec=1800
+Nice=10
+IOSchedulingClass=idle
+
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# No [Install] section: started by cadence-agent-poll.timer.

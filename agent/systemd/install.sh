@@ -35,19 +35,22 @@ if [ ! -f "$CONFDIR/agent.env" ]; then
 	NEEDS_CONFIG=1
 fi
 
-install -m 0644 "$HERE/cadence-agent.service" "$UNITDIR/cadence-agent.service"
-install -m 0644 "$HERE/cadence-agent.timer" "$UNITDIR/cadence-agent.timer"
+for unit in cadence-agent.service cadence-agent.timer \
+	cadence-agent-poll.service cadence-agent-poll.timer; do
+	install -m 0644 "$HERE/$unit" "$UNITDIR/$unit"
+done
 
 if [ -f "$HERE/../../README.md" ]; then
 	install -D -m 0644 "$HERE/../../README.md" "$DOCDIR/README.md"
 fi
 
 systemctl daemon-reload
-systemctl enable --now cadence-agent.timer
+systemctl enable --now cadence-agent.timer         # hourly full report
+systemctl enable --now cadence-agent-poll.timer    # 1-min job poll
 
 echo
 if [ "${NEEDS_CONFIG:-0}" = 1 ]; then
 	echo ">> Edit $CONFDIR/agent.env (server URL + per-host token) before the first run."
 fi
-echo ">> Timer:    systemctl list-timers cadence-agent.timer"
+echo ">> Timers:   systemctl list-timers 'cadence-agent*'"
 echo ">> Run now:  systemctl start cadence-agent.service && journalctl -u cadence-agent -n 20 --no-pager"

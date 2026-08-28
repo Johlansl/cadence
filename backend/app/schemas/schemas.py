@@ -55,11 +55,16 @@ class ReportIn(BaseModel):
 
 
 class JobHandoff(BaseModel):
-    """A pending job handed to the agent in the report response (piggyback)."""
+    """A pending job handed to the agent -- in the report response (piggyback)
+    or from the dedicated POST /api/v1/agent/next-job poll."""
 
     id: uuid.UUID
     job_type: str
     params: dict
+
+
+class NextJob(BaseModel):
+    job: JobHandoff | None = None
 
 
 class ReportAccepted(BaseModel):
