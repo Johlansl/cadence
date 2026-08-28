@@ -1,6 +1,6 @@
-// Package client sends the assembled report to the Cadence server over HTTP.
-// Communication is outbound-only and one-shot: a single POST, no retry loop
-// (the systemd timer drives the next attempt).
+// Package client talks to the Cadence server over HTTP. Communication is
+// outbound-only. Reports are one-shot (no retry loop; the systemd timer drives
+// the next attempt); a job result is posted once, right after the job runs.
 package client
 
 import (
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"cadence/agent/internal/report"
@@ -29,24 +30,50 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 	}
 }
 
-// SendReport POSTs the report to {baseURL}/api/v1/reports.
-func (c *Client) SendReport(ctx context.Context, r report.Report) error {
+// SendReport POSTs the report to {baseURL}/api/v1/reports and returns the
+// piggybacked job, if the server handed one back (nil otherwise).
+func (c *Client) SendReport(ctx context.Context, r report.Report) (*report.JobHandoff, error) {
 	body, err := json.Marshal(r)
 	if err != nil {
-		return fmt.Errorf("encoding report: %w", err)
+		return nil, fmt.Errorf("encoding report: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/api/v1/reports", bytes.NewReader(body))
+	resp, err := c.do(ctx, "/api/v1/reports", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("server returned %s: %s", resp.Status, bytes.TrimSpace(payload))
+	}
+
+	var parsed report.Response
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding report response: %w", err)
+	}
+	return parsed.Job, nil
+}
+
+// JobResult is the body of POST /api/v1/jobs/{id}/result.
+type JobResult struct {
+	Status         string `json:"status"` // "succeeded" | "failed"
+	ExitCode       int    `json:"exit_code"`
+	Log            string `json:"log"`
+	RebootRequired bool   `json:"reboot_required"`
+}
+
+// SubmitJobResult reports the outcome of a job back to the server.
+func (c *Client) SubmitJobResult(ctx context.Context, jobID string, result JobResult) error {
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encoding job result: %w", err)
+	}
+
+	resp, err := c.do(ctx, "/api/v1/jobs/"+url.PathEscape(jobID)+"/result", body)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("sending report: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -55,4 +82,19 @@ func (c *Client) SendReport(ctx context.Context, r report.Report) error {
 		return fmt.Errorf("server returned %s: %s", resp.Status, bytes.TrimSpace(snippet))
 	}
 	return nil
+}
+
+func (c *Client) do(ctx context.Context, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", path, err)
+	}
+	return resp, nil
 }

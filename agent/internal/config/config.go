@@ -13,10 +13,11 @@ import (
 )
 
 type Config struct {
-	ServerURL    string        // CADENCE_SERVER_URL, trailing slash stripped
-	Token        string        // CADENCE_TOKEN
-	RunAptUpdate bool          // CADENCE_RUN_APT_UPDATE (default false)
-	HTTPTimeout  time.Duration // CADENCE_HTTP_TIMEOUT_SECONDS (default 30s)
+	ServerURL      string        // CADENCE_SERVER_URL, trailing slash stripped
+	Token          string        // CADENCE_TOKEN
+	RunAptUpdate   bool          // CADENCE_RUN_APT_UPDATE (default false)
+	EnableUpgrades bool          // CADENCE_ENABLE_UPGRADES (default true)
+	HTTPTimeout    time.Duration // CADENCE_HTTP_TIMEOUT_SECONDS (default 30s)
 }
 
 // Load reads and validates the configuration.
@@ -48,6 +49,15 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("CADENCE_RUN_APT_UPDATE must be a boolean, got %q", v)
 		}
 		cfg.RunAptUpdate = b
+	}
+
+	cfg.EnableUpgrades = true
+	if v := strings.TrimSpace(os.Getenv("CADENCE_ENABLE_UPGRADES")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("CADENCE_ENABLE_UPGRADES must be a boolean, got %q", v)
+		}
+		cfg.EnableUpgrades = b
 	}
 
 	cfg.HTTPTimeout = 30 * time.Second

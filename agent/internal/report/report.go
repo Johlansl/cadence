@@ -1,6 +1,9 @@
 // Package report defines the JSON payload the agent sends to the Cadence server
-// (POST /api/v1/reports). See CLAUDE.md section 5 for the wire contract.
+// (POST /api/v1/reports) and the shape of the response. See CLAUDE.md section 5
+// for the wire contract.
 package report
+
+import "encoding/json"
 
 // Package is one installed package, optionally carrying a pending update
 // (CandidateVersion / UpdateOrigin / IsSecurityUpdate set).
@@ -24,6 +27,20 @@ type Report struct {
 	PackageManager string    `json:"package_manager"`
 	RebootRequired bool      `json:"reboot_required"`
 	Packages       []Package `json:"packages"`
+}
+
+// JobHandoff is a job the server wants this host to run, delivered in the
+// response to a report (piggyback, CLAUDE.md section 3).
+type JobHandoff struct {
+	ID      string          `json:"id"`
+	JobType string          `json:"job_type"`
+	Params  json.RawMessage `json:"params"`
+}
+
+// Response is the body returned by POST /api/v1/reports. Only the piggybacked
+// job is of interest to the agent; the rest is ignored.
+type Response struct {
+	Job *JobHandoff `json:"job"`
 }
 
 // Counts returns the number of packages with a pending update, and how many of
