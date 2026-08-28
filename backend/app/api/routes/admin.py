@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin_key
-from app.models.models import Host
-from app.schemas.schemas import HostCreate, HostCreated
+from app.models.models import Host, Job
+from app.schemas.schemas import HostCreate, HostCreated, JobCreate, JobOut
 
 router = APIRouter(
     prefix="/api/v1/admin",
@@ -36,3 +38,39 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db)) -> HostCreat
     db.refresh(host)
 
     return HostCreated(id=host.id, hostname=host.hostname, token=token)
+
+
+@router.post(
+    "/hosts/{host_id}/jobs",
+    response_model=JobOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_job(
+    host_id: uuid.UUID, payload: JobCreate, db: Session = Depends(get_db)
+) -> Job:
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+
+    # One active job per host: the agent runs them serially and the dashboard
+    # button is disabled while one is in flight.
+    active = db.execute(
+        select(Job.id)
+        .where(Job.host_id == host_id, Job.status.in_(("pending", "running")))
+        .limit(1)
+    ).first()
+    if active is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "a job is already pending or running for this host",
+        )
+
+    job = Job(
+        host_id=host_id,
+        job_type=payload.job_type,
+        params=payload.params,
+        requested_by=payload.requested_by,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job

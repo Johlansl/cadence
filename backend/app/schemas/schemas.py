@@ -6,6 +6,8 @@ import enum
 import uuid
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -52,12 +54,22 @@ class ReportIn(BaseModel):
     packages: list[ReportPackage] = Field(default_factory=list)
 
 
+class JobHandoff(BaseModel):
+    """A pending job handed to the agent in the report response (piggyback)."""
+
+    id: uuid.UUID
+    job_type: str
+    params: dict
+
+
 class ReportAccepted(BaseModel):
     host_id: uuid.UUID
     installed_package_count: int
     updates_available_count: int
     security_updates_count: int
     reboot_required: bool
+    # Set when a pending job was picked up for this host.
+    job: JobHandoff | None = None
 
 
 # --- host views -----------------------------------------------------------
@@ -101,3 +113,36 @@ class HostPackageOut(BaseModel):
 
 class HostDetail(HostSummary):
     packages: list[HostPackageOut]
+
+
+# --- jobs ----------------------------------------------------------------
+
+class JobCreate(BaseModel):
+    job_type: str = "apt_upgrade"
+    params: dict = Field(default_factory=dict)
+    requested_by: str | None = None
+
+
+class JobResultIn(BaseModel):
+    """Posted by the agent once it has run the job."""
+
+    status: Literal["succeeded", "failed"]
+    exit_code: int
+    log: str = ""
+    reboot_required: bool | None = None
+
+
+class JobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    host_id: uuid.UUID
+    job_type: str
+    status: str
+    params: dict
+    requested_by: str | None
+    result: dict | None
+    log: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None

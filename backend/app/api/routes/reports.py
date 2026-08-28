@@ -11,8 +11,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_host, get_db
-from app.models.models import Host, HostPackage, Package, Report
-from app.schemas.schemas import ReportAccepted, ReportIn
+from app.models.models import Host, HostPackage, Job, Package, Report
+from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
 
@@ -99,6 +99,22 @@ def create_report(
             raw_payload=report_in.model_dump(mode="json"),
         )
     )
+
+    # 5. Piggyback: hand the oldest pending job (if any) to the agent and mark
+    #    it running. One job per report; the agent runs them serially.
+    job = db.execute(
+        select(Job)
+        .where(Job.host_id == host.id, Job.status == "pending")
+        .order_by(Job.created_at)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    ).scalar_one_or_none()
+    handoff = None
+    if job is not None:
+        job.status = "running"
+        job.started_at = now
+        handoff = JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
+
     db.commit()
 
     return ReportAccepted(
@@ -107,4 +123,5 @@ def create_report(
         updates_available_count=updates_available,
         security_updates_count=security_updates,
         reboot_required=report_in.reboot_required,
+        job=handoff,
     )
