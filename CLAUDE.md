@@ -291,3 +291,32 @@ landing page.
 
 Commence par l'étape 1 de la section 8. Une fois chaque étape validée, je
 te donnerai le feu vert pour la suivante.
+
+## 11. État d'avancement
+
+Étapes 1 à 8 de la section 8 : **faites et validées** (dont un vrai
+`apt dist-upgrade` déclenché depuis le dashboard sur une VM réelle,
+`vm-japp`, Debian 13). Ajout post-V1 déjà en place : poll de job dédié
+(`POST /api/v1/agent/next-job` + `cadence-agent-poll.timer` à 60 s) pour que
+les upgrades déclenchés partent en ~1 min sans casser l'outbound-only.
+
+## 12. Backlog post-V1 — NE PAS implémenter sans feu vert explicite
+
+Demandé par l'utilisateur, à garder en tête pour une session future :
+
+1. **Choix reboot côté dashboard.** Aujourd'hui l'agent ne reboote jamais
+   (décision V1). Objectif : laisser l'utilisateur choisir, par job ou par
+   host, `reboot = auto | never` (voire `prompt`). Stocker l'option dans
+   `jobs.params` (jsonb, déjà prévu). Le flag `reboot_required` remonte déjà
+   (fichier `/var/run/reboot-required`, nécessite `update-notifier-common`
+   sur les VMs Debian).
+2. **Planification / fenêtres de maintenance.** Timer automatique d'update,
+   ou choix d'un jour du mois + heure. Un futur service planificateur
+   n'aura qu'à insérer des lignes `jobs` (options de fenêtre dans
+   `jobs.params`). C'est le point "planification automatique / fenêtres de
+   maintenance" listé hors scope en section 2 — le rester tant que
+   l'utilisateur ne donne pas le feu vert.
+
+Autre point ouvert (pas une feature) : **TLS / reverse proxy (Caddy)**
+toujours pas fait — signalé recommandé dès le début, non bloquant sur LAN de
+confiance.
