@@ -300,6 +300,10 @@ te donnerai le feu vert pour la suivante.
 (`POST /api/v1/agent/next-job` + `cadence-agent-poll.timer` à 60 s) pour que
 les upgrades déclenchés partent en ~1 min sans casser l'outbound-only.
 
+**Contexte détaillé de la dernière session (journal, décisions, état du
+déploiement, limites connues, options pour la suite) : voir `HANDOFF.md` à la
+racine.** À lire en premier au démarrage d'une nouvelle session.
+
 ## 12. Backlog post-V1 — NE PAS implémenter sans feu vert explicite
 
 Demandé par l'utilisateur, à garder en tête pour une session future :
