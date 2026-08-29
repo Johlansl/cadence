@@ -79,6 +79,15 @@ sudo update-ca-certificates
 ### 2. Register each monitored VM (run on the server, or anywhere with the admin key)
 
 ```sh
+scripts/provision-host.sh vm-web-01 "web frontend"
+# creates the host and prints a ready-to-paste /etc/cadence/agent.env block.
+# Reads CADENCE_ADMIN_KEY from .env; talks to http://127.0.0.1:8000 by default
+# (override with CADENCE_API / CADENCE_AGENT_URL).
+```
+
+Or by hand:
+
+```sh
 curl -s -X POST https://cadence.lan/api/v1/admin/hosts \
   -H "X-Admin-Key: $CADENCE_ADMIN_KEY" \
   -H 'Content-Type: application/json' \
