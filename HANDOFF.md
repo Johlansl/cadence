@@ -58,8 +58,15 @@ tests de reboot validés** (`never`+flag → non ; `CADENCE_ENABLE_REBOOT=false`
 `vm-nginxproxy` (Debian 12, agent 0.4.0) + `scripts/provision-host.sh` ;
 bandeau « agent silencieux » + chips d'ensemble ; cycle de vie host
 (`PATCH is_active`, `DELETE /admin/hosts/{id}`) ; panneau Jobs repliable +
-`DELETE /admin/hosts/{id}/jobs`. **Suite = Round 2** (rétention `reports`,
-CI) — voir le fichier mémoire `cadence-roadmap`.
+`DELETE /admin/hosts/{id}/jobs`.
+
+**Round 2 (commits `1bde0d1`, `1826ecd`) fait :** rétention quotidienne dans
+le scheduler (`CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS`,
+défaut 90), migration `0004` (index `reports.received_at`), `backend` +
+`scheduler` sur une image partagée `cadence-backend` ; `.gitlab-ci.yml`
+(agent / backend+postgres / frontend). Base à la révision `0004`.
+**Toute la roadmap `cadence-roadmap` est faite** — restent seulement les
+items « plus tard / optionnel ».
 
 ---
 
