@@ -66,6 +66,10 @@ export const api = {
     return adminWrite<Job>(`/admin/hosts/${hostId}/jobs`, adminKey, 'POST', body)
   },
 
+  clearHostJobs(hostId: string, adminKey: string) {
+    return adminWrite<null>(`/admin/hosts/${hostId}/jobs`, adminKey, 'DELETE', undefined)
+  },
+
   patchHost(
     hostId: string,
     adminKey: string,
