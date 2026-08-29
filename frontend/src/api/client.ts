@@ -1,4 +1,11 @@
-import type { HostDetail, HostSummary, Job, RebootPolicy } from '../types'
+import type {
+  HostDetail,
+  HostSummary,
+  Job,
+  RebootPolicy,
+  Schedule,
+  ScheduleInput,
+} from '../types'
 
 const BASE = '/api/v1'
 
@@ -22,7 +29,7 @@ export interface AdminWriteResult<T> {
 async function adminWrite<T>(
   path: string,
   adminKey: string,
-  method: 'POST' | 'PATCH',
+  method: 'POST' | 'PATCH' | 'DELETE',
   body: unknown,
 ): Promise<AdminWriteResult<T>> {
   const res = await fetch(`${BASE}${path}`, {
@@ -35,6 +42,7 @@ async function adminWrite<T>(
     body: JSON.stringify(body),
   })
   if (res.ok) {
+    if (res.status === 204) return { ok: true, status: 204 }
     return { ok: true, status: res.status, data: (await res.json()) as T }
   }
   let detail: string | undefined
@@ -65,5 +73,19 @@ export const api = {
       'PATCH',
       { reboot_policy },
     )
+  },
+
+  getSchedules: (hostId: string) => getJSON<Schedule[]>(`/hosts/${hostId}/schedules`),
+
+  createSchedule(hostId: string, adminKey: string, body: ScheduleInput) {
+    return adminWrite<Schedule>(`/admin/hosts/${hostId}/schedules`, adminKey, 'POST', body)
+  },
+
+  updateSchedule(scheduleId: string, adminKey: string, body: Partial<ScheduleInput>) {
+    return adminWrite<Schedule>(`/admin/schedules/${scheduleId}`, adminKey, 'PATCH', body)
+  },
+
+  deleteSchedule(scheduleId: string, adminKey: string) {
+    return adminWrite<null>(`/admin/schedules/${scheduleId}`, adminKey, 'DELETE', undefined)
   },
 }

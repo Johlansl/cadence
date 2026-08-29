@@ -40,6 +40,36 @@ export interface HostDetail extends HostSummary {
   packages: HostPackage[]
 }
 
+export type ScheduleKind = 'monthly' | 'weekly'
+
+export interface Schedule {
+  id: string
+  host_id: string
+  enabled: boolean
+  kind: ScheduleKind
+  day_of_month: number | null
+  weekday: number | null // Monday = 0
+  hour: number
+  minute: number
+  timezone: string
+  params: Record<string, unknown>
+  last_run_at: string | null
+  next_run_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ScheduleInput {
+  enabled: boolean
+  kind: ScheduleKind
+  day_of_month: number | null
+  weekday: number | null
+  hour: number
+  minute: number
+  timezone: string
+  params: Record<string, unknown>
+}
+
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
 export interface Job {

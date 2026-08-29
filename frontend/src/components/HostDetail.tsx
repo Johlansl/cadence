@@ -4,6 +4,7 @@ import type { HostDetail as HostDetailData, HostPackage, RebootPolicy } from '..
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 import { Freshness } from './Freshness'
 import { Jobs } from './Jobs'
+import { Schedule } from './Schedule'
 import { StatusBadge } from './StatusBadge'
 
 function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootPolicy }) {
@@ -120,6 +121,7 @@ export function HostDetail({ host }: { host: HostDetailData }) {
         </dl>
 
         <Jobs hostId={host.id} />
+        <Schedule hostId={host.id} />
 
         <div className="flex items-center justify-between border-t border-zinc-800 px-6 py-2 text-xs text-zinc-500">
           <span>
