@@ -175,6 +175,21 @@ curl -s http://127.0.0.1:8000/api/v1/hosts/<host_id>  # detail + package list
 ordered by hostname. `last_seen_at` is the report-freshness signal for the UI.
 These GET endpoints are unauthenticated in V1 (single-user, trusted network).
 
+### Run the backend tests
+
+`pytest` against a real PostgreSQL (the code uses JSONB / `gen_random_uuid()` /
+`FOR UPDATE SKIP LOCKED`). Test deps live in `backend/requirements-dev.txt` and
+are **not** in the runtime image. With the compose stack up:
+
+```sh
+docker compose run --rm -v "$PWD/backend:/app" backend \
+  sh -c "pip install -q -r requirements-dev.txt && pytest -q"
+```
+
+It drops and recreates a `cadence_test` database from `init.sql` once per run;
+each test runs in a transaction that is rolled back. Point it elsewhere with
+`TEST_DATABASE_URL`.
+
 ## Step 4 — the agent
 
 Go, stdlib only, single static binary, one-shot (collect → POST → exit).
