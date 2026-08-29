@@ -54,6 +54,13 @@ tests de reboot validés** (`never`+flag → non ; `CADENCE_ENABLE_REBOOT=false`
 **État stack `vm-cadence` :** 5 services up (`db`, `backend`, `scheduler`,
 `frontend`, `caddy`), base à la révision Alembic `0003`.
 
+**Round 1 post-V1 (roadmap, commits `0c1caee`..`43a7aa3`) fait :** 2ᵉ VM
+`vm-nginxproxy` (Debian 12, agent 0.4.0) + `scripts/provision-host.sh` ;
+bandeau « agent silencieux » + chips d'ensemble ; cycle de vie host
+(`PATCH is_active`, `DELETE /admin/hosts/{id}`) ; panneau Jobs repliable +
+`DELETE /admin/hosts/{id}/jobs`. **Suite = Round 2** (rétention `reports`,
+CI) — voir le fichier mémoire `cadence-roadmap`.
+
 ---
 
 ## 1. Où on en est — TL;DR
