@@ -1,8 +1,50 @@
-# Cadence — Handoff de session (2026-08-28)
+# Cadence — Handoff de session (2026-08-28, complété le 2026-08-29)
 
 Contexte complet pour reprendre le projet dans une nouvelle session Claude Code.
 À lire avec `CLAUDE.md` (le brief, fait autorité sur le périmètre) et `README.md`
 (procédures de déploiement / test, tenu à jour à chaque étape).
+
+---
+
+## 0. Session 2026-08-29 — travaux post-V1 (à jour ici, le reste du fichier
+##    décrit l'état au 2026-08-28)
+
+Plan : `~/.claude/plans/regarde-les-m-moires-de-cozy-sunset.md`. 5 incréments,
+un commit chacun, poussés sur `origin/main`.
+
+- **Inc. 1** — seuils de fraîcheur du dashboard resserrés à 5/15 min
+  (`frontend/src/lib/time.ts`).
+- **Inc. 2** — suite `pytest` backend (`backend/tests/`), Postgres réel, schéma
+  monté via `alembic upgrade head`, rollback par test.
+  `docker compose run --rm -v "$PWD/backend:/app" backend sh -c "pip install -q
+  -r requirements-dev.txt && pytest -q"`.
+- **Inc. 3** — **TLS** : service `caddy` (compose), CA interne, `Caddyfile`,
+  `CADENCE_SITE_ADDRESS` (= `cadence.lan`). `backend`/`frontend` repassés en
+  loopback (dans `.env` de cette VM, encore `0.0.0.0` le temps de la migration
+  agent). `nginx.conf` résout `backend` par requête (DNS Docker `127.0.0.11`).
+  Racine CA à installer sur les VMs : `docker compose exec caddy cat
+  /data/caddy/pki/authorities/local/root.crt`.
+- **Inc. 4** — runbook README « Upgrade an existing monitored VM » (CA +
+  `update-notifier-common` + agent + URL HTTPS). Fait sur `vm-japp` par
+  l'utilisateur.
+- **Inc. 5a** — **Alembic** : `init.sql` figé à la baseline (rév. `0001`), tout
+  le reste en révisions écrites main (pas d'autogenerate). Déploiement sur base
+  existante : vérifier == `init.sql`, `alembic stamp 0001`, puis `alembic
+  upgrade head`. **Appliqué sur `vm-cadence` : base à la révision `0002`**
+  (`hosts.reboot_policy TEXT NOT NULL DEFAULT 'never' CHECK (IN
+  ('auto','never'))`). Override par job : `jobs.params->>'reboot'`, résolu
+  côté serveur au claim et épinglé dans `jobs.params`. `PATCH
+  /api/v1/admin/hosts/{id}`. **Agent 0.4.0** : reboote via `systemctl
+  --no-block reboot` si `succeeded` + `/var/run/reboot-required` + mode `auto`
+  + `CADENCE_ENABLE_REBOOT` != false ; résultat du job posté avant le reboot.
+- **Inc. 5b** — planification : **à faire** (table `schedules`, service
+  `scheduler` réutilisant l'image backend).
+
+**En attente au moment du handoff :** déployer l'agent **0.4.0** sur `vm-japp`,
+puis les 3 tests de reboot (snapshot Proxmox fait, feu vert donné) :
+`auto`+flag → reboot ; `never`+flag → pas de reboot ; `CADENCE_ENABLE_REBOOT=
+false`+`auto`+flag → pas de reboot. Simuler le flag : `sudo touch
+/run/reboot-required`.
 
 ---
 

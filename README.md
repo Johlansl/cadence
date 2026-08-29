@@ -176,6 +176,26 @@ docker compose down -v
 docker compose up -d db
 ```
 
+## Database migrations (Alembic)
+
+`backend/app/db/init.sql` is **frozen at the baseline** (Alembic revision
+`0001`) and is only the first-boot bootstrap. Every schema change after that is
+a hand-written revision under `backend/alembic/versions/` (no autogenerate).
+
+```sh
+# fresh DB (init.sql just ran on first boot) OR an existing pre-Alembic DB:
+docker compose run --rm backend alembic stamp 0001     # record the baseline, runs no DDL
+docker compose run --rm backend alembic upgrade head   # apply every later revision
+
+# afterwards, on each deploy that ships new revisions:
+docker compose run --rm backend alembic upgrade head
+docker compose run --rm backend alembic current        # show the applied revision
+```
+
+Before the first `stamp` on an existing database, confirm it really matches the
+baseline: dump its schema (`pg_dump --schema-only`) and diff it against a
+throwaway DB built from `init.sql`. If it differs, reconcile before stamping.
+
 ## Step 2 — run the backend
 
 ```sh
@@ -240,9 +260,9 @@ docker compose run --rm -v "$PWD/backend:/app" backend \
   sh -c "pip install -q -r requirements-dev.txt && pytest -q"
 ```
 
-It drops and recreates a `cadence_test` database from `init.sql` once per run;
-each test runs in a transaction that is rolled back. Point it elsewhere with
-`TEST_DATABASE_URL`.
+It drops `cadence_test`, rebuilds it with `alembic upgrade head` (so the
+migrations are exercised), and rolls back each test in a transaction. Point it
+elsewhere with `TEST_DATABASE_URL`.
 
 ## Step 4 — the agent
 
@@ -374,8 +394,7 @@ agent     --POST /jobs/{id}/result--------------------->  job: succeeded | faile
   `systemctl start cadence-agent.service`.
 - **One active job per host** (`409` otherwise). The poll and the report both
   use `SELECT … FOR UPDATE SKIP LOCKED`, so only one ever claims a given job.
-- **No reboot.** If the upgrade needs one the agent reports `reboot_required`
-  and the badge shows — rebooting is left to you. That flag comes from
+- **Reboot** (see below). The `reboot_required` flag comes from
   `/var/run/reboot-required`, which on Debian is only created if
   **`update-notifier-common`** is installed; without it a kernel upgrade won't
   raise the flag. `apt install update-notifier-common` on monitored VMs.
@@ -384,9 +403,27 @@ agent     --POST /jobs/{id}/result--------------------->  job: succeeded | faile
 - The dashboard asks for the `X-Admin-Key` once (kept in `sessionStorage`) the
   first time you trigger a job.
 
-Scheduled / automatic update windows (a cron-like policy, maintenance windows)
-are **out of V1 scope** (CLAUDE.md §2). The schema is ready for it: a future
-scheduler just inserts `jobs` rows, with window options in `jobs.params`.
+### Reboot after an upgrade
+
+Each host has a **`reboot_policy`**: `never` (default — the agent only reports
+`reboot_required`) or `auto` (the agent reboots when the upgrade left a reboot
+pending). Set it from the host detail pane, or
+`PATCH /api/v1/admin/hosts/{id}` with `{"reboot_policy": "auto"}`.
+
+A single job can override it: the trigger control sends `params.reboot`
+(`auto` / `never`); an override wins over the host policy. The server resolves
+the effective value when it hands the job to the agent and records it on the
+job.
+
+The agent reboots (`systemctl --no-block reboot`) only when **all** of: the
+upgrade succeeded, `/var/run/reboot-required` is present, the effective mode is
+`auto`, and `CADENCE_ENABLE_REBOOT` is not `false` (`agent.env` kill-switch,
+default true). It always posts the job result first, so the job never hangs in
+`running`.
+
+Scheduled / automatic update windows (maintenance windows) are **out of V1
+scope** (CLAUDE.md §2) — added in a later increment via a `schedules` table and
+a dedicated scheduler service.
 
 ### Test the full flow on a monitored VM
 

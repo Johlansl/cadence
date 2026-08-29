@@ -296,31 +296,42 @@ te donnerai le feu vert pour la suivante.
 
 Étapes 1 à 8 de la section 8 : **faites et validées** (dont un vrai
 `apt dist-upgrade` déclenché depuis le dashboard sur une VM réelle,
-`vm-japp`, Debian 13). Ajout post-V1 déjà en place : poll de job dédié
-(`POST /api/v1/agent/next-job` + `cadence-agent-poll.timer` à 60 s) pour que
-les upgrades déclenchés partent en ~1 min sans casser l'outbound-only.
+`vm-japp`, Debian 13). Ajout post-V1 : poll de job dédié
+(`POST /api/v1/agent/next-job` + `cadence-agent-poll.timer` à 60 s).
 
-**Contexte détaillé de la dernière session (journal, décisions, état du
-déploiement, limites connues, options pour la suite) : voir `HANDOFF.md` à la
-racine.** À lire en premier au démarrage d'une nouvelle session.
+Travaux post-V1 de la session en cours (incréments testables, un commit
+chacun) :
+1. **Seuils de fraîcheur** du dashboard resserrés (5/15 min) — le poll
+   rafraîchit `last_seen_at` chaque minute.
+2. **Suite pytest backend** (Postgres réel, schéma via `alembic upgrade
+   head`, rollback par test).
+3. **TLS / Caddy** : reverse proxy `caddy` dans la compose, CA interne,
+   racine à installer sur les VMs surveillées. nginx résout `backend` par
+   requête (DNS Docker).
+4. **Agent 0.3.0 → HTTPS** sur `vm-japp` (runbook README « Upgrade an
+   existing monitored VM »).
+5a. **Alembic** introduit — `init.sql` figé à la baseline (révision
+   `0001`), tout le reste via révisions écrites main. **`hosts.reboot_policy`**
+   (`auto|never`, défaut `never`, CHECK), override par job dans
+   `jobs.params->>'reboot'`, `PATCH /api/v1/admin/hosts/{id}`, agent 0.4.0
+   qui reboote (`systemctl --no-block reboot`) si `succeeded` +
+   `reboot-required` + mode `auto` + `CADENCE_ENABLE_REBOOT` != false.
+5b. **Planification** (table `schedules` + service `scheduler` réutilisant
+   l'image backend) — voir §12.
 
-## 12. Backlog post-V1 — NE PAS implémenter sans feu vert explicite
+**Contexte détaillé (journal, décisions, déploiement, limites, options) :
+voir `HANDOFF.md`.** À lire en premier au démarrage d'une session.
 
-Demandé par l'utilisateur, à garder en tête pour une session future :
+## 12. Backlog post-V1
 
-1. **Choix reboot côté dashboard.** Aujourd'hui l'agent ne reboote jamais
-   (décision V1). Objectif : laisser l'utilisateur choisir, par job ou par
-   host, `reboot = auto | never` (voire `prompt`). Stocker l'option dans
-   `jobs.params` (jsonb, déjà prévu). Le flag `reboot_required` remonte déjà
-   (fichier `/var/run/reboot-required`, nécessite `update-notifier-common`
-   sur les VMs Debian).
-2. **Planification / fenêtres de maintenance.** Timer automatique d'update,
-   ou choix d'un jour du mois + heure. Un futur service planificateur
-   n'aura qu'à insérer des lignes `jobs` (options de fenêtre dans
-   `jobs.params`). C'est le point "planification automatique / fenêtres de
-   maintenance" listé hors scope en section 2 — le rester tant que
-   l'utilisateur ne donne pas le feu vert.
+1. **Choix reboot côté dashboard.** ✅ Fait (incrément 5a, session en
+   cours) : `hosts.reboot_policy` + override `jobs.params.reboot`. `prompt`
+   pas implémenté (seulement `auto|never`) — extension possible plus tard.
+2. **Planification / fenêtres de maintenance.** Feu vert donné (session en
+   cours) → incrément 5b. Table `schedules` (`monthly|weekly`, jour/heure,
+   tz), un service `scheduler` (image backend, `python -m app.scheduler`)
+   insère des lignes `jobs`. Ne dépend d'aucun cron système ni d'APScheduler.
+   Fait basculer le point « planification » de la section 2 dans le
+   périmètre.
 
-Autre point ouvert (pas une feature) : **TLS / reverse proxy (Caddy)**
-toujours pas fait — signalé recommandé dès le début, non bloquant sur LAN de
-confiance.
+**TLS / reverse proxy (Caddy)** : ✅ fait (incrément 3).
