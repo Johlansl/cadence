@@ -3,6 +3,12 @@
 Lightweight patch management for Linux servers. See `CLAUDE.md` for the full
 V1 brief, scope and architecture decisions.
 
+## CI
+
+`.gitlab-ci.yml` runs on every push: **agent** (`go vet` + `go test` + build),
+**backend** (`pytest` against a `postgres:16` service), **frontend**
+(`npm ci` + `npm run build`).
+
 ## Status
 
 Incremental build, one testable step at a time (`CLAUDE.md` section 8).

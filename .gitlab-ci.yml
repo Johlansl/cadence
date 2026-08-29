@@ -1,0 +1,48 @@
+# Cadence CI: lint/test the three components on every push.
+
+stages:
+  - test
+
+agent:
+  stage: test
+  image: golang:1.23
+  script:
+    - cd agent
+    - go vet ./...
+    - go test ./...
+    - CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/agent
+
+backend:
+  stage: test
+  image: python:3.12-slim
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    # consumed by the postgres service and by the app / test config
+    POSTGRES_USER: cadence
+    POSTGRES_PASSWORD: cadence
+    POSTGRES_DB: cadence
+    POSTGRES_HOST_AUTH_METHOD: trust
+    POSTGRES_HOST: postgres
+    CADENCE_ADMIN_KEY: ci-admin-key
+    PIP_NO_CACHE_DIR: "1"
+  script:
+    - pip install -r backend/requirements-dev.txt
+    - cd backend && pytest -q
+
+frontend:
+  stage: test
+  image: node:22-alpine
+  variables:
+    npm_config_cache: "$CI_PROJECT_DIR/.npm-cache"
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - .npm-cache/
+  script:
+    - cd frontend
+    - npm ci
+    - npm run build
