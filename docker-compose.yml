@@ -48,9 +48,29 @@ services:
     depends_on:
       - backend
     ports:
-      # Same convention as the backend: loopback by default, 0.0.0.0 to expose
-      # the dashboard on the LAN. See CADENCE_FRONTEND_BIND.
+      # Plain-HTTP dashboard. Loopback by default now that Caddy fronts it;
+      # set CADENCE_FRONTEND_BIND=0.0.0.0 only to reach it without TLS.
       - "${CADENCE_FRONTEND_BIND:-127.0.0.1}:8080:80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      CADENCE_SITE_ADDRESS: ${CADENCE_SITE_ADDRESS}
+    depends_on:
+      - frontend
+    ports:
+      # The public entrypoint. CADENCE_HTTP_BIND controls the interface
+      # (0.0.0.0 to serve the LAN). 80 redirects to 443.
+      - "${CADENCE_HTTP_BIND:-0.0.0.0}:80:80"
+      - "${CADENCE_HTTP_BIND:-0.0.0.0}:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist the internal CA + issued certs across restarts.
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

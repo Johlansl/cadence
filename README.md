@@ -42,24 +42,43 @@ Edit `.env`:
 |---|---|
 | `POSTGRES_PASSWORD` | a real password |
 | `CADENCE_ADMIN_KEY` | `openssl rand -hex 32` |
-| `CADENCE_BACKEND_BIND` | `0.0.0.0` (so monitored VMs can reach the API) |
-| `CADENCE_FRONTEND_BIND` | `0.0.0.0` (so you can open the dashboard) |
+| `CADENCE_SITE_ADDRESS` | a hostname that resolves to this server on your LAN, e.g. `cadence.lan` |
 
 ```sh
 docker compose up -d --build
-curl -s http://<server-ip>:8000/healthz          # {"status":"ok"}
-# dashboard: http://<server-ip>:8080/
+curl -s http://127.0.0.1:8000/healthz            # {"status":"ok"} (backend, loopback)
+# dashboard: https://cadence.lan/
 ```
 
-`restart: unless-stopped` brings the services back after a reboot. Restrict
-ports 8000 / 8080 to your VM subnet at the firewall. TLS is **not** included
-yet — a Caddy reverse proxy in front is the intended next step; ask if you want
-it now.
+Traffic goes through the **Caddy** reverse proxy on 80/443; 80 redirects to
+443. `backend` (8000) and the plain-HTTP `frontend` (8080) stay bound to
+loopback — set `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` to `0.0.0.0`
+only for TLS-less debugging. `restart: unless-stopped` brings everything back
+after a reboot.
+
+### TLS — trust Caddy's internal CA on the monitored VMs
+
+Caddy issues the `CADENCE_SITE_ADDRESS` certificate from its own CA. The Go
+agent verifies against the system trust store, so each monitored VM (and any
+browser) must trust that CA once:
+
+```sh
+# on the server, once the stack is up
+docker compose exec caddy cat /data/caddy/pki/authorities/local/root.crt \
+  > cadence-caddy-ca.crt
+
+# copy to each monitored VM, then:
+sudo cp cadence-caddy-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates
+```
+
+`CADENCE_SITE_ADDRESS` must also resolve on the monitored VMs (LAN DNS, or an
+`/etc/hosts` entry pointing at the server).
 
 ### 2. Register each monitored VM (run on the server, or anywhere with the admin key)
 
 ```sh
-curl -s -X POST http://<server-ip>:8000/api/v1/admin/hosts \
+curl -s -X POST https://cadence.lan/api/v1/admin/hosts \
   -H "X-Admin-Key: $CADENCE_ADMIN_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"hostname":"vm-web-01","description":"web frontend"}'
@@ -68,14 +87,15 @@ curl -s -X POST http://<server-ip>:8000/api/v1/admin/hosts \
 
 ### 3. On each monitored VM
 
-Build the (static) binary — on the VM if Go is available, or once elsewhere and
-`scp` `bin/cadence-agent` + the `agent/systemd/` directory over:
+Trust the Caddy CA (see "TLS" above), then build the (static) binary — on the
+VM if Go is available, or once elsewhere and `scp` `bin/cadence-agent` + the
+`agent/systemd/` directory over:
 
 ```sh
 cd agent
 CGO_ENABLED=0 go build -trimpath -o bin/cadence-agent ./cmd/agent
 sudo systemd/install.sh
-sudo editor /etc/cadence/agent.env      # CADENCE_SERVER_URL=http://<server-ip>:8000 , CADENCE_TOKEN=<token>
+sudo editor /etc/cadence/agent.env      # CADENCE_SERVER_URL=https://cadence.lan , CADENCE_TOKEN=<token>
 ```
 
 Verify:
@@ -84,7 +104,7 @@ Verify:
 sudo systemctl start cadence-agent.service
 journalctl -u cadence-agent -n 20 --no-pager         # "report sent to ..."
 systemctl list-timers cadence-agent.timer            # next scheduled run
-curl -s http://<server-ip>:8000/api/v1/hosts         # the VM shows up, last_seen_at fresh
+curl -s https://cadence.lan/api/v1/hosts             # the VM shows up, last_seen_at fresh
 ```
 
 ## Step 1 — run the database
@@ -273,9 +293,13 @@ systemctl list-timers 'cadence-agent*'                # both timers
 React + Vite + Tailwind, in `frontend/`. One master-detail view (no router),
 polls the API every 30s. Served in production by nginx, which also proxies
 `/api/` to the `backend` service (so the browser hits a single origin, no CORS).
+nginx resolves `backend` per request via Docker DNS, so recreating the backend
+container does not need a frontend restart.
 
 Part of the compose stack — `docker compose up -d --build` builds and runs it.
-With `CADENCE_FRONTEND_BIND=0.0.0.0`, open `http://<server-ip>:8080/`.
+Open it through Caddy at `https://cadence.lan/` (`CADENCE_SITE_ADDRESS`). For a
+TLS-less local look, set `CADENCE_FRONTEND_BIND=0.0.0.0` and open
+`http://<server-ip>:8080/`.
 
 The list shows each host with a status badge (green `up to date` / amber
 `updates` / red `security`), the update counts, a **last-seen freshness**

@@ -1,0 +1,15 @@
+# Cadence reverse proxy. One public entrypoint, TLS terminated here.
+#
+# CADENCE_SITE_ADDRESS must be a hostname that resolves to this server on your
+# LAN (LAN DNS or an /etc/hosts entry on every client and monitored VM). With a
+# bare hostname Caddy issues a certificate from its own internal CA -- export
+# that CA to the monitored VMs, see README "TLS".
+
+{$CADENCE_SITE_ADDRESS} {
+	tls internal
+	encode gzip
+
+	# nginx in the frontend image already proxies /api/ to backend:8000,
+	# so everything can go to a single upstream.
+	reverse_proxy frontend:80
+}
