@@ -7,7 +7,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -55,11 +55,28 @@ def update_host(
     host = db.get(Host, host_id)
     if host is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
-    host.reboot_policy = payload.reboot_policy
+
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no fields to update")
+    for field, value in changes.items():
+        setattr(host, field, value)
     host.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(host)
     return host
+
+
+@router.delete("/hosts/{host_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    # Permanent: cascades to host_packages / reports / jobs / schedules.
+    # Prefer PATCH {"is_active": false} to keep the history.
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+    db.delete(host)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

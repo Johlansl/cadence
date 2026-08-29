@@ -22,7 +22,12 @@ def test_patch_reboot_policy(client):
 
     r = _set_policy(client, host_id, "auto")
     assert r.status_code == 200
-    assert r.json() == {"id": host_id, "hostname": "vm-test", "reboot_policy": "auto"}
+    assert r.json() == {
+        "id": host_id,
+        "hostname": "vm-test",
+        "reboot_policy": "auto",
+        "is_active": True,
+    }
     assert client.get(f"/api/v1/hosts/{host_id}").json()["reboot_policy"] == "auto"
 
     assert _set_policy(client, host_id, "never").status_code == 200

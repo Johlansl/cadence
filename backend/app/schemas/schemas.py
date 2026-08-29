@@ -31,9 +31,11 @@ class HostCreated(BaseModel):
 
 
 class HostUpdate(BaseModel):
-    """Admin-editable host settings (PATCH /api/v1/admin/hosts/{id})."""
+    """Admin-editable host settings (PATCH /api/v1/admin/hosts/{id}). All
+    fields optional -- send only what changes."""
 
-    reboot_policy: RebootMode
+    reboot_policy: RebootMode | None = None
+    is_active: bool | None = None
 
 
 class HostPatched(BaseModel):
@@ -42,6 +44,7 @@ class HostPatched(BaseModel):
     id: uuid.UUID
     hostname: str
     reboot_policy: str
+    is_active: bool
 
 
 # --- agent report ingestion -------------------------------------------------
