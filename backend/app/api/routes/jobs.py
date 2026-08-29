@@ -22,13 +22,19 @@ from app.schemas.schemas import JobHandoff, JobOut, JobResultIn, NextJob
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
 
 
-def claim_pending_job(db: Session, host_id: uuid.UUID, now) -> Job | None:
+def claim_pending_job(db: Session, host: Host, now) -> Job | None:
     """Take the oldest pending job for the host and mark it running. Shared by
     the report piggyback and the /agent/next-job poll. SKIP LOCKED + the status
-    filter make it safe if both fire at once."""
+    filter make it safe if both fire at once.
+
+    Resolves the effective reboot decision now and pins it into job.params, so
+    the agent gets a concrete 'auto'/'never' and the job record shows what was
+    decided: a per-job params.reboot override wins, else the host's
+    reboot_policy.
+    """
     job = db.execute(
         select(Job)
-        .where(Job.host_id == host_id, Job.status == "pending")
+        .where(Job.host_id == host.id, Job.status == "pending")
         .order_by(Job.created_at)
         .limit(1)
         .with_for_update(skip_locked=True)
@@ -36,6 +42,8 @@ def claim_pending_job(db: Session, host_id: uuid.UUID, now) -> Job | None:
     if job is not None:
         job.status = "running"
         job.started_at = now
+        effective_reboot = job.params.get("reboot") or host.reboot_policy
+        job.params = {**job.params, "reboot": effective_reboot}
     return job
 
 
@@ -44,7 +52,7 @@ def claim_next_job(
     host: Host = Depends(get_current_host), db: Session = Depends(get_db)
 ) -> NextJob:
     now = datetime.now(timezone.utc)
-    job = claim_pending_job(db, host.id, now)
+    job = claim_pending_job(db, host, now)
     host.last_seen_at = now  # a poll is also a liveness signal
     handoff = (
         JobHandoff(id=job.id, job_type=job.job_type, params=job.params)

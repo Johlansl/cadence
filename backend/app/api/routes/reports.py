@@ -103,7 +103,7 @@ def create_report(
 
     # 5. Piggyback: hand the oldest pending job (if any) to the agent and mark
     #    it running. One job per report; the agent runs them serially.
-    job = claim_pending_job(db, host.id, now)
+    job = claim_pending_job(db, host, now)
     handoff = (
         JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
         if job is not None

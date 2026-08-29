@@ -5,9 +5,10 @@ ON CONFLICT and FOR UPDATE SKIP LOCKED, none of which SQLite provides.
 
 Connection: set TEST_DATABASE_URL, or let it be derived from the POSTGRES_*
 variables (same ones the app reads) with the database name `cadence_test`.
-The test database is dropped and recreated from app/db/init.sql once per run.
-Each test runs inside a transaction that is rolled back on teardown, so tests
-never see each other's rows.
+The test database is dropped and recreated once per run by running the full
+Alembic migration chain (`alembic upgrade head`), so the migrations are
+exercised too. Each test runs inside a transaction that is rolled back on
+teardown, so tests never see each other's rows.
 """
 
 from __future__ import annotations
@@ -38,12 +39,14 @@ TEST_DATABASE_URL = _test_database_url()
 # The app builds its engine from this at import time.
 os.environ["CADENCE_DATABASE_URL"] = TEST_DATABASE_URL
 
-INIT_SQL = pathlib.Path(__file__).resolve().parents[1] / "app" / "db" / "init.sql"
+BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _prepare_database():
-    """Drop + recreate the test database and apply the schema."""
+    """Drop + recreate the test database, then run all migrations."""
+    from alembic import command
+    from alembic.config import Config
     from sqlalchemy import create_engine, text
 
     base, _, dbname = TEST_DATABASE_URL.rpartition("/")
@@ -53,11 +56,11 @@ def _prepare_database():
         conn.execute(text(f'CREATE DATABASE "{dbname}"'))
     admin_engine.dispose()
 
-    schema_engine = create_engine(TEST_DATABASE_URL, future=True)
-    with schema_engine.begin() as conn:
-        # psycopg2 executes the whole multi-statement script in one call.
-        conn.exec_driver_sql(INIT_SQL.read_text())
-    schema_engine.dispose()
+    # env.py reads the URL from settings.database_url, which conftest has
+    # already pointed at TEST_DATABASE_URL via CADENCE_DATABASE_URL.
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    command.upgrade(cfg, "head")
     yield
 
 

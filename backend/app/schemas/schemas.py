@@ -8,7 +8,10 @@ from datetime import datetime
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# What the agent does after an upgrade that leaves a reboot pending.
+RebootMode = Literal["auto", "never"]
 
 
 # --- admin: host provisioning -------------------------------------------------
@@ -24,6 +27,20 @@ class HostCreated(BaseModel):
     hostname: str
     # Plaintext token, returned exactly once at creation time.
     token: str
+
+
+class HostUpdate(BaseModel):
+    """Admin-editable host settings (PATCH /api/v1/admin/hosts/{id})."""
+
+    reboot_policy: RebootMode
+
+
+class HostPatched(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    hostname: str
+    reboot_policy: str
 
 
 # --- agent report ingestion -------------------------------------------------
@@ -100,6 +117,7 @@ class HostSummary(BaseModel):
     last_seen_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    reboot_policy: str
     # Derived from the host's current package state.
     status: HostStatus
     updates_available_count: int
@@ -126,6 +144,15 @@ class JobCreate(BaseModel):
     job_type: str = "apt_upgrade"
     params: dict = Field(default_factory=dict)
     requested_by: str | None = None
+
+    @field_validator("params")
+    @classmethod
+    def _validate_reboot_override(cls, v: dict) -> dict:
+        # Optional per-job override of the host's reboot_policy.
+        reboot = v.get("reboot")
+        if reboot is not None and reboot not in ("auto", "never"):
+            raise ValueError("params.reboot must be 'auto' or 'never'")
+        return v
 
 
 class JobResultIn(BaseModel):

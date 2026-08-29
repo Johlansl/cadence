@@ -42,6 +42,11 @@ class Host(Base):
     package_manager: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'apt'"))
     agent_version: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # What the agent does after an upgrade that needs a reboot: 'auto' | 'never'
+    # (DB CHECK). A per-job override lives in jobs.params->>'reboot'.
+    reboot_policy: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'never'")
+    )
     reboot_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

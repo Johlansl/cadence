@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -12,7 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin_key
 from app.models.models import Host, Job
-from app.schemas.schemas import HostCreate, HostCreated, JobCreate, JobOut
+from app.schemas.schemas import (
+    HostCreate,
+    HostCreated,
+    HostPatched,
+    HostUpdate,
+    JobCreate,
+    JobOut,
+)
 
 router = APIRouter(
     prefix="/api/v1/admin",
@@ -38,6 +46,20 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db)) -> HostCreat
     db.refresh(host)
 
     return HostCreated(id=host.id, hostname=host.hostname, token=token)
+
+
+@router.patch("/hosts/{host_id}", response_model=HostPatched)
+def update_host(
+    host_id: uuid.UUID, payload: HostUpdate, db: Session = Depends(get_db)
+) -> Host:
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+    host.reboot_policy = payload.reboot_policy
+    host.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(host)
+    return host
 
 
 @router.post(
