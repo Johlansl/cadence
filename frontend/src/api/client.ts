@@ -1,4 +1,4 @@
-import type { HostDetail, HostSummary, Job } from '../types'
+import type { HostDetail, HostSummary, Job, RebootPolicy } from '../types'
 
 const BASE = '/api/v1'
 
@@ -10,11 +10,40 @@ async function getJSON<T>(path: string): Promise<T> {
   return (await res.json()) as T
 }
 
-export interface CreateJobResult {
+// Result of an admin write (X-Admin-Key). `ok` distinguishes the 2xx path;
+// `status` and `detail` carry the failure (401 invalid key, 409 conflict, ...).
+export interface AdminWriteResult<T> {
   ok: boolean
   status: number
-  job?: Job
+  data?: T
   detail?: string
+}
+
+async function adminWrite<T>(
+  path: string,
+  adminKey: string,
+  method: 'POST' | 'PATCH',
+  body: unknown,
+): Promise<AdminWriteResult<T>> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-Admin-Key': adminKey,
+    },
+    body: JSON.stringify(body),
+  })
+  if (res.ok) {
+    return { ok: true, status: res.status, data: (await res.json()) as T }
+  }
+  let detail: string | undefined
+  try {
+    detail = ((await res.json()) as { detail?: string }).detail
+  } catch {
+    /* no JSON body */
+  }
+  return { ok: false, status: res.status, detail }
 }
 
 export const api = {
@@ -22,25 +51,19 @@ export const api = {
   getHost: (id: string) => getJSON<HostDetail>(`/hosts/${id}`),
   getHostJobs: (id: string) => getJSON<Job[]>(`/hosts/${id}/jobs`),
 
-  async createJob(hostId: string, adminKey: string): Promise<CreateJobResult> {
-    const res = await fetch(`${BASE}/admin/hosts/${hostId}/jobs`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'X-Admin-Key': adminKey,
-      },
-      body: JSON.stringify({ requested_by: 'dashboard' }),
-    })
-    if (res.status === 201) {
-      return { ok: true, status: 201, job: (await res.json()) as Job }
-    }
-    let detail: string | undefined
-    try {
-      detail = ((await res.json()) as { detail?: string }).detail
-    } catch {
-      /* no JSON body */
-    }
-    return { ok: false, status: res.status, detail }
+  // reboot: omit to use the host's reboot_policy; set to override for this job.
+  createJob(hostId: string, adminKey: string, reboot?: RebootPolicy) {
+    const body: Record<string, unknown> = { requested_by: 'dashboard' }
+    if (reboot) body.params = { reboot }
+    return adminWrite<Job>(`/admin/hosts/${hostId}/jobs`, adminKey, 'POST', body)
+  },
+
+  setRebootPolicy(hostId: string, adminKey: string, reboot_policy: RebootPolicy) {
+    return adminWrite<{ id: string; hostname: string; reboot_policy: RebootPolicy }>(
+      `/admin/hosts/${hostId}`,
+      adminKey,
+      'PATCH',
+      { reboot_policy },
+    )
   },
 }

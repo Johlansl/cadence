@@ -3,6 +3,8 @@ export type HostStatus =
   | 'updates_available'
   | 'security_updates_available'
 
+export type RebootPolicy = 'auto' | 'never'
+
 export interface HostSummary {
   id: string
   hostname: string
@@ -14,6 +16,7 @@ export interface HostSummary {
   package_manager: string
   agent_version: string | null
   reboot_required: boolean
+  reboot_policy: RebootPolicy
   is_active: boolean
   last_seen_at: string | null
   created_at: string

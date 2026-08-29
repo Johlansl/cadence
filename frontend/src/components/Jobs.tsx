@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
-import { clearAdminKey, getAdminKey, setAdminKey } from '../lib/adminKey'
 import { relativeTime } from '../lib/time'
-import type { Job, JobStatus } from '../types'
+import type { Job, JobStatus, RebootPolicy } from '../types'
+import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 
 const STATUS_CLS: Record<JobStatus, string> = {
   pending: 'bg-zinc-500/10 text-zinc-400 ring-zinc-500/30',
@@ -28,18 +28,17 @@ function duration(from: string | null, to: string | null): string | null {
   return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`
 }
 
+type RebootChoice = 'default' | RebootPolicy
+
 export function Jobs({ hostId }: { hostId: string }) {
   const [jobs, setJobs] = useState<Job[]>([])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [needKey, setNeedKey] = useState(false)
-  const [keyDraft, setKeyDraft] = useState('')
+  const [reboot, setReboot] = useState<RebootChoice>('default')
 
   const refresh = useCallback(async () => {
     try {
       setJobs(await api.getHostJobs(hostId))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+    } catch {
+      /* transient; the next poll retries */
     }
   }, [hostId])
 
@@ -51,74 +50,54 @@ export function Jobs({ hostId }: { hostId: string }) {
 
   const active = jobs.some((j) => j.status === 'pending' || j.status === 'running')
 
-  const trigger = useCallback(async () => {
-    const key = getAdminKey()
-    if (!key) {
-      setNeedKey(true)
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await api.createJob(hostId, key)
-      if (res.ok) {
-        setNeedKey(false)
-      } else if (res.status === 401) {
-        clearAdminKey()
-        setNeedKey(true)
-        setError('Invalid admin key.')
-      } else {
-        setError(res.detail ?? `Request failed (${res.status}).`)
-      }
-      await refresh()
-    } finally {
-      setBusy(false)
-    }
-  }, [hostId, refresh])
+  const createJob = useCallback(
+    (key: string) =>
+      api.createJob(hostId, key, reboot === 'default' ? undefined : reboot),
+    [hostId, reboot],
+  )
+  const { run, submitKey, busy, error, needKey, keyDraft, setKeyDraft } =
+    useAdminKeyAction(createJob)
 
-  const saveKeyAndTrigger = useCallback(async () => {
-    if (!keyDraft.trim()) return
-    setAdminKey(keyDraft.trim())
-    setKeyDraft('')
-    setNeedKey(false)
-    await trigger()
-  }, [keyDraft, trigger])
+  const trigger = useCallback(async () => {
+    await run()
+    await refresh()
+  }, [run, refresh])
+
+  const saveKey = useCallback(async () => {
+    await submitKey()
+    await refresh()
+  }, [submitKey, refresh])
 
   return (
     <section className="border-t border-zinc-800 px-6 py-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h3 className="text-xs uppercase tracking-wide text-zinc-600">Jobs</h3>
-        <button
-          type="button"
-          onClick={() => void trigger()}
-          disabled={busy || active}
-          className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
-        >
-          {active ? 'job in progress…' : busy ? 'triggering…' : 'trigger dist-upgrade'}
-        </button>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-xs text-zinc-500">
+            reboot
+            <select
+              value={reboot}
+              onChange={(e) => setReboot(e.target.value as RebootChoice)}
+              className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-xs text-zinc-200 outline-none focus:border-zinc-500"
+            >
+              <option value="default">host default</option>
+              <option value="auto">auto</option>
+              <option value="never">never</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void trigger()}
+            disabled={busy || active}
+            className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+          >
+            {active ? 'job in progress…' : busy ? 'triggering…' : 'trigger dist-upgrade'}
+          </button>
+        </div>
       </div>
 
       {needKey && (
-        <div className="mt-2 flex items-center gap-2">
-          <input
-            type="password"
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void saveKeyAndTrigger()
-            }}
-            placeholder="X-Admin-Key"
-            autoFocus
-            className="flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-200 outline-none focus:border-zinc-500"
-          />
-          <button
-            type="button"
-            onClick={() => void saveKeyAndTrigger()}
-            className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
-          >
-            save &amp; trigger
-          </button>
-        </div>
+        <AdminKeyPrompt value={keyDraft} onChange={setKeyDraft} onSubmit={() => void saveKey()} />
       )}
 
       {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
@@ -137,6 +116,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                 <span className="font-mono text-zinc-300">{j.job_type}</span>
                 <span>· {relativeTime(j.created_at)}</span>
                 {j.requested_by && <span>· by {j.requested_by}</span>}
+                {typeof j.params.reboot === 'string' && (
+                  <span>· reboot {j.params.reboot}</span>
+                )}
                 {duration(j.started_at, j.completed_at) && (
                   <span>· {duration(j.started_at, j.completed_at)}</span>
                 )}

@@ -1,8 +1,57 @@
-import { type ReactNode, useMemo, useState } from 'react'
-import type { HostDetail as HostDetailData, HostPackage } from '../types'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api } from '../api/client'
+import type { HostDetail as HostDetailData, HostPackage, RebootPolicy } from '../types'
+import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 import { Freshness } from './Freshness'
 import { Jobs } from './Jobs'
 import { StatusBadge } from './StatusBadge'
+
+function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootPolicy }) {
+  const [choice, setChoice] = useState<RebootPolicy>(value)
+  const choiceRef = useRef<RebootPolicy>(value)
+  useEffect(() => {
+    setChoice(value)
+    choiceRef.current = value
+  }, [value])
+
+  const action = useCallback(
+    (key: string) => api.setRebootPolicy(hostId, key, choiceRef.current),
+    [hostId],
+  )
+  const { run, submitKey, busy, error, needKey, keyDraft, setKeyDraft } = useAdminKeyAction(action)
+
+  const change = (next: RebootPolicy) => {
+    setChoice(next)
+    choiceRef.current = next
+    void run()
+  }
+
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-wide text-zinc-600">Reboot policy</dt>
+      <dd className="mt-0.5 flex items-center gap-2 font-mono text-sm text-zinc-200">
+        <select
+          value={choice}
+          disabled={busy}
+          onChange={(e) => change(e.target.value as RebootPolicy)}
+          className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-sm text-zinc-200 outline-none focus:border-zinc-500 disabled:opacity-50"
+        >
+          <option value="never">never</option>
+          <option value="auto">auto</option>
+        </select>
+        {busy && <span className="text-xs text-zinc-500">saving…</span>}
+      </dd>
+      {needKey && (
+        <AdminKeyPrompt
+          value={keyDraft}
+          onChange={setKeyDraft}
+          onSubmit={() => void submitKey()}
+        />
+      )}
+      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+    </div>
+  )
+}
 
 function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -61,6 +110,7 @@ export function HostDetail({ host }: { host: HostDetailData }) {
           <Meta label="Last report">
             <Freshness iso={host.last_seen_at} />
           </Meta>
+          <RebootPolicyControl hostId={host.id} value={host.reboot_policy} />
           <Meta label="Updates">
             {withUpdates}
             {host.security_updates_count > 0 && (
