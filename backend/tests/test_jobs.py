@@ -63,6 +63,28 @@ def test_job_result_hidden_from_other_host(client):
     assert r.status_code == 404
 
 
+def test_clear_host_jobs(client):
+    host_id, token = create_host(client)
+    j1 = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", headers=bearer(token))  # -> running
+    client.post(
+        f"/api/v1/jobs/{j1}/result",
+        headers=bearer(token),
+        json={"status": "succeeded", "exit_code": 0},
+    )
+    _make_job(client, host_id)  # a second, pending
+    assert len(client.get(f"/api/v1/hosts/{host_id}/jobs").json()) == 2
+
+    r = client.delete(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS)
+    assert r.status_code == 204
+    assert client.get(f"/api/v1/hosts/{host_id}/jobs").json() == []
+
+    assert client.delete(
+        f"/api/v1/admin/hosts/{uuid.uuid4()}/jobs", headers=ADMIN_HEADERS
+    ).status_code == 404
+    assert client.delete(f"/api/v1/admin/hosts/{host_id}/jobs").status_code == 422  # no key
+
+
 def test_job_views(client):
     host_id, _ = create_host(client)
     job_id = _make_job(client, host_id)

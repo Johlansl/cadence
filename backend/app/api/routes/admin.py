@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_admin_key
@@ -113,3 +113,14 @@ def create_job(
     db.commit()
     db.refresh(job)
     return job
+
+
+@router.delete("/hosts/{host_id}/jobs", status_code=status.HTTP_204_NO_CONTENT)
+def clear_host_jobs(host_id: uuid.UUID, db: Session = Depends(get_db)) -> Response:
+    # Wipe the job history for a host (all statuses). If a job is mid-run the
+    # agent's later result callback just 404s -- harmless.
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+    db.execute(delete(Job).where(Job.host_id == host_id))
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
