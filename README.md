@@ -107,6 +107,40 @@ systemctl list-timers cadence-agent.timer            # next scheduled run
 curl -s https://cadence.lan/api/v1/hosts             # the VM shows up, last_seen_at fresh
 ```
 
+### 4. Upgrade an existing monitored VM
+
+For a VM already running an older agent (e.g. 0.2.0, no poll timer, plain-HTTP
+server URL). Run on the VM:
+
+```sh
+# 1. trust the Caddy CA (from the server: docker compose exec caddy \
+#    cat /data/caddy/pki/authorities/local/root.crt > cadence-caddy-ca.crt)
+sudo cp cadence-caddy-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates
+
+# 2. reboot-required flag (Debian minimal does not create /var/run/reboot-required)
+sudo apt install update-notifier-common
+
+# 3. rebuild + reinstall the agent (adds cadence-agent-poll.{service,timer})
+cd cadence && git pull
+cd agent && CGO_ENABLED=0 go build -trimpath -o bin/cadence-agent ./cmd/agent
+sudo systemd/install.sh
+
+# 4. point the agent at the HTTPS entrypoint
+sudo sed -i 's#^CADENCE_SERVER_URL=.*#CADENCE_SERVER_URL=https://cadence.lan#' \
+  /etc/cadence/agent.env
+
+# 5. verify
+sudo systemctl start cadence-agent.service
+journalctl -u cadence-agent -n 20 --no-pager     # "report sent to https://cadence.lan ..."
+systemctl list-timers 'cadence-agent*'           # both timers listed, poll every 1 min
+```
+
+The dashboard should show the host with agent `0.3.0` and a green freshness
+dot. Once every monitored VM uses `https://cadence.lan`, tighten the server:
+set `CADENCE_BACKEND_BIND=127.0.0.1` (and `CADENCE_FRONTEND_BIND=127.0.0.1`) in
+`.env` and `docker compose up -d`.
+
 ## Step 1 — run the database
 
 Requires Docker with the `compose` plugin.
@@ -356,12 +390,10 @@ scheduler just inserts `jobs` rows, with window options in `jobs.params`.
 
 ### Test the full flow on a monitored VM
 
-```sh
-# on the VM
-git pull
-cd agent && CGO_ENABLED=0 go build -trimpath -o bin/cadence-agent ./cmd/agent
-sudo systemd/install.sh                          # refreshes the binary + installs the poll timer
+The VM needs a current agent with the poll timer — see
+"Upgrade an existing monitored VM" above. Then:
 
+```sh
 # from the dashboard: open the host, "trigger dist-upgrade", enter the admin key
 journalctl -u cadence-agent-poll -f              # within ~1 min: job received -> apt -> result
 ```
