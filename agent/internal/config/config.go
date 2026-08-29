@@ -17,6 +17,7 @@ type Config struct {
 	Token          string        // CADENCE_TOKEN
 	RunAptUpdate   bool          // CADENCE_RUN_APT_UPDATE (default false)
 	EnableUpgrades bool          // CADENCE_ENABLE_UPGRADES (default true)
+	EnableReboot   bool          // CADENCE_ENABLE_REBOOT (default true); kill-switch, wins over policy
 	HTTPTimeout    time.Duration // CADENCE_HTTP_TIMEOUT_SECONDS (default 30s)
 }
 
@@ -58,6 +59,15 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("CADENCE_ENABLE_UPGRADES must be a boolean, got %q", v)
 		}
 		cfg.EnableUpgrades = b
+	}
+
+	cfg.EnableReboot = true
+	if v := strings.TrimSpace(os.Getenv("CADENCE_ENABLE_REBOOT")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("CADENCE_ENABLE_REBOOT must be a boolean, got %q", v)
+		}
+		cfg.EnableReboot = b
 	}
 
 	cfg.HTTPTimeout = 30 * time.Second

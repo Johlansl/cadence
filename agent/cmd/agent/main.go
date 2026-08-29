@@ -20,11 +20,12 @@ import (
 	"cadence/agent/internal/collector"
 	"cadence/agent/internal/config"
 	"cadence/agent/internal/executor"
+	"cadence/agent/internal/reboot"
 	"cadence/agent/internal/report"
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.3.0"
+const agentVersion = "0.4.0"
 
 func main() {
 	log.SetFlags(0)
@@ -120,11 +121,41 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	}
 	log.Printf("job %s %s: apt exit=%d reboot_required=%v", job.ID, status, res.ExitCode, res.RebootRequired)
 
-	if err := submit(status, res.ExitCode, res.Log, res.RebootRequired); err != nil {
+	// Decide about the reboot. The server already resolved the effective mode
+	// (per-job override, else host reboot_policy) into params.reboot.
+	mode := job.RebootMode()
+	if mode == "" {
+		mode = "never"
+	}
+	willReboot := status == "succeeded" && res.RebootRequired && mode == "auto" && cfg.EnableReboot
+
+	logText := res.Log
+	if status == "succeeded" && res.RebootRequired {
+		switch {
+		case mode != "auto":
+			logText += fmt.Sprintf("\n[cadence] reboot required; reboot mode is %q -> not rebooting\n", mode)
+		case !cfg.EnableReboot:
+			logText += "\n[cadence] reboot required and reboot mode is \"auto\", but CADENCE_ENABLE_REBOOT=false -> not rebooting\n"
+		default:
+			logText += "\n[cadence] reboot required and reboot mode is \"auto\" -> rebooting via systemctl --no-block reboot\n"
+		}
+	}
+
+	if err := submit(status, res.ExitCode, logText, res.RebootRequired); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}
 	if status == "failed" {
 		return fmt.Errorf("job %s failed (apt exit %d)", job.ID, res.ExitCode)
+	}
+
+	if willReboot {
+		log.Printf("job %s: reboot required and mode=auto -> issuing systemctl --no-block reboot", job.ID)
+		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+		defer rcancel()
+		if err := reboot.Issue(rctx); err != nil {
+			return fmt.Errorf("issuing reboot: %w", err)
+		}
+		log.Printf("job %s: reboot queued", job.ID)
 	}
 	return nil
 }

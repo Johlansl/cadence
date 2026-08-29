@@ -37,6 +37,20 @@ type JobHandoff struct {
 	Params  json.RawMessage `json:"params"`
 }
 
+// RebootMode returns params.reboot ("auto" | "never" | ""). The server resolves
+// the effective value (per-job override, else the host's reboot_policy) before
+// handing the job off, so the agent does not need the host policy itself.
+func (j JobHandoff) RebootMode() string {
+	if len(j.Params) == 0 {
+		return ""
+	}
+	var p struct {
+		Reboot string `json:"reboot"`
+	}
+	_ = json.Unmarshal(j.Params, &p)
+	return p.Reboot
+}
+
 // Response is the body returned by POST /api/v1/reports. Only the piggybacked
 // job is of interest to the agent; the rest is ignored.
 type Response struct {
