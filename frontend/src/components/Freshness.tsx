@@ -6,7 +6,8 @@ const COLOR: Record<Staleness, string> = {
   stale: 'text-red-400',
 }
 
-// Relative "last report" time, coloured by how overdue the host is.
+// Relative "last seen" time, coloured by how overdue the host is:
+// green ≤ 5 min, amber ≤ 15 min, red beyond (see staleness()).
 export function Freshness({ iso }: { iso: string | null }) {
   return (
     <span className={COLOR[staleness(iso)]} title={iso ?? 'no report received yet'}>

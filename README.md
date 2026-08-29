@@ -263,11 +263,15 @@ Part of the compose stack — `docker compose up -d --build` builds and runs it.
 With `CADENCE_FRONTEND_BIND=0.0.0.0`, open `http://<server-ip>:8080/`.
 
 The list shows each host with a status badge (green `up to date` / amber
-`updates` / red `security`), the update counts, a **last-report freshness**
-indicator (green ≤ 90 min, amber ≤ 6 h, red beyond — spots a stopped agent),
+`updates` / red `security`), the update counts, a **last-seen freshness**
+indicator (green ≤ 5 min, amber ≤ 15 min, red beyond — spots a stopped agent),
 and a `reboot` marker. The detail pane shows host metadata and the package
 table (pending updates first, security flagged), with a toggle to show all
 installed packages.
+
+The tight freshness thresholds assume `cadence-agent-poll.timer` is enabled (it
+is by default), which refreshes `last_seen_at` every minute. A host running only
+the hourly report will always read amber/red.
 
 ### Local development
 

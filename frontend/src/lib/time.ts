@@ -10,13 +10,16 @@ export function relativeTime(iso: string | null): string {
   return `${Math.round(hours / 24)}d ago`
 }
 
-// Staleness buckets for an agent expected to report roughly hourly.
+// Staleness buckets. The job-poll timer refreshes last_seen_at every minute
+// (POST /api/v1/agent/next-job), so a healthy agent is always seconds old and a
+// stopped one shows up within minutes. Hosts running only the hourly report
+// (poll timer disabled) will read 'late'/'stale' -- that is expected.
 export type Staleness = 'fresh' | 'late' | 'stale'
 
 export function staleness(iso: string | null): Staleness {
   if (!iso) return 'stale'
   const mins = (Date.now() - new Date(iso).getTime()) / 60_000
-  if (mins <= 90) return 'fresh'
-  if (mins <= 360) return 'late'
+  if (mins <= 5) return 'fresh'
+  if (mins <= 15) return 'late'
   return 'stale'
 }
