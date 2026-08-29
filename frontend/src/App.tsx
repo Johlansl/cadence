@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from './api/client'
 import { HostDetail } from './components/HostDetail'
 import { HostList } from './components/HostList'
+import { OverviewChips, SilentBanner } from './components/Overview'
 import { relativeTime } from './lib/time'
 import type { HostDetail as HostDetailData, HostSummary } from './types'
 
@@ -72,9 +73,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
         <div className="flex items-baseline gap-3">
           <h1 className="text-sm font-semibold uppercase tracking-widest text-zinc-300">Cadence</h1>
-          <span className="text-xs text-zinc-600">
-            {hosts.length} host{hosts.length === 1 ? '' : 's'}
-          </span>
+          <OverviewChips hosts={hosts} />
         </div>
         <div className="text-xs text-zinc-600">
           {error ? (
@@ -86,6 +85,8 @@ export default function App() {
           )}
         </div>
       </header>
+
+      <SilentBanner hosts={hosts} onSelect={setSelectedId} />
 
       <div className="flex min-h-0 flex-1">
         <aside className="w-80 shrink-0 overflow-auto border-r border-zinc-800">
