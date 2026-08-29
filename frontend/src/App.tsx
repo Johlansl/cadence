@@ -14,6 +14,7 @@ export default function App() {
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<Date | null>(null)
+  const [detailReload, setDetailReload] = useState(0)
   const [, tick] = useState(0)
 
   const refreshList = useCallback(async () => {
@@ -55,7 +56,17 @@ export default function App() {
       cancelled = true
       clearInterval(t)
     }
-  }, [selectedId])
+  }, [selectedId, detailReload])
+
+  // Called after a host mutation from the detail pane.
+  const onHostChanged = useCallback(() => {
+    void refreshList()
+    setDetailReload((n) => n + 1)
+  }, [refreshList])
+  const onHostDeleted = useCallback(() => {
+    setSelectedId(null)
+    void refreshList()
+  }, [refreshList])
 
   // Select the first host once the list arrives.
   useEffect(() => {
@@ -94,7 +105,7 @@ export default function App() {
         </aside>
         <main className="min-w-0 flex-1 overflow-hidden">
           {detail ? (
-            <HostDetail host={detail} />
+            <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
           ) : (
             <p className="p-6 text-sm text-zinc-600">Select a host.</p>
           )}

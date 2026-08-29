@@ -66,13 +66,21 @@ export const api = {
     return adminWrite<Job>(`/admin/hosts/${hostId}/jobs`, adminKey, 'POST', body)
   },
 
-  setRebootPolicy(hostId: string, adminKey: string, reboot_policy: RebootPolicy) {
-    return adminWrite<{ id: string; hostname: string; reboot_policy: RebootPolicy }>(
-      `/admin/hosts/${hostId}`,
-      adminKey,
-      'PATCH',
-      { reboot_policy },
-    )
+  patchHost(
+    hostId: string,
+    adminKey: string,
+    body: { reboot_policy?: RebootPolicy; is_active?: boolean },
+  ) {
+    return adminWrite<{
+      id: string
+      hostname: string
+      reboot_policy: RebootPolicy
+      is_active: boolean
+    }>(`/admin/hosts/${hostId}`, adminKey, 'PATCH', body)
+  },
+
+  deleteHost(hostId: string, adminKey: string) {
+    return adminWrite<null>(`/admin/hosts/${hostId}`, adminKey, 'DELETE', undefined)
   },
 
   getSchedules: (hostId: string) => getJSON<Schedule[]>(`/hosts/${hostId}/schedules`),

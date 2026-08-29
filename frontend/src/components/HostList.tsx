@@ -13,9 +13,14 @@ export function HostList({ hosts, selectedId, onSelect }: Props) {
     return <p className="p-4 text-sm text-zinc-500">No hosts registered.</p>
   }
 
+  // Active hosts first, then inactive; alphabetical within each group.
+  const ordered = [...hosts].sort(
+    (a, b) => Number(b.is_active) - Number(a.is_active) || a.hostname.localeCompare(b.hostname),
+  )
+
   return (
     <ul className="divide-y divide-zinc-800">
-      {hosts.map((h) => {
+      {ordered.map((h) => {
         const active = h.id === selectedId
         const normalUpdates = h.updates_available_count - h.security_updates_count
         return (
@@ -25,7 +30,7 @@ export function HostList({ hosts, selectedId, onSelect }: Props) {
               onClick={() => onSelect(h.id)}
               className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors ${
                 active ? 'bg-zinc-800/80' : 'hover:bg-zinc-900'
-              }`}
+              } ${h.is_active ? '' : 'opacity-40'}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate font-mono text-sm text-zinc-100">{h.hostname}</span>

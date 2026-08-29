@@ -16,7 +16,7 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
   }, [value])
 
   const action = useCallback(
-    (key: string) => api.setRebootPolicy(hostId, key, choiceRef.current),
+    (key: string) => api.patchHost(hostId, key, { reboot_policy: choiceRef.current }),
     [hostId],
   )
   const { run, submitKey, busy, error, needKey, keyDraft, setKeyDraft } = useAdminKeyAction(action)
@@ -54,6 +54,75 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
   )
 }
 
+function HostActions({
+  hostId,
+  isActive,
+  onChanged,
+  onDeleted,
+}: {
+  hostId: string
+  isActive: boolean
+  onChanged: () => void
+  onDeleted: () => void
+}) {
+  const retire = useAdminKeyAction((key) =>
+    api.patchHost(hostId, key, { is_active: !isActive }),
+  )
+  const remove = useAdminKeyAction((key) => api.deleteHost(hostId, key))
+
+  const doRetire = async () => {
+    const r = await retire.run()
+    if (r?.ok) onChanged()
+  }
+  const doDelete = async () => {
+    if (!window.confirm('Permanently delete this host and all its history?')) return
+    const r = await remove.run()
+    if (r?.ok) onDeleted()
+  }
+  const onKeySubmit = async () => {
+    if (retire.needKey) {
+      const r = await retire.submitKey()
+      if (r?.ok) onChanged()
+    } else {
+      const r = await remove.submitKey()
+      if (r?.ok) onDeleted()
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-2 text-xs">
+        <button
+          type="button"
+          onClick={() => void doRetire()}
+          disabled={retire.busy}
+          className="rounded border border-zinc-700 px-2 py-0.5 text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+        >
+          {retire.busy ? '…' : isActive ? 'retire' : 'reactivate'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void doDelete()}
+          disabled={remove.busy}
+          className="text-zinc-600 hover:text-red-400 disabled:opacity-50"
+        >
+          delete
+        </button>
+      </div>
+      {(retire.needKey || remove.needKey) && (
+        <AdminKeyPrompt
+          value={retire.needKey ? retire.keyDraft : remove.keyDraft}
+          onChange={retire.needKey ? retire.setKeyDraft : remove.setKeyDraft}
+          onSubmit={() => void onKeySubmit()}
+        />
+      )}
+      {(retire.error || remove.error) && (
+        <p className="text-xs text-red-400">{retire.error ?? remove.error}</p>
+      )}
+    </div>
+  )
+}
+
 function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -70,7 +139,15 @@ function rank(p: HostPackage): number {
   return 2
 }
 
-export function HostDetail({ host }: { host: HostDetailData }) {
+export function HostDetail({
+  host,
+  onChanged,
+  onDeleted,
+}: {
+  host: HostDetailData
+  onChanged: () => void
+  onDeleted: () => void
+}) {
   const [onlyUpdates, setOnlyUpdates] = useState(true)
 
   const withUpdates = useMemo(
@@ -88,14 +165,27 @@ export function HostDetail({ host }: { host: HostDetailData }) {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <h2 className="font-mono text-lg text-zinc-100">{host.hostname}</h2>
-          <StatusBadge status={host.status} />
-          {host.reboot_required && (
-            <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-xs font-medium text-orange-400 ring-1 ring-orange-500/30">
-              reboot required
-            </span>
-          )}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-mono text-lg text-zinc-100">{host.hostname}</h2>
+            <StatusBadge status={host.status} />
+            {!host.is_active && (
+              <span className="rounded bg-zinc-700/40 px-1.5 py-0.5 text-xs font-medium text-zinc-400 ring-1 ring-zinc-600">
+                inactive
+              </span>
+            )}
+            {host.reboot_required && (
+              <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-xs font-medium text-orange-400 ring-1 ring-orange-500/30">
+                reboot required
+              </span>
+            )}
+          </div>
+          <HostActions
+            hostId={host.id}
+            isActive={host.is_active}
+            onChanged={onChanged}
+            onDeleted={onDeleted}
+          />
         </div>
         {host.description && <p className="mt-1 text-sm text-zinc-500">{host.description}</p>}
       </header>
