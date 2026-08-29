@@ -457,6 +457,20 @@ curl -s -X POST https://cadence.lan/api/v1/admin/hosts/<id>/schedules \
 # PATCH/DELETE /api/v1/admin/schedules/<schedule_id>   (X-Admin-Key)
 ```
 
+### Retention
+
+The `reports` and `jobs` tables are append-only. Once a day the scheduler
+prunes them:
+
+- `CADENCE_REPORTS_RETENTION_DAYS` (default 90) — deletes `reports` rows older
+  than that (the raw report log).
+- `CADENCE_JOBS_RETENTION_DAYS` (default 90) — deletes `succeeded` / `failed`
+  jobs completed longer ago; `pending` / `running` are never touched.
+
+Set either to `0` to keep forever. `host_packages` is replaced whole on every
+report, so it does not grow. Look for `retention sweep: …` in
+`docker compose logs scheduler`.
+
 ### Test the full flow on a monitored VM
 
 The VM needs a current agent with the poll timer — see

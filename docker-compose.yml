@@ -25,6 +25,7 @@ services:
 
   backend:
     build: ./backend
+    image: cadence-backend
     restart: unless-stopped
     env_file: .env
     environment:
@@ -43,9 +44,11 @@ services:
       - "${CADENCE_BACKEND_BIND:-127.0.0.1}:8000:8000"
 
   scheduler:
-    # Same image as the backend, different entrypoint: a plain loop that turns
-    # due `schedules` rows into `jobs` rows. No ports -- it only touches the DB.
-    build: ./backend
+    # The backend image, different command: a plain loop that turns due
+    # `schedules` rows into `jobs` rows and runs the daily retention sweep.
+    # No ports -- it only touches the DB. `docker compose build backend`
+    # rebuilds this too.
+    image: cadence-backend
     restart: unless-stopped
     env_file: .env
     environment:

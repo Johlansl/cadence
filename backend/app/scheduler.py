@@ -14,19 +14,22 @@ from __future__ import annotations
 import logging
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.schedule_timing import next_run_at
 from app.db.base import SessionLocal
-from app.models.models import Job, Schedule
+from app.models.models import Job, Report, Schedule
 
 log = logging.getLogger("cadence.scheduler")
 
 TICK_SECONDS = 60
+RETENTION_EVERY = timedelta(hours=24)
 _stop = False
+_last_retention: datetime | None = None
 
 
 def _request_stop(*_: object) -> None:
@@ -97,6 +100,55 @@ def tick(now: datetime | None = None, db: Session | None = None) -> int:
     return queued
 
 
+def retention_sweep(
+    db: Session, now: datetime, *, reports_days: int, jobs_days: int
+) -> tuple[int, int]:
+    """Delete old append-only rows. 0 days = keep forever. Terminal jobs only
+    (pending/running are never removed here). Returns (reports, jobs) deleted."""
+    reports_deleted = 0
+    jobs_deleted = 0
+    if reports_days > 0:
+        cutoff = now - timedelta(days=reports_days)
+        reports_deleted = db.execute(
+            delete(Report).where(Report.received_at < cutoff)
+        ).rowcount
+    if jobs_days > 0:
+        cutoff = now - timedelta(days=jobs_days)
+        jobs_deleted = db.execute(
+            delete(Job).where(
+                Job.status.in_(("succeeded", "failed")),
+                Job.completed_at.is_not(None),
+                Job.completed_at < cutoff,
+            )
+        ).rowcount
+    db.commit()
+    return reports_deleted, jobs_deleted
+
+
+def run_retention_if_due(now: datetime | None = None) -> None:
+    global _last_retention
+    now = now or datetime.now(timezone.utc)
+    if _last_retention is not None and now - _last_retention < RETENTION_EVERY:
+        return
+    _last_retention = now
+    if settings.reports_retention_days == 0 and settings.jobs_retention_days == 0:
+        return
+    with SessionLocal() as db:
+        reports, jobs = retention_sweep(
+            db,
+            now,
+            reports_days=settings.reports_retention_days,
+            jobs_days=settings.jobs_retention_days,
+        )
+    log.info(
+        "retention sweep: %d reports, %d jobs deleted (keep reports=%dd jobs=%dd)",
+        reports,
+        jobs,
+        settings.reports_retention_days,
+        settings.jobs_retention_days,
+    )
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
@@ -107,6 +159,7 @@ def main() -> None:
     while not _stop:
         try:
             tick()
+            run_retention_if_due()
         except Exception:  # noqa: BLE001 -- keep the loop alive
             log.exception("scheduler tick failed")
         for _ in range(TICK_SECONDS):

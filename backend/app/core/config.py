@@ -21,6 +21,20 @@ def _build_database_url() -> str:
     )
 
 
+def _retention_days(var: str, default: int) -> int:
+    """Days to keep append-only rows; 0 = keep forever. Read by the scheduler."""
+    raw = os.environ.get(var, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{var} must be an integer, got {raw!r}") from exc
+    if value < 0:
+        raise RuntimeError(f"{var} must be >= 0")
+    return value
+
+
 class Settings:
     def __init__(self) -> None:
         self.database_url: str = _build_database_url()
@@ -28,6 +42,14 @@ class Settings:
         self.admin_key: str = os.environ.get("CADENCE_ADMIN_KEY", "")
         if not self.admin_key:
             raise RuntimeError("CADENCE_ADMIN_KEY is required")
+
+        # Retention, applied by the scheduler's daily sweep.
+        self.reports_retention_days: int = _retention_days(
+            "CADENCE_REPORTS_RETENTION_DAYS", 90
+        )
+        self.jobs_retention_days: int = _retention_days(
+            "CADENCE_JOBS_RETENTION_DAYS", 90
+        )
 
 
 settings = Settings()
