@@ -25,9 +25,10 @@ Incremental build, one testable step at a time (`CLAUDE.md` section 8).
 
 ## Real-VM test setup
 
-Target topology: one **central server VM** running `db` + `backend` + `frontend`
-via docker-compose, and one or more **monitored Debian VMs** each running the
-agent on a systemd timer. The agent only talks outbound to the server.
+Target topology: one **central server VM** running `db` + `backend` +
+`scheduler` + `frontend` + `caddy` via docker-compose, and one or more
+**monitored Debian VMs** each running the agent on a systemd timer. The agent
+only talks outbound to the server.
 
 ### 1. Central server VM
 
@@ -421,9 +422,31 @@ upgrade succeeded, `/var/run/reboot-required` is present, the effective mode is
 default true). It always posts the job result first, so the job never hangs in
 `running`.
 
-Scheduled / automatic update windows (maintenance windows) are **out of V1
-scope** (CLAUDE.md §2) — added in a later increment via a `schedules` table and
-a dedicated scheduler service.
+### Scheduled maintenance windows
+
+Each host can have **one** recurring window (`schedules` table, `UNIQUE`
+per host). The `scheduler` service — the same image as the backend, run as
+`python -m app.scheduler`, no ports — wakes every minute and turns a due window
+into an `apt_upgrade` job (`requested_by = "scheduler"`). Agents still pull
+jobs, so the outbound-only model is untouched.
+
+- **`weekly`** (`weekday` 0–6, Monday = 0) or **`monthly`** (`day_of_month`
+  1–28), at `hour`:`minute` in the schedule's `timezone`. Coherence, ranges and
+  `params.reboot` are enforced by DB `CHECK`s, not only the API.
+- `params.reboot` (`auto` / `never`) overrides the host `reboot_policy` for the
+  jobs this window creates, exactly like a manual trigger.
+- If the host already has an active job when the window opens, that run is
+  **skipped** and the schedule advances to the next window (no catch-up).
+
+Manage it from the host detail pane, or:
+
+```sh
+curl -s -X POST https://cadence.lan/api/v1/admin/hosts/<id>/schedules \
+  -H "X-Admin-Key: $CADENCE_ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"kind":"weekly","weekday":6,"hour":4,"minute":0,"timezone":"Europe/Paris","params":{"reboot":"auto"}}'
+# GET  /api/v1/hosts/<id>/schedules        (no auth, like the other reads)
+# PATCH/DELETE /api/v1/admin/schedules/<schedule_id>   (X-Admin-Key)
+```
 
 ### Test the full flow on a monitored VM
 

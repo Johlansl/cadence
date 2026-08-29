@@ -37,14 +37,22 @@ un commit chacun, poussés sur `origin/main`.
   /api/v1/admin/hosts/{id}`. **Agent 0.4.0** : reboote via `systemctl
   --no-block reboot` si `succeeded` + `/var/run/reboot-required` + mode `auto`
   + `CADENCE_ENABLE_REBOOT` != false ; résultat du job posté avant le reboot.
-- **Inc. 5b** — planification : **à faire** (table `schedules`, service
-  `scheduler` réutilisant l'image backend).
+- **Inc. 5b** — planification : ✅. Table `schedules` (une par host,
+  `monthly|weekly`, jour/heure/tz, CHECK en base), révision Alembic `0003`
+  (base `vm-cadence` à `0003`), service compose `scheduler` (image backend,
+  `python -m app.scheduler`, boucle 60 s, `FOR UPDATE SKIP LOCKED`, host occupé
+  → skip/fenêtre suivante). Endpoints `GET /hosts/{id}/schedules` +
+  `POST/PATCH/DELETE` admin. Panneau « Schedule » dans le détail host.
+  Smoke test OK sur `vm-japp` (schedule forcé dû → job créé par le scheduler →
+  agent l'exécute).
 
-**En attente au moment du handoff :** déployer l'agent **0.4.0** sur `vm-japp`,
-puis les 3 tests de reboot (snapshot Proxmox fait, feu vert donné) :
-`auto`+flag → reboot ; `never`+flag → pas de reboot ; `CADENCE_ENABLE_REBOOT=
-false`+`auto`+flag → pas de reboot. Simuler le flag : `sudo touch
-/run/reboot-required`.
+**Fait pendant la session :** agent **0.4.0** déployé sur `vm-japp`, **les 3
+tests de reboot validés** (`never`+flag → non ; `CADENCE_ENABLE_REBOOT=false`
++`auto`+flag → non ; `auto`+flag → **reboot réel** confirmé, `uptime -s`
+`2026-08-29 16:11:58`). `vm-japp` laissé en `reboot_policy=never`.
+
+**État stack `vm-cadence` :** 5 services up (`db`, `backend`, `scheduler`,
+`frontend`, `caddy`), base à la révision Alembic `0003`.
 
 ---
 

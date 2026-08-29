@@ -34,7 +34,9 @@ le même Proxmox, chacune avec l'agent installé.
   remonte le résultat
 
 **Explicitement hors scope V1 (ne pas implémenter, même si ce serait facile) :**
-- Planification automatique / fenêtres de maintenance
+- ~~Planification automatique / fenêtres de maintenance~~ — **sorti du hors
+  scope** : feu vert donné en post-V1, livré à l'incrément 5b (table
+  `schedules` + service `scheduler`). Voir §11/§12.
 - Règles d'exclusion de paquets
 - Séquencement multi-hosts des reboots
 - Notifications (Slack/mail)
@@ -316,8 +318,11 @@ chacun) :
    `jobs.params->>'reboot'`, `PATCH /api/v1/admin/hosts/{id}`, agent 0.4.0
    qui reboote (`systemctl --no-block reboot`) si `succeeded` +
    `reboot-required` + mode `auto` + `CADENCE_ENABLE_REBOOT` != false.
-5b. **Planification** (table `schedules` + service `scheduler` réutilisant
-   l'image backend) — voir §12.
+5b. **Planification** ✅ : table `schedules` (une par host, `monthly|weekly`,
+   jour/heure/tz, CHECK en base), révision Alembic `0003`, service `scheduler`
+   (image backend, `python -m app.scheduler`, boucle 60 s) qui insère des lignes
+   `jobs`. Endpoints `GET /hosts/{id}/schedules` (lecture) + `POST/PATCH/DELETE`
+   sous `X-Admin-Key`. Host déjà occupé → skip, fenêtre suivante.
 
 **Contexte détaillé (journal, décisions, déploiement, limites, options) :
 voir `HANDOFF.md`.** À lire en premier au démarrage d'une session.
@@ -327,11 +332,10 @@ voir `HANDOFF.md`.** À lire en premier au démarrage d'une session.
 1. **Choix reboot côté dashboard.** ✅ Fait (incrément 5a, session en
    cours) : `hosts.reboot_policy` + override `jobs.params.reboot`. `prompt`
    pas implémenté (seulement `auto|never`) — extension possible plus tard.
-2. **Planification / fenêtres de maintenance.** Feu vert donné (session en
-   cours) → incrément 5b. Table `schedules` (`monthly|weekly`, jour/heure,
-   tz), un service `scheduler` (image backend, `python -m app.scheduler`)
-   insère des lignes `jobs`. Ne dépend d'aucun cron système ni d'APScheduler.
-   Fait basculer le point « planification » de la section 2 dans le
-   périmètre.
+2. **Planification / fenêtres de maintenance.** ✅ Fait (incrément 5b) :
+   table `schedules` + service `scheduler` (image backend, `python -m
+   app.scheduler`, boucle 60 s, `FOR UPDATE SKIP LOCKED`). Aucun cron système,
+   aucune dépendance ajoutée. Reste possible plus tard : plusieurs fenêtres
+   par host, exclusions de paquets dans `schedules.params`.
 
 **TLS / reverse proxy (Caddy)** : ✅ fait (incrément 3).
