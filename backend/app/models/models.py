@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    SmallInteger,
     Text,
     Uuid,
     func,
@@ -142,3 +143,33 @@ class Job(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Schedule(Base):
+    __tablename__ = "schedules"
+
+    # One recurring maintenance window per host. Coherence (kind vs
+    # day_of_month/weekday, ranges, params.reboot) is enforced by DB CHECKs;
+    # see migration 0003. weekday: Monday = 0.
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    host_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    day_of_month: Mapped[int | None] = mapped_column(SmallInteger)
+    weekday: Mapped[int | None] = mapped_column(SmallInteger)
+    hour: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    minute: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+    timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'UTC'"))
+    params: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

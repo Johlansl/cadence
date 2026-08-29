@@ -42,6 +42,24 @@ services:
       # 0.0.0.0 to reach the API from other VMs. See CADENCE_BACKEND_BIND.
       - "${CADENCE_BACKEND_BIND:-127.0.0.1}:8000:8000"
 
+  scheduler:
+    # Same image as the backend, different entrypoint: a plain loop that turns
+    # due `schedules` rows into `jobs` rows. No ports -- it only touches the DB.
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      CADENCE_ADMIN_KEY: ${CADENCE_ADMIN_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "app.scheduler"]
+
   frontend:
     build: ./frontend
     restart: unless-stopped

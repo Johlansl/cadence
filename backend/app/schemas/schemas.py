@@ -7,8 +7,9 @@ import uuid
 from datetime import datetime
 
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # What the agent does after an upgrade that leaves a reboot pending.
 RebootMode = Literal["auto", "never"]
@@ -178,3 +179,75 @@ class JobOut(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+
+
+# --- schedules -----------------------------------------------------------
+
+ScheduleKind = Literal["monthly", "weekly"]
+
+
+class ScheduleIn(BaseModel):
+    """Create / full replacement of a host's maintenance window. Mirrors the
+    DB CHECKs so the API returns a friendly 422 instead of an IntegrityError."""
+
+    enabled: bool = True
+    kind: ScheduleKind
+    day_of_month: int | None = Field(default=None, ge=1, le=28)
+    weekday: int | None = Field(default=None, ge=0, le=6)  # Monday = 0
+    hour: int = Field(ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    timezone: str = "UTC"
+    params: dict = Field(default_factory=dict)
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_tz(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown timezone: {v!r}") from exc
+        return v
+
+    @model_validator(mode="after")
+    def _coherent(self) -> "ScheduleIn":
+        if self.kind == "monthly" and (self.day_of_month is None or self.weekday is not None):
+            raise ValueError("monthly needs day_of_month and no weekday")
+        if self.kind == "weekly" and (self.weekday is None or self.day_of_month is not None):
+            raise ValueError("weekly needs weekday and no day_of_month")
+        reboot = self.params.get("reboot")
+        if reboot is not None and reboot not in ("auto", "never"):
+            raise ValueError("params.reboot must be 'auto' or 'never'")
+        return self
+
+
+class ScheduleUpdate(BaseModel):
+    """Partial update -- the route merges these onto the row and re-validates
+    the result as a ScheduleIn."""
+
+    enabled: bool | None = None
+    kind: ScheduleKind | None = None
+    day_of_month: int | None = None
+    weekday: int | None = None
+    hour: int | None = None
+    minute: int | None = None
+    timezone: str | None = None
+    params: dict | None = None
+
+
+class ScheduleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    host_id: uuid.UUID
+    enabled: bool
+    kind: str
+    day_of_month: int | None
+    weekday: int | None
+    hour: int
+    minute: int
+    timezone: str
+    params: dict
+    last_run_at: datetime | None
+    next_run_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
