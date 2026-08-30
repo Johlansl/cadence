@@ -3,9 +3,10 @@ the raw report."""
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_host, get_db
 from app.api.routes.jobs import claim_pending_job
 from app.models.models import Host, HostPackage, Package, Report
-from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn
+from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn, ReportSummary
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
 
@@ -139,3 +140,22 @@ def create_report(
         reboot_required=report_in.reboot_required,
         job=handoff,
     )
+
+
+@router.get("/hosts/{host_id}/reports", response_model=list[ReportSummary])
+def list_host_reports(
+    host_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=500),
+    before: datetime | None = Query(None, description="return reports strictly older than this"),
+    db: Session = Depends(get_db),
+) -> list[Report]:
+    """Report history for a host: the counters over time, without the bulky
+    raw_payload. Newest first; page with `before` = the oldest received_at
+    you already have. No auth, like the other read views."""
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+    stmt = select(Report).where(Report.host_id == host_id)
+    if before is not None:
+        stmt = stmt.where(Report.received_at < before)
+    stmt = stmt.order_by(Report.received_at.desc()).limit(limit)
+    return db.execute(stmt).scalars().all()

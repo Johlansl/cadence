@@ -44,11 +44,16 @@ export function Jobs({ hostId }: { hostId: string }) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [showAll, setShowAll] = useState(false)
   const [stale, setStale] = useState(false)
+  // Pages fetched past the polled first page, and whether the tail is reached.
+  const [older, setOlder] = useState<Job[]>([])
+  const [exhausted, setExhausted] = useState(false)
+
+  const PAGE = 20
 
   // Force-refresh after a user action; result is always applied.
   const refresh = useCallback(async () => {
     try {
-      setJobs(await api.getHostJobs(hostId))
+      setJobs(await api.getHostJobs(hostId, { limit: PAGE }))
       setStale(false)
     } catch {
       setStale(true)
@@ -58,10 +63,12 @@ export function Jobs({ hostId }: { hostId: string }) {
   // Background poll, guarded so a slow response for a host we've navigated
   // away from can't overwrite the new host's jobs.
   useEffect(() => {
+    setOlder([])
+    setExhausted(false)
     let cancelled = false
     const poll = async () => {
       try {
-        const j = await api.getHostJobs(hostId)
+        const j = await api.getHostJobs(hostId, { limit: PAGE })
         if (!cancelled) {
           setJobs(j)
           setStale(false)
@@ -77,6 +84,20 @@ export function Jobs({ hostId }: { hostId: string }) {
       clearInterval(t)
     }
   }, [hostId])
+
+  const allJobs = older.length ? [...jobs, ...older] : jobs
+
+  const loadOlder = useCallback(async () => {
+    const ref = allJobs[allJobs.length - 1]
+    if (!ref) return
+    try {
+      const more = await api.getHostJobs(hostId, { before: ref.created_at, limit: PAGE })
+      setOlder((o) => [...o, ...more])
+      if (more.length < PAGE) setExhausted(true)
+    } catch {
+      setStale(true)
+    }
+  }, [hostId, allJobs])
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -130,8 +151,9 @@ export function Jobs({ hostId }: { hostId: string }) {
     await refresh()
   }, [trig, clear, refresh])
 
-  const shown = showAll ? jobs : jobs.slice(0, PREVIEW)
+  const shown = showAll ? allJobs : allJobs.slice(0, PREVIEW)
   const last = jobs[0]
+  const canLoadOlder = showAll && !exhausted && allJobs.length >= PAGE
 
   return (
     <section className="border-t border-zinc-800 px-6 py-4">
@@ -143,7 +165,7 @@ export function Jobs({ hostId }: { hostId: string }) {
         >
           <span className="inline-block w-2 text-zinc-500">{collapsed ? '▸' : '▾'}</span>
           Jobs
-          <span className="text-zinc-700">({jobs.length})</span>
+          <span className="text-zinc-700">({allJobs.length})</span>
           {stale && <span className="text-red-500/70">· stale</span>}
         </button>
 
@@ -244,15 +266,26 @@ export function Jobs({ hostId }: { hostId: string }) {
                   </li>
                 ))}
               </ul>
-              {jobs.length > PREVIEW && (
-                <button
-                  type="button"
-                  onClick={() => setShowAll((v) => !v)}
-                  className="mt-2 text-xs text-zinc-500 hover:text-zinc-300"
-                >
-                  {showAll ? 'show less' : `show all (${jobs.length})`}
-                </button>
-              )}
+              <div className="mt-2 flex items-center gap-3">
+                {allJobs.length > PREVIEW && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAll((v) => !v)}
+                    className="text-xs text-zinc-500 hover:text-zinc-300"
+                  >
+                    {showAll ? 'show less' : `show all (${allJobs.length})`}
+                  </button>
+                )}
+                {canLoadOlder && (
+                  <button
+                    type="button"
+                    onClick={() => void loadOlder()}
+                    className="text-xs text-zinc-500 hover:text-zinc-300"
+                  >
+                    load older
+                  </button>
+                )}
+              </div>
             </>
           )}
         </>

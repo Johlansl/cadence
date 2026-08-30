@@ -106,6 +106,20 @@ class NextJob(BaseModel):
     job: JobHandoff | None = None
 
 
+class ReportSummary(BaseModel):
+    """One past report's counters (GET /hosts/{id}/reports) -- no raw_payload."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    received_at: datetime
+    agent_version: str | None
+    installed_package_count: int
+    updates_available_count: int
+    security_updates_count: int
+    reboot_required: bool
+
+
 class ReportAccepted(BaseModel):
     host_id: uuid.UUID
     installed_package_count: int

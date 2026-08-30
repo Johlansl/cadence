@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.models.models import Host, Job
 from tests.conftest import ADMIN_HEADERS, bearer, create_host
@@ -98,3 +99,27 @@ def test_job_views(client):
     assert r.json()["status"] == "pending"
 
     assert client.get(f"/api/v1/jobs/{uuid.uuid4()}").status_code == 404
+
+
+def test_list_host_jobs_pagination(client, db_session):
+    host_id, _ = create_host(client)
+    base = datetime.now(timezone.utc)
+    for i in range(5):
+        db_session.add(
+            Job(
+                host_id=host_id,
+                job_type="apt_upgrade",
+                status="succeeded",
+                created_at=base - timedelta(minutes=i),
+            )
+        )
+    db_session.flush()
+
+    page = client.get(f"/api/v1/hosts/{host_id}/jobs?limit=2").json()
+    assert len(page) == 2
+
+    more = client.get(
+        f"/api/v1/hosts/{host_id}/jobs?limit=10&before={page[-1]['created_at']}"
+    ).json()
+    assert len(more) == 3
+    assert all(j["created_at"] < page[-1]["created_at"] for j in more)

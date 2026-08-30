@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,19 +64,21 @@ def claim_next_job(
 
 
 @router.get("/hosts/{host_id}/jobs", response_model=list[JobOut])
-def list_host_jobs(host_id: uuid.UUID, db: Session = Depends(get_db)) -> list[Job]:
+def list_host_jobs(
+    host_id: uuid.UUID,
+    limit: int = Query(20, ge=1, le=200),
+    before: datetime | None = Query(
+        None, description="return jobs created strictly before this timestamp"
+    ),
+    db: Session = Depends(get_db),
+) -> list[Job]:
     if db.get(Host, host_id) is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "host not found")
-    return list(
-        db.execute(
-            select(Job)
-            .where(Job.host_id == host_id)
-            .order_by(Job.created_at.desc())
-            .limit(20)
-        )
-        .scalars()
-        .all()
-    )
+    stmt = select(Job).where(Job.host_id == host_id)
+    if before is not None:
+        stmt = stmt.where(Job.created_at < before)
+    stmt = stmt.order_by(Job.created_at.desc()).limit(limit)
+    return list(db.execute(stmt).scalars().all())
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)

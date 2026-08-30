@@ -4,6 +4,7 @@ import type {
   HostSummary,
   Job,
   RebootPolicy,
+  ReportSummary,
   Schedule,
   ScheduleInput,
 } from '../types'
@@ -59,7 +60,22 @@ export const api = {
   listHosts: () => getJSON<HostSummary[]>('/hosts'),
   getHost: (id: string) => getJSON<HostDetail>(`/hosts/${id}`),
   getFleetSummary: () => getJSON<FleetSummary>('/fleet/summary'),
-  getHostJobs: (id: string) => getJSON<Job[]>(`/hosts/${id}/jobs`),
+
+  getHostJobs: (id: string, opts: { limit?: number; before?: string } = {}) => {
+    const p = new URLSearchParams()
+    if (opts.limit) p.set('limit', String(opts.limit))
+    if (opts.before) p.set('before', opts.before)
+    const qs = p.toString()
+    return getJSON<Job[]>(`/hosts/${id}/jobs${qs ? `?${qs}` : ''}`)
+  },
+
+  getHostReports: (id: string, opts: { limit?: number; before?: string } = {}) => {
+    const p = new URLSearchParams()
+    if (opts.limit) p.set('limit', String(opts.limit))
+    if (opts.before) p.set('before', opts.before)
+    const qs = p.toString()
+    return getJSON<ReportSummary[]>(`/hosts/${id}/reports${qs ? `?${qs}` : ''}`)
+  },
 
   // reboot: omit to use the host's reboot_policy; set to override for this job.
   createJob(hostId: string, adminKey: string, reboot?: RebootPolicy) {

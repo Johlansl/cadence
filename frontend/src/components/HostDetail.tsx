@@ -5,6 +5,7 @@ import type { HostDetail as HostDetailData, RebootPolicy } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { Freshness } from './Freshness'
+import { HostHistory } from './HostHistory'
 import { Jobs } from './Jobs'
 import { PackageTable } from './PackageTable'
 import { Schedule } from './Schedule'
@@ -374,6 +375,7 @@ export function HostDetail({
         </dl>
 
         <TagsControl hostId={host.id} tags={host.tags} onChanged={onChanged} />
+        <HostHistory hostId={host.id} />
         <Jobs hostId={host.id} />
         <Schedule hostId={host.id} />
 

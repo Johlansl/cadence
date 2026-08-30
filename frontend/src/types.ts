@@ -45,6 +45,16 @@ export interface FleetSummary {
   jobs_failed_24h: number
 }
 
+export interface ReportSummary {
+  id: number
+  received_at: string
+  agent_version: string | null
+  installed_package_count: number
+  updates_available_count: number
+  security_updates_count: number
+  reboot_required: boolean
+}
+
 export interface HostPackage {
   name: string
   architecture: string
