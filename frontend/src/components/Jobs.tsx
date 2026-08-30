@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { pill, type Tone } from '../lib/pill'
 import { relativeTime } from '../lib/time'
 import type { Job, JobStatus, RebootPolicy } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 
-const STATUS_CLS: Record<JobStatus, string> = {
-  pending: 'bg-zinc-500/10 text-zinc-400 ring-zinc-500/30',
-  running: 'bg-sky-500/10 text-sky-400 ring-sky-500/30',
-  succeeded: 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/30',
-  failed: 'bg-red-500/10 text-red-400 ring-red-500/30',
+const STATUS_TONE: Record<JobStatus, Tone> = {
+  pending: 'neutral',
+  running: 'info',
+  succeeded: 'ok',
+  failed: 'danger',
 }
 
 const COLLAPSE_KEY = 'cadence.jobs.collapsed'
@@ -23,13 +24,7 @@ function readCollapsed(): boolean {
 }
 
 function JobBadge({ status }: { status: JobStatus }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ring-1 ${STATUS_CLS[status]}`}
-    >
-      {status}
-    </span>
-  )
+  return <span className={pill(STATUS_TONE[status])}>{status}</span>
 }
 
 function duration(from: string | null, to: string | null): string | null {

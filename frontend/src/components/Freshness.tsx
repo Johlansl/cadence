@@ -1,9 +1,10 @@
+import { TONE_TEXT } from '../lib/pill'
 import { relativeTime, staleness, type Staleness } from '../lib/time'
 
 const COLOR: Record<Staleness, string> = {
-  fresh: 'text-emerald-400',
-  late: 'text-amber-400',
-  stale: 'text-red-400',
+  fresh: TONE_TEXT.ok,
+  late: TONE_TEXT.warn,
+  stale: TONE_TEXT.danger,
 }
 
 // Relative "last seen" time, coloured by how overdue the host is:

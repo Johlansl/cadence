@@ -1,5 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { pill } from '../lib/pill'
 import type { HostDetail as HostDetailData, HostPackage, RebootPolicy } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 import { Freshness } from './Freshness'
@@ -174,11 +175,7 @@ export function HostDetail({
                 inactive
               </span>
             )}
-            {host.reboot_required && (
-              <span className="rounded bg-orange-500/10 px-1.5 py-0.5 text-xs font-medium text-orange-400 ring-1 ring-orange-500/30">
-                reboot required
-              </span>
-            )}
+            {host.reboot_required && <span className={pill('reboot')}>reboot required</span>}
           </div>
           <HostActions
             hostId={host.id}
