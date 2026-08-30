@@ -80,14 +80,14 @@ export function FleetOverview({
         <Tile
           label="Security"
           value={s ? s.security_updates_available : '—'}
-          sub={s ? `${s.security_updates} updates` : undefined}
-          tone="danger"
+          sub={s ? `${s.security_updates} package${s.security_updates === 1 ? '' : 's'}` : undefined}
+          tone={s && s.security_updates_available > 0 ? 'danger' : undefined}
         />
         <Tile
-          label="Updates"
-          value={s ? s.updates_available : '—'}
-          sub={s ? `${s.pending_updates} pending` : undefined}
-          tone="warn"
+          label="Needs updates"
+          value={s ? s.updates_available + s.security_updates_available : '—'}
+          sub={s ? `${s.pending_updates} package${s.pending_updates === 1 ? '' : 's'}` : undefined}
+          tone={s && s.updates_available + s.security_updates_available > 0 ? 'warn' : undefined}
         />
         <Tile
           label="Reboot"

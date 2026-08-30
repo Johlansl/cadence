@@ -129,7 +129,14 @@ export default function App() {
     <div className="flex h-full flex-col bg-zinc-950">
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-sm font-semibold uppercase tracking-widest text-zinc-300">Cadence</h1>
+          <button
+            type="button"
+            onClick={() => select(null)}
+            className="text-sm font-semibold uppercase tracking-widest text-zinc-300 hover:text-zinc-100"
+            title="Back to the fleet overview"
+          >
+            Cadence
+          </button>
           <OverviewChips hosts={hosts} />
         </div>
         <div className="text-xs text-zinc-600">

@@ -47,8 +47,10 @@ function matchesStatus(h: HostSummary, s: StatusFilter): boolean {
   switch (s) {
     case 'security':
       return h.status === 'security_updates_available'
+    // "updates" means "has any pending updates" -- a host with security updates
+    // has updates too, so it matches here as well.
     case 'updates':
-      return h.status === 'updates_available'
+      return h.status !== 'up_to_date'
     case 'uptodate':
       return h.status === 'up_to_date'
     default:

@@ -143,7 +143,11 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
           {rows.length === 0 && (
             <tr>
               <td colSpan={4} className="px-6 py-6 text-center font-sans text-zinc-600">
-                {packages.length === 0 ? 'No packages reported.' : 'No packages match the filter.'}
+                {packages.length === 0
+                  ? 'No packages reported.'
+                  : onlyUpdates && !onlySecurity && !q.trim()
+                    ? 'No pending updates.'
+                    : 'No packages match the filter.'}
               </td>
             </tr>
           )}
