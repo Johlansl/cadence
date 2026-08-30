@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app import __version__
 from app.api.routes import admin, hosts, jobs, reports, schedules
 
-app = FastAPI(title="Cadence", version="0.1.0")
+app = FastAPI(title="Cadence", version=__version__)
 
 app.include_router(admin.router)
 app.include_router(hosts.router)

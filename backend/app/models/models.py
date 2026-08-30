@@ -1,7 +1,10 @@
-"""ORM models mapping the tables defined in app/db/init.sql.
+"""ORM models mapping the Cadence database schema.
 
-The database schema is authoritative (applied via init.sql); these classes must
-stay in sync with it. No DDL is emitted from Python in V1.
+The schema is authoritative and owned by the Alembic migration chain
+(`backend/alembic/versions/`, baseline `0001` mirrors the historical
+`app/db/init.sql`). These classes must stay in sync with it; no DDL is
+emitted from the ORM. Indexes and CHECK constraints live only in the
+migrations, not here.
 """
 
 from __future__ import annotations
