@@ -27,6 +27,7 @@ def test_patch_reboot_policy(client):
         "hostname": "vm-test",
         "reboot_policy": "auto",
         "is_active": True,
+        "tags": {},
     }
     assert client.get(f"/api/v1/hosts/{host_id}").json()["reboot_policy"] == "auto"
 

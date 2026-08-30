@@ -36,6 +36,23 @@ class HostUpdate(BaseModel):
 
     reboot_policy: RebootMode | None = None
     is_active: bool | None = None
+    # Free-form {key: value} labels. Groundwork for host groups in a later
+    # version; today the dashboard only displays and filters on them.
+    tags: dict[str, str] | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def _validate_tags(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        if len(v) > 20:
+            raise ValueError("at most 20 tags per host")
+        for key, value in v.items():
+            if not key or len(key) > 40:
+                raise ValueError("tag keys must be 1-40 characters")
+            if len(value) > 80:
+                raise ValueError("tag values must be at most 80 characters")
+        return v
 
 
 class HostPatched(BaseModel):
@@ -45,6 +62,7 @@ class HostPatched(BaseModel):
     hostname: str
     reboot_policy: str
     is_active: bool
+    tags: dict[str, str]
 
 
 # --- agent report ingestion -------------------------------------------------
@@ -118,6 +136,7 @@ class HostSummary(BaseModel):
     agent_version: str | None
     reboot_required: bool
     is_active: bool
+    tags: dict[str, str]
     last_seen_at: datetime | None
     created_at: datetime
     updated_at: datetime

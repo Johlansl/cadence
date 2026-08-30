@@ -42,6 +42,7 @@ def _summary_fields(host: Host) -> dict:
         "reboot_required": host.reboot_required,
         "reboot_policy": host.reboot_policy,
         "is_active": host.is_active,
+        "tags": host.tags or {},
         "last_seen_at": host.last_seen_at,
         "created_at": host.created_at,
         "updated_at": host.updated_at,
