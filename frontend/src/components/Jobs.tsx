@@ -4,6 +4,8 @@ import { pill, type Tone } from '../lib/pill'
 import { relativeTime } from '../lib/time'
 import type { Job, JobStatus, RebootPolicy } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
+import { useConfirm } from './ConfirmDialog'
+import { useToast } from './Toast'
 
 const STATUS_TONE: Record<JobStatus, Tone> = {
   pending: 'neutral',
@@ -96,17 +98,31 @@ export function Jobs({ hostId }: { hostId: string }) {
   )
   const trig = useAdminKeyAction(createJob)
   const clear = useAdminKeyAction((key) => api.clearHostJobs(hostId, key))
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const trigger = useCallback(async () => {
-    await trig.run()
+    const r = await trig.run()
+    if (r?.ok) toast.notify('success', 'Upgrade job queued.')
     await refresh()
-  }, [trig, refresh])
+  }, [trig, toast, refresh])
 
   const doClear = useCallback(async () => {
-    if (!window.confirm('Delete every job for this host? This cannot be undone.')) return
+    if (
+      !(await confirm({
+        title: 'Clear job history?',
+        body: 'Deletes every job row for this host. This cannot be undone.',
+        confirmLabel: 'Clear',
+        danger: true,
+      }))
+    )
+      return
     const r = await clear.run()
-    if (r?.ok) await refresh()
-  }, [clear, refresh])
+    if (r?.ok) {
+      toast.notify('success', 'Job history cleared.')
+      await refresh()
+    }
+  }, [clear, confirm, toast, refresh])
 
   const onKeySubmit = useCallback(async () => {
     if (trig.needKey) await trig.submitKey()

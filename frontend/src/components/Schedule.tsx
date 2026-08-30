@@ -3,6 +3,8 @@ import { api } from '../api/client'
 import { relativeTime } from '../lib/time'
 import type { Schedule as ScheduleData, ScheduleInput, ScheduleKind } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
+import { useConfirm } from './ConfirmDialog'
+import { useToast } from './Toast'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 type RebootChoice = 'inherit' | 'auto' | 'never'
@@ -117,15 +119,32 @@ export function Schedule({ hostId }: { hostId: string }) {
 
   const saver = useAdminKeyAction(save)
   const deleter = useAdminKeyAction(del)
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const onSave = useCallback(async () => {
     const r = await saver.run()
-    if (r?.ok) await refresh()
-  }, [saver, refresh])
+    if (r?.ok) {
+      toast.notify('success', existing ? 'Schedule updated.' : 'Schedule created.')
+      await refresh()
+    }
+  }, [saver, toast, existing, refresh])
   const onDelete = useCallback(async () => {
+    if (
+      !(await confirm({
+        title: 'Delete this schedule?',
+        body: 'The host will have no maintenance window until a new one is created.',
+        confirmLabel: 'Delete',
+        danger: true,
+      }))
+    )
+      return
     const r = await deleter.run()
-    if (r?.ok) await refresh()
-  }, [deleter, refresh])
+    if (r?.ok) {
+      toast.notify('success', 'Schedule deleted.')
+      await refresh()
+    }
+  }, [deleter, confirm, toast, refresh])
   const onKeySubmit = useCallback(async () => {
     const r = saver.needKey ? await saver.submitKey() : await deleter.submitKey()
     if (r?.ok) await refresh()

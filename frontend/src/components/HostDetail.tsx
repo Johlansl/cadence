@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import { pill } from '../lib/pill'
 import type { HostDetail as HostDetailData, RebootPolicy } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
+import { useConfirm } from './ConfirmDialog'
 import { Freshness } from './Freshness'
 import { Jobs } from './Jobs'
 import { PackageTable } from './PackageTable'
@@ -211,27 +212,58 @@ function HostActions({
   onChanged: () => void
   onDeleted: () => void
 }) {
+  const confirm = useConfirm()
+  const toast = useToast()
   const retire = useAdminKeyAction((key) =>
     api.patchHost(hostId, key, { is_active: !isActive }),
   )
   const remove = useAdminKeyAction((key) => api.deleteHost(hostId, key))
 
   const doRetire = async () => {
+    if (
+      isActive &&
+      !(await confirm({
+        title: 'Retire this host?',
+        body: 'It stops counting toward fleet health and reports are rejected until reactivated. History is kept.',
+        confirmLabel: 'Retire',
+      }))
+    )
+      return
     const r = await retire.run()
-    if (r?.ok) onChanged()
+    if (r?.ok) {
+      toast.notify('success', isActive ? 'Host retired.' : 'Host reactivated.')
+      onChanged()
+    }
   }
   const doDelete = async () => {
-    if (!window.confirm('Permanently delete this host and all its history?')) return
+    if (
+      !(await confirm({
+        title: 'Delete this host?',
+        body: 'Permanently removes the host and all its packages, reports, jobs and schedule. This cannot be undone.',
+        confirmLabel: 'Delete',
+        danger: true,
+      }))
+    )
+      return
     const r = await remove.run()
-    if (r?.ok) onDeleted()
+    if (r?.ok) {
+      toast.notify('success', 'Host deleted.')
+      onDeleted()
+    }
   }
   const onKeySubmit = async () => {
     if (retire.needKey) {
       const r = await retire.submitKey()
-      if (r?.ok) onChanged()
+      if (r?.ok) {
+        toast.notify('success', isActive ? 'Host retired.' : 'Host reactivated.')
+        onChanged()
+      }
     } else {
       const r = await remove.submitKey()
-      if (r?.ok) onDeleted()
+      if (r?.ok) {
+        toast.notify('success', 'Host deleted.')
+        onDeleted()
+      }
     }
   }
 
