@@ -25,7 +25,7 @@ import (
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.5.0"
+const agentVersion = "0.5.1"
 
 func main() {
 	log.SetFlags(0)
@@ -172,6 +172,13 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	if err := submit(status, res.ExitCode, logText, res.RebootRequired); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}
+
+	// Push a fresh report right away so the dashboard reflects the new package
+	// state (usually "up to date") without waiting for the next scheduled run.
+	// Best-effort: the job already succeeded/failed on its own. Do this before
+	// any reboot so the server has the update before the host goes down.
+	reportAfterJob(cfg, c)
+
 	if status == "failed" {
 		return fmt.Errorf("job %s failed (apt exit %d)", job.ID, res.ExitCode)
 	}
@@ -186,4 +193,24 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		log.Printf("job %s: reboot queued", job.ID)
 	}
 	return nil
+}
+
+// reportAfterJob collects and sends one report. Failures are logged, not
+// propagated: the job it follows has already been recorded.
+func reportAfterJob(cfg config.Config, c *client.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	rep, err := collector.Collect(ctx, agentVersion, cfg.RunAptUpdate)
+	if err != nil {
+		log.Printf("post-job report: collect failed: %v", err)
+		return
+	}
+	if _, err := c.SendReport(ctx, rep); err != nil {
+		log.Printf("post-job report: send failed: %v", err)
+		return
+	}
+	updates, security := rep.Counts()
+	log.Printf("post-job report sent: updates=%d security=%d reboot_required=%v",
+		updates, security, rep.RebootRequired)
 }
