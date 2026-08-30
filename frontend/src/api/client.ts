@@ -1,4 +1,5 @@
 import type {
+  FleetSummary,
   HostDetail,
   HostSummary,
   Job,
@@ -57,6 +58,7 @@ async function adminWrite<T>(
 export const api = {
   listHosts: () => getJSON<HostSummary[]>('/hosts'),
   getHost: (id: string) => getJSON<HostDetail>(`/hosts/${id}`),
+  getFleetSummary: () => getJSON<FleetSummary>('/fleet/summary'),
   getHostJobs: (id: string) => getJSON<Job[]>(`/hosts/${id}/jobs`),
 
   // reboot: omit to use the host's reboot_policy; set to override for this job.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api/client'
+import { FleetOverview } from './components/FleetOverview'
 import { HostDetail } from './components/HostDetail'
 import { HostFilters } from './components/HostFilters'
 import { HostList } from './components/HostList'
@@ -107,11 +108,6 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  // Select the first host once the list arrives (nothing in the URL).
-  useEffect(() => {
-    if (!selectedId && hosts.length > 0) select(hosts[0].id)
-  }, [hosts, selectedId, select])
-
   // Keep relative timestamps moving between polls.
   useEffect(() => {
     const t = setInterval(() => tick((n) => n + 1), 15_000)
@@ -172,7 +168,7 @@ export default function App() {
               {detailError ? `failed to load host: ${detailError}` : 'loading…'}
             </p>
           ) : (
-            <p className="p-6 text-sm text-zinc-600">Select a host.</p>
+            <FleetOverview hosts={hosts} onSelect={select} />
           )}
         </main>
       </div>

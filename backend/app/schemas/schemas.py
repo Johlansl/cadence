@@ -147,6 +147,28 @@ class HostSummary(BaseModel):
     security_updates_count: int
 
 
+class FleetSummary(BaseModel):
+    """Aggregates for the dashboard overview (GET /api/v1/fleet/summary).
+    Host counts are over active hosts only; a host that has never reported is
+    counted only in `silent` (no known status)."""
+
+    total_hosts: int
+    active_hosts: int
+    inactive_hosts: int
+    up_to_date: int
+    updates_available: int
+    security_updates_available: int
+    reboot_required: int
+    late: int
+    silent: int
+    pending_updates: int
+    security_updates: int
+    oldest_report_age_seconds: int | None
+    jobs_running: int
+    jobs_succeeded_24h: int
+    jobs_failed_24h: int
+
+
 class HostPackageOut(BaseModel):
     name: str
     architecture: str

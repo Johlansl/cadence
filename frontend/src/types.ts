@@ -27,6 +27,24 @@ export interface HostSummary {
   security_updates_count: number
 }
 
+export interface FleetSummary {
+  total_hosts: number
+  active_hosts: number
+  inactive_hosts: number
+  up_to_date: number
+  updates_available: number
+  security_updates_available: number
+  reboot_required: number
+  late: number
+  silent: number
+  pending_updates: number
+  security_updates: number
+  oldest_report_age_seconds: number | null
+  jobs_running: number
+  jobs_succeeded_24h: number
+  jobs_failed_24h: number
+}
+
 export interface HostPackage {
   name: string
   architecture: string
