@@ -324,8 +324,17 @@ chacun) :
    `jobs`. Endpoints `GET /hosts/{id}/schedules` (lecture) + `POST/PATCH/DELETE`
    sous `X-Admin-Key`. Host déjà occupé → skip, fenêtre suivante.
 
+Après les incréments ci-dessus, une roadmap « Round 1 / Round 2 » a été menée
+et **entièrement livrée** (2ᵉ VM `vm-nginxproxy` + `scripts/provision-host.sh` ;
+bandeau agent silencieux + chips ; cycle de vie host `is_active` / `DELETE` ;
+panneau Jobs repliable + `DELETE .../jobs` ; rétention `reports`/`jobs`
+quotidienne dans le scheduler + migration `0004` ; CI GitLab). Base à la
+révision Alembic **`0004`**. Détail : `HANDOFF.md` §0 et le fichier mémoire
+`cadence-roadmap`.
+
 **Contexte détaillé (journal, décisions, déploiement, limites, options) :
-voir `HANDOFF.md`.** À lire en premier au démarrage d'une session.
+voir `HANDOFF.md`.** À lire en premier au démarrage d'une session ; le §0 est
+à jour, le reste du fichier décrit l'état au 2026-08-28.
 
 ## 12. Backlog post-V1
 
