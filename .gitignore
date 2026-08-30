@@ -17,3 +17,6 @@ agent/bin/
 
 # extracted Caddy CA / other local certs
 *.crt
+
+# local backups produced by scripts/backup.sh
+backups/

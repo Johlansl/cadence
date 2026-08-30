@@ -6,6 +6,42 @@ Contexte complet pour reprendre le projet dans une nouvelle session Claude Code.
 
 ---
 
+## 0-bis. Session 2026-08-30 — roadmap Lot A + Lot BK
+
+Plan : `~/.claude/plans/je-reprends-le-projet-indexed-shannon.md` (roadmap
+complète A→G, exécution lot par lot).
+
+**Lot A — correction & sûreté (fait, déployé) :**
+- Report partiel n'écrase plus `fqdn`/`os_name`/`os_version` ; report
+  `packages:[]` sur host non vide → 422.
+- `app.__version__ = "0.5.0"` (source unique), docstring `models.py` corrigée.
+- **Reaper** de jobs `running` bloqués dans le scheduler
+  (`CADENCE_JOB_RUNNING_TIMEOUT_SECONDS`, défaut 2 h, `0`=off).
+- Throttle mémoire + log `WARNING` sur échecs d'auth répétés
+  (`CADENCE_DISABLE_AUTH_THROTTLE=1` en test).
+- **Migration `0005`** : table `scheduler_state` (la rétention ne se rejoue
+  plus à chaque redémarrage) + CHECK `jobs.status`. **Appliquée sur
+  `vm-cadence` : base à `0005`.** Image `cadence-backend` rebâtie,
+  `backend` + `scheduler` redéployés.
+- Front : erreurs liste vs détail séparées, garde `cancelled` + marqueur
+  « stale » sur Jobs/Schedule.
+- Backend 57 tests verts. Commits `a2e6385`..`cd59a8f`.
+
+**Lot BK — backup/restore (fait) :**
+- `scripts/backup.sh` : `pg_dump -Fc` + archive du volume `caddy_data` (CA
+  interne) + copie `.env` + `MANIFEST` (commit / rév. Alembic / sha256).
+  `CADENCE_BACKUP_DIR` / `CADENCE_BACKUP_KEEP` (défaut 14). `backups/`
+  gitignoré. Section README « Backup & restore » (backup, cron, restauration
+  pas à pas).
+- `scripts/restore-check.sh` : restaure le backup dans des conteneurs/volumes
+  jetables `cadence-rt-*`, vérifie et démonte (ne touche jamais la stack
+  live). **Exécuté le 2026-08-30 → PASS** sur les 4 contrôles : `pg_restore`
+  OK, `alembic current` = `0005`, `GET /api/v1/hosts` == live
+  (`vm-japp`, `vm-nginxproxy`), CA restaurée vérifie son cert + Caddy sur le
+  volume restauré sert un TLS qui valide contre la racine restaurée.
+
+---
+
 ## 0. Session 2026-08-29 — travaux post-V1 (à jour ici, le reste du fichier
 ##    décrit l'état au 2026-08-28)
 

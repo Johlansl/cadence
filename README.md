@@ -212,6 +212,68 @@ Before the first `stamp` on an existing database, confirm it really matches the
 baseline: dump its schema (`pg_dump --schema-only`) and diff it against a
 throwaway DB built from `init.sql`. If it differs, reconcile before stamping.
 
+## Backup & restore
+
+Two things are irreplaceable on the central server: the Postgres database
+(`pgdata`) and **Caddy's data volume** (`caddy_data`) — it holds the internal
+CA. Lose the CA and every monitored VM fails TLS silently until it is
+re-provisioned with a new root.
+
+### Back up (run on the server, stack up)
+
+```sh
+scripts/backup.sh
+# -> backups/<UTC timestamp>/{db.dump,caddy_data.tgz,env,MANIFEST}
+```
+
+`db.dump` is `pg_dump -Fc`; `caddy_data.tgz` is the whole Caddy `/data` volume;
+`env` is a copy of `.env` (**secrets** — admin key, DB password — mode 0600);
+`MANIFEST` records the git commit, Alembic revision and sha256 sums.
+`CADENCE_BACKUP_DIR` sets the location, `CADENCE_BACKUP_KEEP` how many to retain
+(default 14). Nightly via cron, e.g.:
+
+```cron
+15 3 * * *  cd /home/cadence/cadence && scripts/backup.sh >> backups/backup.log 2>&1
+```
+
+### Verify a backup restores
+
+`scripts/restore-check.sh [backup-dir]` restores the newest (or given) backup
+into throwaway `cadence-rt-*` containers/volumes, checks it, and tears them
+down — it never touches the live stack. It asserts: `pg_restore` loads the
+dump, the Alembic revision matches the manifest, `GET /api/v1/hosts` on a
+backend bound to the restored DB matches the live host list, and the restored
+CA both verifies its issued cert and is trusted by a Caddy started on the
+restored volume. Run it after any change to the backup script and periodically
+against a real backup.
+
+### Restore for real
+
+On a fresh host (or after wiping the volumes), from a checkout at the commit in
+`MANIFEST`:
+
+```sh
+B=backups/<timestamp>
+cp "$B/env" .env                                   # or merge secrets by hand
+
+# database
+docker compose up -d db
+until docker compose exec -T db pg_isready -U cadence -d cadence; do sleep 1; done
+docker compose exec -T db pg_restore -U cadence -d cadence --clean --if-exists < "$B/db.dump"
+
+# Caddy CA + certs
+docker run --rm -v cadence_caddy_data:/v -v "$PWD/$B":/b:ro postgres:16 \
+  sh -c 'tar xzf /b/caddy_data.tgz -C /v'
+
+docker compose up -d
+docker compose run --rm backend alembic current   # sanity: matches MANIFEST
+```
+
+The volume names are `<project>_pgdata` / `<project>_caddy_data` (`project` =
+the repo directory name, `cadence`). If you restore onto a stack that already
+has data, `docker compose down -v` first — that is destructive, take a backup
+immediately before.
+
 ## Step 2 — run the backend
 
 ```sh
