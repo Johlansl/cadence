@@ -6,10 +6,51 @@ Contexte complet pour reprendre le projet dans une nouvelle session Claude Code.
 
 ---
 
-## 0-bis. Session 2026-08-30 — roadmap Lot A + Lot BK
+## 0-bis. Session 2026-08-30 — roadmap A → G (toute livrée)
 
-Plan : `~/.claude/plans/je-reprends-le-projet-indexed-shannon.md` (roadmap
-complète A→G, exécution lot par lot).
+Plan : `~/.claude/plans/je-reprends-le-projet-indexed-shannon.md`. Exécution lot
+par lot, ~30 commits `a2e6385`..`cd82232` poussés sur `origin/main`.
+
+**État final :** base Alembic **`0006`**, 5 services up (backend/scheduler à la
+`cadence-backend` reconstruite), **agent 0.6.0 staged** dans `dist/` (servi par
+Caddy) — **à déployer sur `vm-japp` / `vm-nginxproxy`** via
+`curl -fsSL http://cadence.lan/install.sh | sh`. Backend **80 tests**, front
+**16 tests** (Vitest), agent `go test` vert. `dist/` gitignoré, peuplé par
+`scripts/publish-agent.sh` (à relancer à chaque release agent).
+
+**Résumé par lot :**
+- **A** correction & sûreté : merge report, garde `packages:[]`→422, reaper jobs
+  `running` (`CADENCE_JOB_RUNNING_TIMEOUT_SECONDS`), throttle auth, migration
+  `0005` (`scheduler_state` + CHECK `jobs.status`), erreurs front séparées.
+- **BK** backup/restore : `scripts/backup.sh` + `scripts/restore-check.sh`
+  (exécuté → PASS). README « Backup & restore ».
+- **E** visibilité parc : recherche/filtres liste + tags + filtre tag, table
+  paquets (recherche/tri/SEC), Fleet overview + `GET /api/v1/fleet/summary`,
+  toasts + ErrorBoundary + a11y, sélection `#host=`, ConfirmDialog, actions
+  groupées multi-hosts (upgrade **et** reboot).
+- **F** features : historique host (`GET /hosts/{id}/reports`) + sparkline,
+  pagination `GET /hosts/{id}/jobs`, **`reboot = prompt`** (migration `0006`,
+  `job_type="reboot"` dédié, bouton « reboot now » + « reboot selected »),
+  install one-liner servi par Caddy (`/install.sh`, `/agent/*` en HTTP).
+- **C** observabilité : logfmt backend+scheduler (`CADENCE_LOG_LEVEL`),
+  middleware request-logging (`X-Request-ID`), `GET /readyz` (SELECT 1),
+  agent logfmt.
+- **D** robustesse agent **0.6.0** : `rebootcheck` (reboot noyau sans paquet OS),
+  `apt-get update` avant upgrade + `dpkg --configure -a` sur échec, retry lock
+  apt sur le report, retry/backoff `client.do`. **+ hors numérotation** : report
+  30 min + `CADENCE_RUN_APT_UPDATE=true` par défaut ; report immédiat après un
+  job d'upgrade ; effacement optimiste `reboot_required` sur job `reboot` ;
+  installer accepte `reboot-notifier` (Debian 13, `update-notifier-common`
+  retiré de trixie).
+- **G** tests & outillage : Vitest+RTL, ESLint flat + Prettier
+  (`npm run lint`/`format`), tests backend edge, CI front `lint`+`test`+`build`.
+
+**Non fait (reste optionnel)** : E-25 wrapper `<AdminAction>` (refactor pur) ;
+entrypoint backend `alembic upgrade` au boot + healthchecks/limits compose
+(Lot B, jamais relancé — la migration reste une étape manuelle au déploiement) ;
+`/metrics` Prometheus (décision : pas maintenant).
+
+### État antérieur de cette session (Lot A + BK détaillés)
 
 **Lot A — correction & sûreté (fait, déployé) :**
 - Report partiel n'écrase plus `fqdn`/`os_name`/`os_version` ; report

@@ -328,13 +328,24 @@ Après les incréments ci-dessus, une roadmap « Round 1 / Round 2 » a été me
 et **entièrement livrée** (2ᵉ VM `vm-nginxproxy` + `scripts/provision-host.sh` ;
 bandeau agent silencieux + chips ; cycle de vie host `is_active` / `DELETE` ;
 panneau Jobs repliable + `DELETE .../jobs` ; rétention `reports`/`jobs`
-quotidienne dans le scheduler + migration `0004` ; CI GitLab). Base à la
-révision Alembic **`0004`**. Détail : `HANDOFF.md` §0 et le fichier mémoire
-`cadence-roadmap`.
+quotidienne dans le scheduler + migration `0004` ; CI GitLab).
+
+**Session 2026-08-30 — roadmap A→G entièrement livrée** (plan
+`~/.claude/plans/je-reprends-le-projet-indexed-shannon.md`, détail `HANDOFF.md`
+§0-bis) : correction & sûreté (reaper jobs, throttle auth), backup/restore
+testé, visibilité parc (filtres, **tags** `hosts.tags`, Fleet overview
+`GET /fleet/summary`, actions groupées multi-hosts), historique host +
+pagination jobs, **`reboot = prompt`** (3ᵉ mode + `job_type="reboot"`), install
+one-liner servi par Caddy, logfmt + `/readyz`, robustesse agent **0.6.0**
+(détection reboot noyau sans paquet, `dpkg --configure -a`, retries), Vitest +
+ESLint/Prettier. **Base à la révision Alembic `0006`** (`0005` scheduler_state
++ CHECK jobs.status ; `0006` reboot_policy `prompt`). Agent `0.6.0` staged,
+**à déployer sur les VMs**. Reste optionnel : entrypoint `alembic upgrade` au
+boot + healthchecks/limits compose (Lot B), `/metrics`.
 
 **Contexte détaillé (journal, décisions, déploiement, limites, options) :
-voir `HANDOFF.md`.** À lire en premier au démarrage d'une session ; le §0 est
-à jour, le reste du fichier décrit l'état au 2026-08-28.
+voir `HANDOFF.md`.** À lire en premier au démarrage d'une session ; le §0-bis
+est à jour, le reste du fichier décrit l'état au 2026-08-28/29.
 
 ## 12. Backlog post-V1
 
