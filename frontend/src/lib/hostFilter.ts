@@ -9,6 +9,7 @@ export interface HostFilters {
   status: StatusFilter
   freshness: FreshnessFilter
   showInactive: boolean
+  tag: string
 }
 
 export const EMPTY_FILTERS: HostFilters = {
@@ -16,6 +17,7 @@ export const EMPTY_FILTERS: HostFilters = {
   status: 'all',
   freshness: 'all',
   showInactive: false,
+  tag: '',
 }
 
 export function filtersActive(f: HostFilters): boolean {
@@ -23,8 +25,22 @@ export function filtersActive(f: HostFilters): boolean {
     f.q.trim() !== '' ||
     f.status !== 'all' ||
     f.freshness !== 'all' ||
-    f.showInactive
+    f.showInactive ||
+    f.tag.trim() !== ''
   )
+}
+
+// A tag query is either "key" (host has that key) or "key=value" (exact pair).
+// Matching is case-insensitive; the key part also matches as a substring.
+function matchesTag(tags: Record<string, string>, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const [k, v] = q.split('=', 2)
+  return Object.entries(tags).some(([key, value]) => {
+    const keyLc = key.toLowerCase()
+    if (v === undefined) return keyLc.includes(k) || value.toLowerCase().includes(k)
+    return keyLc === k && value.toLowerCase() === v
+  })
 }
 
 function matchesStatus(h: HostSummary, s: StatusFilter): boolean {
@@ -47,6 +63,7 @@ export function filterHosts(hosts: HostSummary[], f: HostFilters): HostSummary[]
     if (q && !`${h.hostname} ${h.description ?? ''}`.toLowerCase().includes(q)) return false
     if (!matchesStatus(h, f.status)) return false
     if (f.freshness === 'silent' && staleness(h.last_seen_at) === 'fresh') return false
+    if (!matchesTag(h.tags, f.tag)) return false
     return true
   })
 }

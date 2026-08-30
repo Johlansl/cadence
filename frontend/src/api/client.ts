@@ -73,13 +73,18 @@ export const api = {
   patchHost(
     hostId: string,
     adminKey: string,
-    body: { reboot_policy?: RebootPolicy; is_active?: boolean },
+    body: {
+      reboot_policy?: RebootPolicy
+      is_active?: boolean
+      tags?: Record<string, string>
+    },
   ) {
     return adminWrite<{
       id: string
       hostname: string
       reboot_policy: RebootPolicy
       is_active: boolean
+      tags: Record<string, string>
     }>(`/admin/hosts/${hostId}`, adminKey, 'PATCH', body)
   },
 

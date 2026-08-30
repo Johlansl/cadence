@@ -18,6 +18,7 @@ export interface HostSummary {
   reboot_required: boolean
   reboot_policy: RebootPolicy
   is_active: boolean
+  tags: Record<string, string>
   last_seen_at: string | null
   created_at: string
   updated_at: string

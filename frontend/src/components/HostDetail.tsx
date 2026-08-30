@@ -7,6 +7,8 @@ import { Freshness } from './Freshness'
 import { Jobs } from './Jobs'
 import { Schedule } from './Schedule'
 import { StatusBadge } from './StatusBadge'
+import { TagChips } from './TagChips'
+import { useToast } from './Toast'
 
 function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootPolicy }) {
   const [choice, setChoice] = useState<RebootPolicy>(value)
@@ -52,6 +54,148 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
       )}
       {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
     </div>
+  )
+}
+
+function sameTags(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ak = Object.keys(a)
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k])
+}
+
+function TagsControl({
+  hostId,
+  tags,
+  onChanged,
+}: {
+  hostId: string
+  tags: Record<string, string>
+  onChanged: () => void
+}) {
+  const [draft, setDraft] = useState<Record<string, string>>(tags)
+  const [newKey, setNewKey] = useState('')
+  const [newValue, setNewValue] = useState('')
+  const draftRef = useRef(draft)
+  const toast = useToast()
+
+  // Reset when the host (or its saved tags) changes underneath us.
+  useEffect(() => {
+    setDraft(tags)
+    draftRef.current = tags
+    setNewKey('')
+    setNewValue('')
+  }, [hostId, tags])
+
+  const update = (next: Record<string, string>) => {
+    setDraft(next)
+    draftRef.current = next
+  }
+  const addPair = () => {
+    const k = newKey.trim()
+    if (!k) return
+    update({ ...draftRef.current, [k]: newValue.trim() })
+    setNewKey('')
+    setNewValue('')
+  }
+  const removeKey = (k: string) => {
+    const next = { ...draftRef.current }
+    delete next[k]
+    update(next)
+  }
+
+  const action = useCallback(
+    (key: string) => api.patchHost(hostId, key, { tags: draftRef.current }),
+    [hostId],
+  )
+  const { run, submitKey, busy, error, needKey, keyDraft, setKeyDraft } = useAdminKeyAction(action)
+
+  const save = async () => {
+    const r = await run()
+    if (r?.ok) {
+      toast.notify('success', 'Tags saved.')
+      onChanged()
+    }
+  }
+  const onKeySubmit = async () => {
+    const r = await submitKey()
+    if (r?.ok) {
+      toast.notify('success', 'Tags saved.')
+      onChanged()
+    }
+  }
+
+  const dirty = !sameTags(draft, tags)
+  const inputCls =
+    'rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 font-mono text-xs text-zinc-200 outline-none focus:border-zinc-500'
+
+  return (
+    <section className="border-t border-zinc-800 px-6 py-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs uppercase tracking-wide text-zinc-600">Tags</h3>
+        {dirty && (
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={busy}
+            className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500"
+          >
+            {busy ? 'saving…' : 'save tags'}
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {Object.entries(draft).length === 0 && (
+          <span className="text-xs text-zinc-600">none</span>
+        )}
+        {Object.entries(draft).map(([k, v]) => (
+          <span
+            key={k}
+            className="flex items-center gap-1 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300 ring-1 ring-zinc-700"
+          >
+            {v ? `${k}=${v}` : k}
+            <button
+              type="button"
+              onClick={() => removeKey(k)}
+              aria-label={`Remove tag ${k}`}
+              className="text-zinc-500 hover:text-red-400"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+        <input
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && addPair()}
+          placeholder="key"
+          aria-label="New tag key"
+          className={`${inputCls} w-28`}
+        />
+        <input
+          value={newValue}
+          onChange={(e) => setNewValue(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && addPair()}
+          placeholder="value"
+          aria-label="New tag value"
+          className={`${inputCls} w-32`}
+        />
+        <button
+          type="button"
+          onClick={addPair}
+          className="rounded border border-zinc-700 px-2 py-0.5 text-zinc-400 hover:text-zinc-200"
+        >
+          add
+        </button>
+      </div>
+
+      {needKey && (
+        <AdminKeyPrompt value={keyDraft} onChange={setKeyDraft} onSubmit={() => void onKeySubmit()} />
+      )}
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+    </section>
   )
 }
 
@@ -185,6 +329,11 @@ export function HostDetail({
           />
         </div>
         {host.description && <p className="mt-1 text-sm text-zinc-500">{host.description}</p>}
+        {Object.keys(host.tags).length > 0 && (
+          <div className="mt-2">
+            <TagChips tags={host.tags} />
+          </div>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto">
@@ -207,6 +356,7 @@ export function HostDetail({
           </Meta>
         </dl>
 
+        <TagsControl hostId={host.id} tags={host.tags} onChanged={onChanged} />
         <Jobs hostId={host.id} />
         <Schedule hostId={host.id} />
 

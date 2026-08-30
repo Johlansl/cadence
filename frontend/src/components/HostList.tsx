@@ -1,6 +1,7 @@
 import type { HostSummary } from '../types'
 import { Freshness } from './Freshness'
 import { StatusBadge } from './StatusBadge'
+import { TagChips } from './TagChips'
 
 interface Props {
   hosts: HostSummary[]
@@ -57,6 +58,12 @@ export function HostList({ hosts, selectedId, onSelect, emptyLabel = 'No hosts.'
                 </span>
                 {h.reboot_required && <span className="text-orange-400">· reboot</span>}
               </div>
+
+              {Object.keys(h.tags).length > 0 && (
+                <div className="mt-0.5">
+                  <TagChips tags={h.tags} />
+                </div>
+              )}
             </button>
           </li>
         )

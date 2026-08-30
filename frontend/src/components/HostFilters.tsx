@@ -66,6 +66,14 @@ export function HostFilters({
           />
           inactive
         </label>
+        <input
+          type="search"
+          value={value.tag}
+          onChange={(e) => set('tag', e.target.value)}
+          placeholder="tag: key or key=value"
+          aria-label="Filter by tag"
+          className={`${selectCls} w-40 font-mono`}
+        />
         {filtersActive(value) && (
           <button
             type="button"
