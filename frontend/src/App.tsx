@@ -12,7 +12,11 @@ export default function App() {
   const [hosts, setHosts] = useState<HostSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // Two independent failures: the host-list poll drives the global sync
+  // indicator; a host-detail poll failure is shown in the detail pane only,
+  // so a transient 500 on one host never blanks the whole header.
+  const [listError, setListError] = useState<string | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<Date | null>(null)
   const [detailReload, setDetailReload] = useState(0)
   const [, tick] = useState(0)
@@ -20,10 +24,10 @@ export default function App() {
   const refreshList = useCallback(async () => {
     try {
       setHosts(await api.listHosts())
-      setError(null)
+      setListError(null)
       setLastSync(new Date())
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setListError(e instanceof Error ? e.message : String(e))
     }
   }, [])
 
@@ -38,17 +42,22 @@ export default function App() {
   useEffect(() => {
     if (!selectedId) {
       setDetail(null)
+      setDetailError(null)
       return
     }
     let cancelled = false
+    setDetailError(null)
     const load = () =>
       api
         .getHost(selectedId)
         .then((d) => {
-          if (!cancelled) setDetail(d)
+          if (!cancelled) {
+            setDetail(d)
+            setDetailError(null)
+          }
         })
         .catch((e) => {
-          if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+          if (!cancelled) setDetailError(e instanceof Error ? e.message : String(e))
         })
     void load()
     const t = setInterval(() => void load(), POLL_MS)
@@ -87,8 +96,8 @@ export default function App() {
           <OverviewChips hosts={hosts} />
         </div>
         <div className="text-xs text-zinc-600">
-          {error ? (
-            <span className="text-red-400">error: {error}</span>
+          {listError ? (
+            <span className="text-red-400">sync error: {listError}</span>
           ) : lastSync ? (
             <span>synced {relativeTime(lastSync.toISOString())}</span>
           ) : (
@@ -103,9 +112,22 @@ export default function App() {
         <aside className="w-80 shrink-0 overflow-auto border-r border-zinc-800">
           <HostList hosts={hosts} selectedId={selectedId} onSelect={setSelectedId} />
         </aside>
-        <main className="min-w-0 flex-1 overflow-hidden">
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {detail ? (
-            <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
+            <>
+              {detailError && (
+                <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-6 py-1.5 text-xs text-amber-400">
+                  couldn't refresh this host: {detailError}
+                </p>
+              )}
+              <div className="min-h-0 flex-1">
+                <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
+              </div>
+            </>
+          ) : selectedId ? (
+            <p className="p-6 text-sm text-red-400">
+              {detailError ? `failed to load host: ${detailError}` : 'loading…'}
+            </p>
           ) : (
             <p className="p-6 text-sm text-zinc-600">Select a host.</p>
           )}

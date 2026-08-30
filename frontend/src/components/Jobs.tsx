@@ -46,20 +46,40 @@ export function Jobs({ hostId }: { hostId: string }) {
   const [reboot, setReboot] = useState<RebootChoice>('default')
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [showAll, setShowAll] = useState(false)
+  const [stale, setStale] = useState(false)
 
+  // Force-refresh after a user action; result is always applied.
   const refresh = useCallback(async () => {
     try {
       setJobs(await api.getHostJobs(hostId))
+      setStale(false)
     } catch {
-      /* transient; the next poll retries */
+      setStale(true)
     }
   }, [hostId])
 
+  // Background poll, guarded so a slow response for a host we've navigated
+  // away from can't overwrite the new host's jobs.
   useEffect(() => {
-    void refresh()
-    const t = setInterval(() => void refresh(), 15_000)
-    return () => clearInterval(t)
-  }, [refresh])
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const j = await api.getHostJobs(hostId)
+        if (!cancelled) {
+          setJobs(j)
+          setStale(false)
+        }
+      } catch {
+        if (!cancelled) setStale(true)
+      }
+    }
+    void poll()
+    const t = setInterval(poll, 15_000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [hostId])
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -113,6 +133,7 @@ export function Jobs({ hostId }: { hostId: string }) {
           <span className="inline-block w-2 text-zinc-500">{collapsed ? '▸' : '▾'}</span>
           Jobs
           <span className="text-zinc-700">({jobs.length})</span>
+          {stale && <span className="text-red-500/70">· stale</span>}
         </button>
 
         {!collapsed && (

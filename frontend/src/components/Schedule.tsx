@@ -65,6 +65,7 @@ export function Schedule({ hostId }: { hostId: string }) {
   const [existing, setExisting] = useState<ScheduleData | null>(null)
   const [form, setForm] = useState<Form>(DEFAULT_FORM)
   const [loaded, setLoaded] = useState(false)
+  const [stale, setStale] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -72,16 +73,35 @@ export function Schedule({ hostId }: { hostId: string }) {
       const s = list[0] ?? null
       setExisting(s)
       setForm(s ? toForm(s) : DEFAULT_FORM)
+      setStale(false)
     } catch {
-      /* transient */
+      setStale(true)
     } finally {
       setLoaded(true)
     }
   }, [hostId])
 
+  // Guarded so a stale response for a previous host can't clobber this one.
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    let cancelled = false
+    ;(async () => {
+      try {
+        const list = await api.getSchedules(hostId)
+        if (cancelled) return
+        const s = list[0] ?? null
+        setExisting(s)
+        setForm(s ? toForm(s) : DEFAULT_FORM)
+        setStale(false)
+      } catch {
+        if (!cancelled) setStale(true)
+      } finally {
+        if (!cancelled) setLoaded(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [hostId])
 
   const save = useCallback(
     (key: string) =>
@@ -117,7 +137,10 @@ export function Schedule({ hostId }: { hostId: string }) {
   return (
     <section className="border-t border-zinc-800 px-6 py-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs uppercase tracking-wide text-zinc-600">Schedule</h3>
+        <h3 className="text-xs uppercase tracking-wide text-zinc-600">
+          Schedule
+          {stale && <span className="ml-1.5 normal-case text-red-500/70">· stale</span>}
+        </h3>
         {loaded && (
           <span className="text-xs text-zinc-600">
             {existing?.enabled && existing.next_run_at
