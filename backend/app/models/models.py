@@ -176,3 +176,17 @@ class Schedule(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class SchedulerState(Base):
+    """Small key/value store for the scheduler process. Currently just the
+    timestamp of the last retention sweep, so a restart doesn't re-run it.
+    See migration 0005."""
+
+    __tablename__ = "scheduler_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

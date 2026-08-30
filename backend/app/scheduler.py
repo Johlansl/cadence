@@ -17,19 +17,20 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.schedule_timing import next_run_at
 from app.db.base import SessionLocal
-from app.models.models import Job, Report, Schedule
+from app.models.models import Job, Report, Schedule, SchedulerState
 
 log = logging.getLogger("cadence.scheduler")
 
 TICK_SECONDS = 60
 RETENTION_EVERY = timedelta(hours=24)
+RETENTION_STATE_KEY = "last_retention_at"
 _stop = False
-_last_retention: datetime | None = None
 
 
 def _request_stop(*_: object) -> None:
@@ -174,21 +175,46 @@ def retention_sweep(
     return reports_deleted, jobs_deleted
 
 
+def _retention_due(db: Session, now: datetime) -> bool:
+    """True when a sweep hasn't run within RETENTION_EVERY. The last-run time
+    is persisted in scheduler_state so a process restart doesn't re-trigger."""
+    last = db.execute(
+        select(SchedulerState.value).where(SchedulerState.key == RETENTION_STATE_KEY)
+    ).scalar_one_or_none()
+    if last is None:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return now - last_dt >= RETENTION_EVERY
+
+
+def _mark_retention_done(db: Session, now: datetime) -> None:
+    db.execute(
+        pg_insert(SchedulerState)
+        .values(key=RETENTION_STATE_KEY, value=now.isoformat(), updated_at=now)
+        .on_conflict_do_update(
+            index_elements=["key"], set_={"value": now.isoformat(), "updated_at": now}
+        )
+    )
+    db.commit()
+
+
 def run_retention_if_due(now: datetime | None = None) -> None:
-    global _last_retention
     now = now or datetime.now(timezone.utc)
-    if _last_retention is not None and now - _last_retention < RETENTION_EVERY:
-        return
-    _last_retention = now
     if settings.reports_retention_days == 0 and settings.jobs_retention_days == 0:
         return
     with SessionLocal() as db:
+        if not _retention_due(db, now):
+            return
         reports, jobs = retention_sweep(
             db,
             now,
             reports_days=settings.reports_retention_days,
             jobs_days=settings.jobs_retention_days,
         )
+        _mark_retention_done(db, now)
     log.info(
         "retention sweep: %d reports, %d jobs deleted (keep reports=%dd jobs=%dd)",
         reports,

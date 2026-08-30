@@ -3,7 +3,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from app.models.models import Job, Report
-from app.scheduler import retention_sweep
+from app.scheduler import (
+    RETENTION_EVERY,
+    _mark_retention_done,
+    _retention_due,
+    retention_sweep,
+)
 from tests.conftest import create_host
 
 NOW = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
@@ -77,3 +82,14 @@ def test_sweep_disabled_with_zero(client, db_session):
     db_session.flush()
 
     assert retention_sweep(db_session, NOW, reports_days=0, jobs_days=0) == (0, 0)
+
+
+def test_retention_due_is_persisted_across_restarts(client, db_session):
+    # Nothing recorded yet -> due.
+    assert _retention_due(db_session, NOW) is True
+
+    _mark_retention_done(db_session, NOW)
+
+    # A fresh scheduler process (no in-memory state) still sees it as not due.
+    assert _retention_due(db_session, NOW + timedelta(hours=1)) is False
+    assert _retention_due(db_session, NOW + RETENTION_EVERY) is True
