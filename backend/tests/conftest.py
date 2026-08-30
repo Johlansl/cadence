@@ -22,6 +22,9 @@ import pytest
 
 ADMIN_KEY = "test-admin-key"
 os.environ["CADENCE_ADMIN_KEY"] = ADMIN_KEY
+# The auth-failure throttle sleeps a worker thread; disable it so the negative
+# auth tests stay fast. Covered directly in test_auth_throttle.py.
+os.environ["CADENCE_DISABLE_AUTH_THROTTLE"] = "1"
 
 
 def _test_database_url() -> str:
