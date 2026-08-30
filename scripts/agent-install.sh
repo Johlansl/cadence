@@ -31,19 +31,31 @@ fetch() { curl -fsSL "$base/$1"; }
 
 echo "install.sh: server $base"
 
-# 1. Trust the internal CA.
+# 1. Trust the internal CA (skip if an identical cert is already trusted, to
+#    avoid update-ca-certificates "duplicate" noise on re-runs).
 tmp_ca=$(mktemp)
 fetch agent/ca.crt >"$tmp_ca"
-install -m 0644 "$tmp_ca" /usr/local/share/ca-certificates/cadence-internal.crt
+if find /usr/local/share/ca-certificates -name '*.crt' 2>/dev/null \
+	-exec cmp -s "$tmp_ca" {} \; -print | grep -q .; then
+	echo "install.sh: CA already trusted"
+else
+	install -m 0644 "$tmp_ca" /usr/local/share/ca-certificates/cadence-internal.crt
+	update-ca-certificates >/dev/null 2>&1
+	echo "install.sh: CA installed"
+fi
 rm -f "$tmp_ca"
-update-ca-certificates >/dev/null
-echo "install.sh: CA installed"
 
-# 2. reboot-required flag support (Debian minimal lacks it).
+# 2. reboot-required flag support. update-notifier-common ships the apt/kernel
+#    hooks that create /var/run/reboot-required. Best-effort: the agent works
+#    without it, only reboot-required detection degrades.
 if ! dpkg -s update-notifier-common >/dev/null 2>&1; then
-	apt-get update -qq
-	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq update-notifier-common >/dev/null
-	echo "install.sh: update-notifier-common installed"
+	if apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive \
+		apt-get install -y -qq update-notifier-common >/dev/null 2>&1; then
+		echo "install.sh: update-notifier-common installed"
+	else
+		echo "install.sh: WARNING could not install update-notifier-common --" \
+			"reboot-required detection may not work on this host" >&2
+	fi
 fi
 
 # 3. Agent binary, checksum-verified.
