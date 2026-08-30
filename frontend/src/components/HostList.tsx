@@ -6,11 +6,12 @@ interface Props {
   hosts: HostSummary[]
   selectedId: string | null
   onSelect: (id: string) => void
+  emptyLabel?: string
 }
 
-export function HostList({ hosts, selectedId, onSelect }: Props) {
+export function HostList({ hosts, selectedId, onSelect, emptyLabel = 'No hosts.' }: Props) {
   if (hosts.length === 0) {
-    return <p className="p-4 text-sm text-zinc-500">No hosts registered.</p>
+    return <p className="p-4 text-sm text-zinc-500">{emptyLabel}</p>
   }
 
   // Active hosts first, then inactive; alphabetical within each group.
@@ -28,6 +29,7 @@ export function HostList({ hosts, selectedId, onSelect }: Props) {
             <button
               type="button"
               onClick={() => onSelect(h.id)}
+              aria-current={active ? 'true' : undefined}
               className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors ${
                 active ? 'bg-zinc-800/80' : 'hover:bg-zinc-900'
               } ${h.is_active ? '' : 'opacity-40'}`}

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api/client'
 import { HostDetail } from './components/HostDetail'
+import { HostFilters } from './components/HostFilters'
 import { HostList } from './components/HostList'
 import { OverviewChips, SilentBanner } from './components/Overview'
+import { EMPTY_FILTERS, filterHosts, type HostFilters as Filters } from './lib/hostFilter'
 import { relativeTime } from './lib/time'
 import type { HostDetail as HostDetailData, HostSummary } from './types'
 
@@ -32,7 +34,10 @@ export default function App() {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<Date | null>(null)
   const [detailReload, setDetailReload] = useState(0)
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [, tick] = useState(0)
+
+  const visibleHosts = useMemo(() => filterHosts(hosts, filters), [hosts, filters])
 
   const refreshList = useCallback(async () => {
     try {
@@ -134,8 +139,21 @@ export default function App() {
       <SilentBanner hosts={hosts} onSelect={select} />
 
       <div className="flex min-h-0 flex-1">
-        <aside className="w-80 shrink-0 overflow-auto border-r border-zinc-800">
-          <HostList hosts={hosts} selectedId={selectedId} onSelect={select} />
+        <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-r border-zinc-800">
+          <HostFilters
+            value={filters}
+            onChange={setFilters}
+            shown={visibleHosts.length}
+            total={hosts.length}
+          />
+          <nav aria-label="Hosts" className="min-h-0 flex-1 overflow-auto">
+            <HostList
+              hosts={visibleHosts}
+              selectedId={selectedId}
+              onSelect={select}
+              emptyLabel={hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'}
+            />
+          </nav>
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {detail ? (
