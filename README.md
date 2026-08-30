@@ -379,7 +379,7 @@ go test ./...
 |---|---|---|---|
 | `CADENCE_SERVER_URL` | yes | — | Base URL of the backend, e.g. `https://cadence.lan` |
 | `CADENCE_TOKEN` | yes | — | Per-host token from `POST /api/v1/admin/hosts` |
-| `CADENCE_RUN_APT_UPDATE` | no | `false` | Run `apt-get update` before collecting (needs root; failure is non-fatal) |
+| `CADENCE_RUN_APT_UPDATE` | no | `false` (installer sets `true`) | Run `apt-get update` before collecting so the dashboard reflects current apt state; without it, freshness follows the system's `apt-daily` timer. Needs root; failure is non-fatal |
 | `CADENCE_HTTP_TIMEOUT_SECONDS` | no | `30` | HTTP client timeout |
 
 ### Run once
@@ -405,7 +405,7 @@ Two oneshot units on their own timers (`agent/systemd/`):
 
 | Unit | Cadence | Does |
 |---|---|---|
-| `cadence-agent.service` / `.timer` | `OnBootSec=5min`, then **hourly** (`RandomizedDelaySec=5min`, `Persistent=true`) | full package/OS report, runs a piggybacked job if any |
+| `cadence-agent.service` / `.timer` | `OnBootSec=3min`, then **every 30 min** (`RandomizedDelaySec=5min`, `Persistent=true`) | full package/OS report, runs a piggybacked job if any |
 | `cadence-agent-poll.service` / `.timer` | **every 1 min** (`-poll`) | claims a pending job and runs it — no collection; nothing pending → exits silently |
 
 | File | Installed as |
@@ -415,7 +415,7 @@ Two oneshot units on their own timers (`agent/systemd/`):
 
 The 1-min poll is what makes a dashboard-triggered upgrade start within a
 minute (see Step 8). Don't want it? `systemctl disable --now
-cadence-agent-poll.timer` — jobs then wait for the hourly report instead.
+cadence-agent-poll.timer` — jobs then wait for the 30-min report instead.
 
 ### Install on a monitored VM
 
@@ -460,7 +460,7 @@ installed packages.
 
 The tight freshness thresholds assume `cadence-agent-poll.timer` is enabled (it
 is by default), which refreshes `last_seen_at` every minute. A host running only
-the hourly report will always read amber/red.
+the periodic report will always read amber/red.
 
 ### Local development
 
@@ -480,7 +480,7 @@ up within ~1 minute (the poll timer) and posts the log back.
 ```
 dashboard --POST /admin/hosts/{id}/jobs (X-Admin-Key)--> job: pending
 agent     --POST /agent/next-job (every 1 min)---------->  claims it, job: running
-          (also delivered on the hourly POST /reports)
+          (also delivered on the periodic POST /reports)
 agent     runs `apt-get dist-upgrade -y` (non-interactive, confold/confdef)
 agent     --POST /jobs/{id}/result--------------------->  job: succeeded | failed (+ log)
 ```

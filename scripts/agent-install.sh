@@ -100,10 +100,16 @@ if [ ! -f /etc/cadence/agent.env ]; then
 	cat >/etc/cadence/agent.env <<EOF
 CADENCE_SERVER_URL=$server_url
 CADENCE_TOKEN=$token
+CADENCE_RUN_APT_UPDATE=true
 EOF
 	echo "install.sh: wrote /etc/cadence/agent.env"
-elif [ -n "$token" ]; then
-	echo "install.sh: /etc/cadence/agent.env exists, keeping its token"
+else
+	[ -n "$token" ] && echo "install.sh: /etc/cadence/agent.env exists, keeping its token"
+	# Make sure apt lists are refreshed before each report.
+	if ! grep -q '^CADENCE_RUN_APT_UPDATE=' /etc/cadence/agent.env; then
+		echo 'CADENCE_RUN_APT_UPDATE=true' >>/etc/cadence/agent.env
+		echo "install.sh: added CADENCE_RUN_APT_UPDATE=true to agent.env"
+	fi
 fi
 
 # 6. Enable + start.
