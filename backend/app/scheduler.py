@@ -16,7 +16,7 @@ import signal
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -100,6 +100,55 @@ def tick(now: datetime | None = None, db: Session | None = None) -> int:
     return queued
 
 
+def reap_stuck_jobs(
+    now: datetime | None = None,
+    db: Session | None = None,
+    *,
+    timeout_seconds: int | None = None,
+) -> int:
+    """Fail jobs stuck in 'running' past the timeout. An agent that claims a
+    job and never posts a result would otherwise block every future job for
+    that host (create_job and tick both refuse a host with an active job).
+    0 = disabled. Returns the number of jobs reaped."""
+    if timeout_seconds is None:
+        timeout_seconds = settings.job_running_timeout_seconds
+    if timeout_seconds <= 0:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    own_session = db is None
+    db = db or SessionLocal()
+    cutoff = now - timedelta(seconds=timeout_seconds)
+    try:
+        result = db.execute(
+            update(Job)
+            .where(
+                Job.status == "running",
+                Job.started_at.is_not(None),
+                Job.started_at < cutoff,
+            )
+            .values(
+                status="failed",
+                completed_at=now,
+                result={"reaped": True, "reason": "running timeout exceeded"},
+                log=func.concat(
+                    func.coalesce(Job.log, ""),
+                    f"\n[cadence] no result after {timeout_seconds}s; "
+                    "marked failed by the scheduler reaper",
+                ),
+            )
+        )
+        reaped = result.rowcount
+        db.commit()
+    finally:
+        if own_session:
+            db.close()
+    if reaped:
+        log.warning(
+            "reaped %d stuck running job(s) (timeout=%ds)", reaped, timeout_seconds
+        )
+    return reaped
+
+
 def retention_sweep(
     db: Session, now: datetime, *, reports_days: int, jobs_days: int
 ) -> tuple[int, int]:
@@ -158,6 +207,7 @@ def main() -> None:
     log.info("cadence scheduler started (tick=%ss)", TICK_SECONDS)
     while not _stop:
         try:
+            reap_stuck_jobs()
             tick()
             run_retention_if_due()
         except Exception:  # noqa: BLE001 -- keep the loop alive

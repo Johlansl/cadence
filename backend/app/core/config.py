@@ -21,8 +21,9 @@ def _build_database_url() -> str:
     )
 
 
-def _retention_days(var: str, default: int) -> int:
-    """Days to keep append-only rows; 0 = keep forever. Read by the scheduler."""
+def _non_negative_int(var: str, default: int) -> int:
+    """A non-negative integer env var. 0 has a per-setting meaning (keep
+    forever / feature disabled). Read by the scheduler."""
     raw = os.environ.get(var, "").strip()
     if not raw:
         return default
@@ -43,12 +44,19 @@ class Settings:
         if not self.admin_key:
             raise RuntimeError("CADENCE_ADMIN_KEY is required")
 
-        # Retention, applied by the scheduler's daily sweep.
-        self.reports_retention_days: int = _retention_days(
+        # Retention, applied by the scheduler's daily sweep. 0 = keep forever.
+        self.reports_retention_days: int = _non_negative_int(
             "CADENCE_REPORTS_RETENTION_DAYS", 90
         )
-        self.jobs_retention_days: int = _retention_days(
+        self.jobs_retention_days: int = _non_negative_int(
             "CADENCE_JOBS_RETENTION_DAYS", 90
+        )
+
+        # A job left 'running' longer than this is failed by the scheduler's
+        # reaper -- a dead agent would otherwise block every future job for
+        # that host. 0 = disabled. Default 2h.
+        self.job_running_timeout_seconds: int = _non_negative_int(
+            "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS", 7200
         )
 
 
