@@ -8,9 +8,22 @@ import type { HostDetail as HostDetailData, HostSummary } from './types'
 
 const POLL_MS = 30_000
 
+// The selected host is mirrored in the URL hash (#host=<id>) so a reload keeps
+// the view and the link is shareable.
+function readHashHostId(): string | null {
+  const m = /(?:^|[#&])host=([^&]+)/.exec(window.location.hash)
+  return m ? decodeURIComponent(m[1]) : null
+}
+function writeHashHostId(id: string | null): void {
+  const next = id ? `#host=${encodeURIComponent(id)}` : ''
+  if (window.location.hash === next) return
+  const url = next || window.location.pathname + window.location.search
+  window.history.replaceState(null, '', url)
+}
+
 export default function App() {
   const [hosts, setHosts] = useState<HostSummary[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(readHashHostId)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   // Two independent failures: the host-list poll drives the global sync
   // indicator; a host-detail poll failure is shown in the detail pane only,
@@ -67,20 +80,32 @@ export default function App() {
     }
   }, [selectedId, detailReload])
 
+  const select = useCallback((id: string | null) => {
+    setSelectedId(id)
+    writeHashHostId(id)
+  }, [])
+
   // Called after a host mutation from the detail pane.
   const onHostChanged = useCallback(() => {
     void refreshList()
     setDetailReload((n) => n + 1)
   }, [refreshList])
   const onHostDeleted = useCallback(() => {
-    setSelectedId(null)
+    select(null)
     void refreshList()
-  }, [refreshList])
+  }, [refreshList, select])
 
-  // Select the first host once the list arrives.
+  // Follow back/forward navigation between hosts.
   useEffect(() => {
-    if (!selectedId && hosts.length > 0) setSelectedId(hosts[0].id)
-  }, [hosts, selectedId])
+    const onHashChange = () => setSelectedId(readHashHostId())
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
+
+  // Select the first host once the list arrives (nothing in the URL).
+  useEffect(() => {
+    if (!selectedId && hosts.length > 0) select(hosts[0].id)
+  }, [hosts, selectedId, select])
 
   // Keep relative timestamps moving between polls.
   useEffect(() => {
@@ -106,11 +131,11 @@ export default function App() {
         </div>
       </header>
 
-      <SilentBanner hosts={hosts} onSelect={setSelectedId} />
+      <SilentBanner hosts={hosts} onSelect={select} />
 
       <div className="flex min-h-0 flex-1">
         <aside className="w-80 shrink-0 overflow-auto border-r border-zinc-800">
-          <HostList hosts={hosts} selectedId={selectedId} onSelect={setSelectedId} />
+          <HostList hosts={hosts} selectedId={selectedId} onSelect={select} />
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {detail ? (
