@@ -17,5 +17,11 @@ body {
   background-color: #09090b; /* zinc-950 */
   color: #e4e4e7; /* zinc-200 */
   -webkit-font-smoothing: antialiased;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
 }

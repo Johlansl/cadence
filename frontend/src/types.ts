@@ -1,7 +1,4 @@
-export type HostStatus =
-  | 'up_to_date'
-  | 'updates_available'
-  | 'security_updates_available'
+export type HostStatus = 'up_to_date' | 'updates_available' | 'security_updates_available'
 
 export type RebootPolicy = 'auto' | 'never' | 'prompt'
 

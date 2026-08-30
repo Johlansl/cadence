@@ -62,7 +62,10 @@ export function SilentBanner({
   const silent = hosts.filter((h) => h.is_active && staleness(h.last_seen_at) === 'stale')
   if (silent.length === 0) return null
 
-  const shown = silent.slice(0, 3).map((h) => h.hostname).join(', ')
+  const shown = silent
+    .slice(0, 3)
+    .map((h) => h.hostname)
+    .join(', ')
   const extra = silent.length > 3 ? ` +${silent.length - 3}` : ''
 
   return (
@@ -74,7 +77,11 @@ export function SilentBanner({
       <span className="font-medium">
         {silent.length} host{silent.length === 1 ? '' : 's'} silent
       </span>{' '}
-      — no report in over 15 min: <span className="font-mono">{shown}{extra}</span>
+      — no report in over 15 min:{' '}
+      <span className="font-mono">
+        {shown}
+        {extra}
+      </span>
     </button>
   )
 }

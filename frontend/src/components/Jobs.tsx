@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { pill, type Tone } from '../lib/pill'
 import { relativeTime } from '../lib/time'
@@ -85,7 +85,7 @@ export function Jobs({ hostId }: { hostId: string }) {
     }
   }, [hostId])
 
-  const allJobs = older.length ? [...jobs, ...older] : jobs
+  const allJobs = useMemo(() => (older.length ? [...jobs, ...older] : jobs), [jobs, older])
 
   const loadOlder = useCallback(async () => {
     const ref = allJobs[allJobs.length - 1]
@@ -207,9 +207,7 @@ export function Jobs({ hostId }: { hostId: string }) {
 
       {collapsed ? (
         <p className="mt-1 text-xs text-zinc-600">
-          {last
-            ? `last ${last.status} ${relativeTime(last.created_at)}`
-            : 'no jobs yet'}
+          {last ? `last ${last.status} ${relativeTime(last.created_at)}` : 'no jobs yet'}
         </p>
       ) : (
         <>

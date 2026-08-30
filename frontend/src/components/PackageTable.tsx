@@ -62,8 +62,7 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
     return out
   }, [packages, q, onlyUpdates, onlySecurity, sortKey, sortDir])
 
-  const indicator = (key: string) =>
-    sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''
+  const indicator = (key: string) => (sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '')
 
   return (
     <>

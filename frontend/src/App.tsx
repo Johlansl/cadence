@@ -45,7 +45,8 @@ export default function App() {
   const toggleChecked = useCallback((id: string) => {
     setChecked((s) => {
       const next = new Set(s)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }, [])
@@ -175,7 +176,9 @@ export default function App() {
               hosts={visibleHosts}
               selectedId={selectedId}
               onSelect={select}
-              emptyLabel={hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'}
+              emptyLabel={
+                hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'
+              }
               checkedIds={checked}
               onToggleCheck={toggleChecked}
             />

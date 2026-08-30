@@ -15,7 +15,12 @@ export function TagChips({
         const cls =
           'rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400 ring-1 ring-zinc-700'
         return onClick ? (
-          <button key={k} type="button" onClick={() => onClick(k, v)} className={`${cls} hover:text-zinc-200`}>
+          <button
+            key={k}
+            type="button"
+            onClick={() => onClick(k, v)}
+            className={`${cls} hover:text-zinc-200`}
+          >
             {label}
           </button>
         ) : (

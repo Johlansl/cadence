@@ -39,15 +39,12 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     [],
   )
 
-  const settle = useCallback(
-    (ok: boolean) => {
-      setPending((p) => {
-        p?.resolve(ok)
-        return null
-      })
-    },
-    [],
-  )
+  const settle = useCallback((ok: boolean) => {
+    setPending((p) => {
+      p?.resolve(ok)
+      return null
+    })
+  }, [])
 
   useEffect(() => {
     if (!pending) return

@@ -112,10 +112,7 @@ export function Schedule({ hostId }: { hostId: string }) {
         : api.createSchedule(hostId, key, toInput(form)),
     [existing, hostId, form],
   )
-  const del = useCallback(
-    (key: string) => api.deleteSchedule(existing!.id, key),
-    [existing],
-  )
+  const del = useCallback((key: string) => api.deleteSchedule(existing!.id, key), [existing])
 
   const saver = useAdminKeyAction(save)
   const deleter = useAdminKeyAction(del)
@@ -151,7 +148,8 @@ export function Schedule({ hostId }: { hostId: string }) {
   }, [saver, deleter, refresh])
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }))
-  const field = 'rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-xs text-zinc-200 outline-none focus:border-zinc-500'
+  const field =
+    'rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-xs text-zinc-200 outline-none focus:border-zinc-500'
 
   return (
     <section className="border-t border-zinc-800 px-6 py-4">
@@ -172,22 +170,35 @@ export function Schedule({ hostId }: { hostId: string }) {
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-        <select value={form.kind} onChange={(e) => set('kind', e.target.value as ScheduleKind)} className={field}>
+        <select
+          value={form.kind}
+          onChange={(e) => set('kind', e.target.value as ScheduleKind)}
+          className={field}
+        >
           <option value="weekly">weekly</option>
           <option value="monthly">monthly</option>
         </select>
 
         {form.kind === 'weekly' ? (
-          <select value={form.weekday} onChange={(e) => set('weekday', Number(e.target.value))} className={field}>
+          <select
+            value={form.weekday}
+            onChange={(e) => set('weekday', Number(e.target.value))}
+            className={field}
+          >
             {WEEKDAYS.map((d, i) => (
-              <option key={d} value={i}>{d}</option>
+              <option key={d} value={i}>
+                {d}
+              </option>
             ))}
           </select>
         ) : (
           <label className="flex items-center gap-1">
             day
             <input
-              type="number" min={1} max={28} value={form.day_of_month}
+              type="number"
+              min={1}
+              max={28}
+              value={form.day_of_month}
               onChange={(e) => set('day_of_month', num(e.target.value, 1, 28, form.day_of_month))}
               className={`${field} w-14`}
             />
@@ -196,23 +207,41 @@ export function Schedule({ hostId }: { hostId: string }) {
 
         <label className="flex items-center gap-1">
           at
-          <input type="number" min={0} max={23} value={form.hour}
+          <input
+            type="number"
+            min={0}
+            max={23}
+            value={form.hour}
             onChange={(e) => set('hour', num(e.target.value, 0, 23, form.hour))}
-            className={`${field} w-14`} />
+            className={`${field} w-14`}
+          />
           :
-          <input type="number" min={0} max={59} value={form.minute}
+          <input
+            type="number"
+            min={0}
+            max={59}
+            value={form.minute}
             onChange={(e) => set('minute', num(e.target.value, 0, 59, form.minute))}
-            className={`${field} w-14`} />
+            className={`${field} w-14`}
+          />
         </label>
 
         <input
-          type="text" value={form.timezone} onChange={(e) => set('timezone', e.target.value)}
-          placeholder="UTC" size={14} className={field}
+          type="text"
+          value={form.timezone}
+          onChange={(e) => set('timezone', e.target.value)}
+          placeholder="UTC"
+          size={14}
+          className={field}
         />
 
         <label className="flex items-center gap-1">
           reboot
-          <select value={form.reboot} onChange={(e) => set('reboot', e.target.value as RebootChoice)} className={field}>
+          <select
+            value={form.reboot}
+            onChange={(e) => set('reboot', e.target.value as RebootChoice)}
+            className={field}
+          >
             <option value="inherit">host default</option>
             <option value="auto">auto</option>
             <option value="never">never</option>
@@ -221,19 +250,28 @@ export function Schedule({ hostId }: { hostId: string }) {
         </label>
 
         <label className="flex items-center gap-1 select-none">
-          <input type="checkbox" checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} className="accent-zinc-400" />
+          <input
+            type="checkbox"
+            checked={form.enabled}
+            onChange={(e) => set('enabled', e.target.checked)}
+            className="accent-zinc-400"
+          />
           enabled
         </label>
 
         <button
-          type="button" onClick={() => void onSave()} disabled={saver.busy}
+          type="button"
+          onClick={() => void onSave()}
+          disabled={saver.busy}
           className="rounded bg-zinc-100 px-2 py-1 font-medium text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500"
         >
           {saver.busy ? 'saving…' : existing ? 'update' : 'create'}
         </button>
         {existing && (
           <button
-            type="button" onClick={() => void onDelete()} disabled={deleter.busy}
+            type="button"
+            onClick={() => void onDelete()}
+            disabled={deleter.busy}
             className="rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:text-zinc-200"
           >
             delete

@@ -50,11 +50,7 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
         {busy && <span className="text-xs text-zinc-500">saving…</span>}
       </dd>
       {needKey && (
-        <AdminKeyPrompt
-          value={keyDraft}
-          onChange={setKeyDraft}
-          onSubmit={() => void submitKey()}
-        />
+        <AdminKeyPrompt value={keyDraft} onChange={setKeyDraft} onSubmit={() => void submitKey()} />
       )}
       {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
     </div>
@@ -148,9 +144,7 @@ function TagsControl({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {Object.entries(draft).length === 0 && (
-          <span className="text-xs text-zinc-600">none</span>
-        )}
+        {Object.entries(draft).length === 0 && <span className="text-xs text-zinc-600">none</span>}
         {Object.entries(draft).map(([k, v]) => (
           <span
             key={k}
@@ -196,7 +190,11 @@ function TagsControl({
       </div>
 
       {needKey && (
-        <AdminKeyPrompt value={keyDraft} onChange={setKeyDraft} onSubmit={() => void onKeySubmit()} />
+        <AdminKeyPrompt
+          value={keyDraft}
+          onChange={setKeyDraft}
+          onSubmit={() => void onKeySubmit()}
+        />
       )}
       {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
     </section>
@@ -264,9 +262,7 @@ function HostActions({
 }) {
   const confirm = useConfirm()
   const toast = useToast()
-  const retire = useAdminKeyAction((key) =>
-    api.patchHost(hostId, key, { is_active: !isActive }),
-  )
+  const retire = useAdminKeyAction((key) => api.patchHost(hostId, key, { is_active: !isActive }))
   const remove = useAdminKeyAction((key) => api.deleteHost(hostId, key))
 
   const doRetire = async () => {
