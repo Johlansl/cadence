@@ -11,12 +11,13 @@ Contexte complet pour reprendre le projet dans une nouvelle session Claude Code.
 Plan : `~/.claude/plans/je-reprends-le-projet-indexed-shannon.md`. Exécution lot
 par lot, ~30 commits `a2e6385`..`cd82232` poussés sur `origin/main`.
 
-**État final :** base Alembic **`0006`**, 5 services up (backend/scheduler à la
-`cadence-backend` reconstruite), **agent 0.6.0 staged** dans `dist/` (servi par
-Caddy) — **à déployer sur `vm-japp` / `vm-nginxproxy`** via
-`curl -fsSL http://cadence.lan/install.sh | sh`. Backend **80 tests**, front
-**16 tests** (Vitest), agent `go test` vert. `dist/` gitignoré, peuplé par
-`scripts/publish-agent.sh` (à relancer à chaque release agent).
+**État final (fin de session 2026-08-30) :** working tree **propre**, tout sur
+`origin/main`. Base Alembic **`0006`**, 5 services up et sains (`/healthz` +
+`/readyz`). **`vm-japp` et `vm-nginxproxy` tournent en agent `0.6.0`**, toutes
+deux `up_to_date`. Backend **80 tests**, front **16 tests** (Vitest), agent
+`go test` vert. `dist/` gitignoré, peuplé par `scripts/publish-agent.sh` (à
+relancer sur le serveur à chaque release agent). **Rien en cours** — la
+prochaine action est un choix (voir « Non fait » ci-dessous).
 
 **Résumé par lot :**
 - **A** correction & sûreté : merge report, garde `packages:[]`→422, reaper jobs
