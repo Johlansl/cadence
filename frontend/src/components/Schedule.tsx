@@ -7,7 +7,7 @@ import { useConfirm } from './ConfirmDialog'
 import { useToast } from './Toast'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-type RebootChoice = 'inherit' | 'auto' | 'never'
+type RebootChoice = 'inherit' | 'auto' | 'never' | 'prompt'
 
 interface Form {
   kind: ScheduleKind
@@ -40,7 +40,7 @@ function toForm(s: ScheduleData): Form {
     hour: s.hour,
     minute: s.minute,
     timezone: s.timezone,
-    reboot: r === 'auto' || r === 'never' ? r : 'inherit',
+    reboot: r === 'auto' || r === 'never' || r === 'prompt' ? r : 'inherit',
     enabled: s.enabled,
   }
 }
@@ -216,6 +216,7 @@ export function Schedule({ hostId }: { hostId: string }) {
             <option value="inherit">host default</option>
             <option value="auto">auto</option>
             <option value="never">never</option>
+            <option value="prompt">prompt</option>
           </select>
         </label>
 
