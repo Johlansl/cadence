@@ -5,6 +5,20 @@
 # bare hostname Caddy issues a certificate from its own internal CA -- export
 # that CA to the monitored VMs, see README "TLS".
 
+# Plain HTTP: everything redirects to HTTPS, except the agent bootstrap assets
+# (the installer, the binary, the CA itself) -- those must be reachable before
+# the VM trusts the internal CA. Populated by scripts/publish-agent.sh.
+http://{$CADENCE_SITE_ADDRESS} {
+	@bootstrap path /install.sh /agent/*
+	handle @bootstrap {
+		root * /srv/dist
+		file_server
+	}
+	handle {
+		redir https://{host}{uri}
+	}
+}
+
 {$CADENCE_SITE_ADDRESS} {
 	tls internal
 	encode gzip

@@ -10,10 +10,14 @@ __pycache__/
 
 # node
 node_modules/
-dist/
+frontend/dist/
 
 # go
 agent/bin/
+
+# agent bootstrap assets staged by scripts/publish-agent.sh
+/dist/*
+!/dist/.gitkeep
 
 # extracted Caddy CA / other local certs
 *.crt

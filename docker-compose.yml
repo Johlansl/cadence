@@ -87,6 +87,9 @@ services:
       - "${CADENCE_HTTP_BIND:-0.0.0.0}:443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Agent bootstrap assets (installer, binary, CA), served over HTTP.
+      # Populated by scripts/publish-agent.sh; may be absent until then.
+      - ./dist:/srv/dist:ro
       # Persist the internal CA + issued certs across restarts.
       - caddy_data:/data
       - caddy_config:/config

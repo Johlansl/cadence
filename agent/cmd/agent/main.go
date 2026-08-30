@@ -33,7 +33,13 @@ func main() {
 
 	pollOnly := flag.Bool("poll", false,
 		"check for a pending job and run it, without collecting or reporting packages")
+	showVersion := flag.Bool("version", false, "print the agent version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(agentVersion)
+		return
+	}
 
 	if err := run(*pollOnly); err != nil {
 		log.Printf("error: %v", err)

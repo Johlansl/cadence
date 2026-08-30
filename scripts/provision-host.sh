@@ -74,17 +74,23 @@ if [ -z "$id" ] || [ -z "$token" ]; then
 	exit 1
 fi
 
+install_host=$(printf '%s\n' "$agent_url" | sed -E 's#^[a-z]+://##; s#/.*##')
+
 cat <<EOF
 host "$hostname" created (id $id)
 
---- paste into /etc/cadence/agent.env on $hostname (chmod 0600, root) ---
-CADENCE_SERVER_URL=$agent_url
-CADENCE_TOKEN=$token
---------------------------------------------------------------------------
+One-liner -- run on $hostname as root (needs scripts/publish-agent.sh to have
+been run once on the server):
 
-Next on $hostname (see README "Upgrade an existing monitored VM" / step 3):
-  - trust the Caddy CA, then build + install the agent
-  - sudo apt install update-notifier-common
-  - sudo systemctl start cadence-agent.service
+  curl -fsSL http://$install_host/install.sh | sudo CADENCE_TOKEN=$token sh
+
+Or by hand -- paste into /etc/cadence/agent.env (chmod 0600, root):
+
+  CADENCE_SERVER_URL=$agent_url
+  CADENCE_TOKEN=$token
+
+then trust the CA, install update-notifier-common, drop the agent binary +
+units, and enable the timers (README "Install an agent").
+
 This token is shown once; it is not recoverable.
 EOF

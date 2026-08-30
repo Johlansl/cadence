@@ -10,7 +10,15 @@ agent:
     - cd agent
     - go vet ./...
     - go test ./...
-    - CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/agent
+    - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/cadence-agent ./cmd/agent
+    - ./bin/cadence-agent -version
+    - (cd bin && sha256sum cadence-agent > cadence-agent.sha256)
+  artifacts:
+    name: cadence-agent
+    paths:
+      - agent/bin/cadence-agent
+      - agent/bin/cadence-agent.sha256
+    expire_in: 30 days
 
 backend:
   stage: test

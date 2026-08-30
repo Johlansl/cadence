@@ -103,9 +103,26 @@ curl -s -X POST https://cadence.lan/api/v1/admin/hosts \
 
 ### 3. On each monitored VM
 
-Trust the Caddy CA (see "TLS" above), then build the (static) binary — on the
-VM if Go is available, or once elsewhere and `scp` `bin/cadence-agent` + the
-`agent/systemd/` directory over:
+**One-liner (recommended).** Once per server, stage the bootstrap assets:
+
+```sh
+scripts/publish-agent.sh          # builds the agent, writes ./dist (served by Caddy)
+```
+
+Then on the VM, as root — `provision-host.sh` prints this exact line:
+
+```sh
+curl -fsSL http://cadence.lan/install.sh | sudo CADENCE_TOKEN=<token> sh
+```
+
+It trusts the internal CA, installs `update-notifier-common`, drops the binary
++ systemd units, writes `/etc/cadence/agent.env`, and enables the timers. The
+installer is served over plain HTTP (the VM does not trust the CA yet); the
+binary is checksum-verified.
+
+**By hand.** Trust the Caddy CA (see "TLS" above), then build the (static)
+binary — on the VM if Go is available, or once elsewhere and `scp`
+`bin/cadence-agent` + the `agent/systemd/` directory over:
 
 ```sh
 cd agent
