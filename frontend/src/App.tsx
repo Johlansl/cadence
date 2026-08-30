@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api/client'
+import { BulkActionBar } from './components/BulkActionBar'
 import { FleetOverview } from './components/FleetOverview'
 import { HostDetail } from './components/HostDetail'
 import { HostFilters } from './components/HostFilters'
@@ -36,9 +37,19 @@ export default function App() {
   const [lastSync, setLastSync] = useState<Date | null>(null)
   const [detailReload, setDetailReload] = useState(0)
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
   const [, tick] = useState(0)
 
   const visibleHosts = useMemo(() => filterHosts(hosts, filters), [hosts, filters])
+
+  const toggleChecked = useCallback((id: string) => {
+    setChecked((s) => {
+      const next = new Set(s)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
+  const clearChecked = useCallback(() => setChecked(new Set()), [])
 
   const refreshList = useCallback(async () => {
     try {
@@ -142,12 +153,24 @@ export default function App() {
             shown={visibleHosts.length}
             total={hosts.length}
           />
+          {checked.size > 0 && (
+            <BulkActionBar
+              hostIds={[...checked]}
+              onClear={clearChecked}
+              onDone={() => {
+                clearChecked()
+                void refreshList()
+              }}
+            />
+          )}
           <nav aria-label="Hosts" className="min-h-0 flex-1 overflow-auto">
             <HostList
               hosts={visibleHosts}
               selectedId={selectedId}
               onSelect={select}
               emptyLabel={hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'}
+              checkedIds={checked}
+              onToggleCheck={toggleChecked}
             />
           </nav>
         </aside>

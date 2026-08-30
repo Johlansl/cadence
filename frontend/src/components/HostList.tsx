@@ -8,9 +8,18 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   emptyLabel?: string
+  checkedIds: Set<string>
+  onToggleCheck: (id: string) => void
 }
 
-export function HostList({ hosts, selectedId, onSelect, emptyLabel = 'No hosts.' }: Props) {
+export function HostList({
+  hosts,
+  selectedId,
+  onSelect,
+  emptyLabel = 'No hosts.',
+  checkedIds,
+  onToggleCheck,
+}: Props) {
   if (hosts.length === 0) {
     return <p className="p-4 text-sm text-zinc-500">{emptyLabel}</p>
   }
@@ -26,14 +35,24 @@ export function HostList({ hosts, selectedId, onSelect, emptyLabel = 'No hosts.'
         const active = h.id === selectedId
         const normalUpdates = h.updates_available_count - h.security_updates_count
         return (
-          <li key={h.id}>
+          <li
+            key={h.id}
+            className={`flex items-start ${active ? 'bg-zinc-800/80' : 'hover:bg-zinc-900'}`}
+          >
+            <input
+              type="checkbox"
+              checked={checkedIds.has(h.id)}
+              onChange={() => onToggleCheck(h.id)}
+              aria-label={`Select ${h.hostname}`}
+              className="mt-4 ml-3 accent-zinc-400"
+            />
             <button
               type="button"
               onClick={() => onSelect(h.id)}
               aria-current={active ? 'true' : undefined}
-              className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors ${
-                active ? 'bg-zinc-800/80' : 'hover:bg-zinc-900'
-              } ${h.is_active ? '' : 'opacity-40'}`}
+              className={`flex w-full flex-col gap-1 px-3 py-3 text-left ${
+                h.is_active ? '' : 'opacity-40'
+              }`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate font-mono text-sm text-zinc-100">{h.hostname}</span>
