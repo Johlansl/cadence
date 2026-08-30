@@ -2,8 +2,9 @@
 Description=Run the Cadence agent periodically
 
 [Timer]
-# First run shortly after boot, then every 30 min relative to the last run.
-OnBootSec=3min
+# First run soon after boot (also confirms reboot-required is cleared), then
+# every 30 min relative to the last run.
+OnBootSec=1min
 OnUnitActiveSec=30min
 # Spread load across a fleet so reports don't all hit the server at once.
 RandomizedDelaySec=5min

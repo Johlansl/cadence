@@ -1,7 +1,7 @@
 import uuid
 
 from app.models.models import Job
-from tests.conftest import ADMIN_HEADERS, bearer, create_host
+from tests.conftest import ADMIN_HEADERS, bearer, create_host, report_payload
 
 
 def _set_policy(client, host_id, value):
@@ -159,3 +159,30 @@ def test_schedule_accepts_prompt_reboot_param(client):
     )
     assert r.status_code == 201, r.text
     assert r.json()["params"]["reboot"] == "prompt"
+
+
+def test_reboot_job_success_clears_host_reboot_required(client, db_session):
+    from app.models.models import Host
+
+    host_id, token = create_host(client)
+    client.post(
+        "/api/v1/reports", headers=bearer(token),
+        json=report_payload(reboot_required=True),
+    )
+    assert db_session.get(Host, host_id).reboot_required is True
+
+    jid = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs",
+        headers=ADMIN_HEADERS,
+        json={"job_type": "reboot"},
+    ).json()["id"]
+    _claim(client, token)
+    r = client.post(
+        f"/api/v1/jobs/{jid}/result",
+        headers=bearer(token),
+        json={"status": "succeeded", "exit_code": 0},
+    )
+    assert r.status_code == 200, r.text
+
+    db_session.expire_all()
+    assert db_session.get(Host, host_id).reboot_required is False

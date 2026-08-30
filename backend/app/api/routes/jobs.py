@@ -114,6 +114,14 @@ def submit_job_result(
         "reboot_required": payload.reboot_required,
     }
     job.completed_at = datetime.now(timezone.utc)
+
+    # A completed reboot job clears the host's reboot-required flag right away
+    # (the /run/reboot-required file is gone after the reboot). If the reboot
+    # somehow did not happen, the next report re-sets it.
+    if job.job_type == "reboot" and payload.status == "succeeded":
+        host.reboot_required = False
+        host.updated_at = job.completed_at
+
     db.commit()
     db.refresh(job)
     return job
