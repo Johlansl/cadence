@@ -74,6 +74,66 @@ def test_report_refreshes_host_metadata_and_last_seen(client, db_session):
     assert host.agent_version == "test"
 
 
+def test_report_refuses_empty_packages_when_host_has_inventory(client, db_session):
+    host_id, token = create_host(client)
+
+    client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(packages=[pkg("bash"), pkg("openssl", candidate="3.1")]),
+    )
+
+    r = client.post(
+        "/api/v1/reports", headers=bearer(token), json=report_payload(packages=[])
+    )
+    assert r.status_code == 422, r.text
+
+    rows = db_session.execute(
+        select(HostPackage).where(HostPackage.host_id == host_id)
+    ).scalars().all()
+    assert len(rows) == 2
+
+    # The rejected report was not logged.
+    reports = db_session.execute(
+        select(Report).where(Report.host_id == host_id)
+    ).scalars().all()
+    assert len(reports) == 1
+
+
+def test_report_accepts_empty_packages_for_fresh_host(client):
+    _, token = create_host(client)
+    r = client.post(
+        "/api/v1/reports", headers=bearer(token), json=report_payload(packages=[])
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["installed_package_count"] == 0
+
+
+def test_report_keeps_descriptive_fields_when_omitted(client, db_session):
+    host_id, token = create_host(client)
+
+    # A full report populates the descriptive metadata.
+    client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(
+            fqdn="vm-test.lan", os_name="Debian GNU/Linux", os_version="13"
+        ),
+    )
+
+    # A later report that omits those fields must not blank the stored values.
+    partial = report_payload()
+    for field in ("fqdn", "os_name", "os_version"):
+        partial.pop(field, None)
+    r = client.post("/api/v1/reports", headers=bearer(token), json=partial)
+    assert r.status_code == 200, r.text
+
+    host = db_session.get(Host, host_id)
+    assert host.fqdn == "vm-test.lan"
+    assert host.os_name == "Debian GNU/Linux"
+    assert host.os_version == "13"
+
+
 def test_report_piggybacks_pending_job(client, db_session):
     host_id, token = create_host(client)
     jr = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})

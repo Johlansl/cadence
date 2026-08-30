@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -46,16 +46,35 @@ def create_report(
     by_key = {(p.name, p.architecture): p for p in report_in.packages}
     packages = list(by_key.values())
 
+    # An empty package list against a host that already has an inventory almost
+    # always means the agent's collection failed (apt/dpkg lock, partial run).
+    # Refuse it rather than wiping a known-good state; a genuinely empty first
+    # report is still accepted.
+    if not packages:
+        has_inventory = db.execute(
+            select(HostPackage.package_id)
+            .where(HostPackage.host_id == host.id)
+            .limit(1)
+        ).first()
+        if has_inventory is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "report contains no packages but the host has an existing "
+                "inventory; refusing to replace it with an empty state",
+            )
+
     now = datetime.now(timezone.utc)
 
-    # 1. Refresh host metadata from the agent's view.
+    # 1. Refresh host metadata from the agent's view. Every descriptive field
+    #    keeps its stored value when the report omits it (or sends it empty) --
+    #    a partial report must never blank out fqdn / os_name / os_version.
     host.hostname = report_in.hostname or host.hostname
-    host.fqdn = report_in.fqdn
+    host.fqdn = report_in.fqdn or host.fqdn
     host.os_family = report_in.os_family or host.os_family
-    host.os_name = report_in.os_name
-    host.os_version = report_in.os_version
+    host.os_name = report_in.os_name or host.os_name
+    host.os_version = report_in.os_version or host.os_version
     host.package_manager = report_in.package_manager or host.package_manager
-    host.agent_version = report_in.agent_version
+    host.agent_version = report_in.agent_version or host.agent_version
     host.reboot_required = report_in.reboot_required
     host.last_seen_at = now
     host.updated_at = now
