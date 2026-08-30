@@ -45,15 +45,24 @@ else
 fi
 rm -f "$tmp_ca"
 
-# 2. reboot-required flag support. update-notifier-common ships the apt/kernel
-#    hooks that create /var/run/reboot-required. Best-effort: the agent works
-#    without it, only reboot-required detection degrades.
-if ! dpkg -s update-notifier-common >/dev/null 2>&1; then
-	if apt-get update -qq >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive \
-		apt-get install -y -qq update-notifier-common >/dev/null 2>&1; then
-		echo "install.sh: update-notifier-common installed"
+# 2. reboot-required flag support. update-notifier-common (Ubuntu, older Debian)
+#    or reboot-notifier (Debian 13+, update-notifier-common was dropped) both
+#    ship the apt/kernel hooks that create /var/run/reboot-required. Best-effort:
+#    the agent works without it, only reboot-required detection degrades.
+if dpkg -s update-notifier-common >/dev/null 2>&1 ||
+	dpkg -s reboot-notifier >/dev/null 2>&1; then
+	:  # a helper is already installed
+else
+	apt-get update -qq >/dev/null 2>&1 || true
+	helper=""
+	for cand in update-notifier-common reboot-notifier; do
+		if apt-cache show "$cand" >/dev/null 2>&1; then helper=$cand; break; fi
+	done
+	if [ -n "$helper" ] && DEBIAN_FRONTEND=noninteractive \
+		apt-get install -y -qq "$helper" >/dev/null 2>&1; then
+		echo "install.sh: $helper installed (reboot-required detection)"
 	else
-		echo "install.sh: WARNING could not install update-notifier-common --" \
+		echo "install.sh: WARNING no reboot-required helper available --" \
 			"reboot-required detection may not work on this host" >&2
 	fi
 fi

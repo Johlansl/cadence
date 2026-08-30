@@ -115,10 +115,11 @@ Then on the VM, as root — `provision-host.sh` prints this exact line:
 curl -fsSL http://cadence.lan/install.sh | sudo CADENCE_TOKEN=<token> sh
 ```
 
-It trusts the internal CA, installs `update-notifier-common`, drops the binary
-+ systemd units, writes `/etc/cadence/agent.env`, and enables the timers. The
-installer is served over plain HTTP (the VM does not trust the CA yet); the
-binary is checksum-verified.
+It trusts the internal CA, makes sure a reboot-required helper is present
+(`update-notifier-common`, or `reboot-notifier` on Debian 13 where the former
+was dropped), drops the binary + systemd units, writes `/etc/cadence/agent.env`,
+and enables the timers. The installer is served over plain HTTP (the VM does not
+trust the CA yet); the binary is checksum-verified.
 
 **By hand.** Trust the Caddy CA (see "TLS" above), then build the (static)
 binary — on the VM if Go is available, or once elsewhere and `scp`
@@ -490,9 +491,10 @@ agent     --POST /jobs/{id}/result--------------------->  job: succeeded | faile
 - **One active job per host** (`409` otherwise). The poll and the report both
   use `SELECT … FOR UPDATE SKIP LOCKED`, so only one ever claims a given job.
 - **Reboot** (see below). The `reboot_required` flag comes from
-  `/var/run/reboot-required`, which on Debian is only created if
-  **`update-notifier-common`** is installed; without it a kernel upgrade won't
-  raise the flag. `apt install update-notifier-common` on monitored VMs.
+  `/var/run/reboot-required`, created by **`update-notifier-common`** (Ubuntu,
+  Debian ≤12) or **`reboot-notifier`** (Debian 13, where `update-notifier-common`
+  was removed). `scripts/agent-install.sh` installs whichever is available;
+  without one, a kernel upgrade won't raise the flag.
 - Agent kill-switch: `CADENCE_ENABLE_UPGRADES=false` in `agent.env` — a
   triggered job is then reported back as `failed` with that reason.
 - The dashboard asks for the `X-Admin-Key` once (kept in `sessionStorage`) the
