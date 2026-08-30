@@ -121,3 +121,66 @@ func TestSubmitJobResult(t *testing.T) {
 		t.Errorf("body = %+v", gotBody)
 	}
 }
+
+func TestDoRetriesOn5xxThenSucceeds(t *testing.T) {
+	old := retryWaits
+	retryWaits = []time.Duration{0, 0, 0}
+	defer func() { retryWaits = old }()
+
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		io.WriteString(w, `{"job":null}`)
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL, "tok", time.Second).ClaimNextJob(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3 (two retries)", calls)
+	}
+}
+
+func TestDoDoesNotRetry4xx(t *testing.T) {
+	old := retryWaits
+	retryWaits = []time.Duration{0, 0, 0}
+	defer func() { retryWaits = old }()
+
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusConflict)
+		io.WriteString(w, `{"detail":"not running"}`)
+	}))
+	defer srv.Close()
+
+	_ = New(srv.URL, "tok", time.Second).SubmitJobResult(context.Background(), "j", JobResult{Status: "succeeded"})
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (no retry on 4xx)", calls)
+	}
+}
+
+func TestDoGivesUpAfterRetries(t *testing.T) {
+	old := retryWaits
+	retryWaits = []time.Duration{0, 0, 0}
+	defer func() { retryWaits = old }()
+
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL, "tok", time.Second).ClaimNextJob(context.Background()); err == nil {
+		t.Fatal("expected an error after exhausting retries")
+	}
+	if calls != len(retryWaits) {
+		t.Fatalf("calls = %d, want %d", calls, len(retryWaits))
+	}
+}

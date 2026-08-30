@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"os"
 	"strings"
+
+	"cadence/agent/internal/rebootcheck"
 )
 
 // readOSRelease parses /etc/os-release and returns (family, name, version).
@@ -50,8 +52,9 @@ func hostnameInfo() (string, *string) {
 	return h, nil
 }
 
-// rebootRequired reports whether /var/run/reboot-required exists (Debian/Ubuntu).
+// rebootRequired reports whether the host needs a reboot -- the
+// /var/run/reboot-required marker, or a newer installed kernel. See
+// rebootcheck.
 func rebootRequired() bool {
-	_, err := os.Stat("/var/run/reboot-required")
-	return err == nil
+	return rebootcheck.Pending()
 }

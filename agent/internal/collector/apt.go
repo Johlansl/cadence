@@ -5,7 +5,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
+	"cadence/agent/internal/logging"
 	"cadence/agent/internal/report"
 )
 
@@ -63,6 +65,39 @@ func parseInstLine(line string) (pendingUpdate, bool) {
 		origin:     origin,
 		isSecurity: strings.Contains(strings.ToLower(origin), "security"),
 	}, true
+}
+
+// aptLockPattern spots the transient "another process holds the apt/dpkg lock"
+// errors, usually unattended-upgrades mid-run.
+var aptLockPattern = regexp.MustCompile(`(?i)could not get lock|dpkg frontend lock|is another process using it|resource temporarily unavailable`)
+
+// aptRetryWaits is the delay before attempts 2..N of the dist-upgrade
+// simulation when the apt lock is held. A package var so tests can shorten it.
+var aptRetryWaits = []time.Duration{0, 5 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// pendingUpdatesWithRetry retries `apt-get -s dist-upgrade` a few times when it
+// fails on a held apt lock (unattended-upgrades). Other errors fail fast.
+func pendingUpdatesWithRetry(ctx context.Context) (map[string]pendingUpdate, error) {
+	var err error
+	for _, wait := range aptRetryWaits {
+		if wait > 0 {
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			logging.Warn("apt lock held, retrying dist-upgrade simulation")
+		}
+		var updates map[string]pendingUpdate
+		updates, err = pendingUpdates(ctx)
+		if err == nil {
+			return updates, nil
+		}
+		if !aptLockPattern.MatchString(err.Error()) {
+			return nil, err
+		}
+	}
+	return nil, err
 }
 
 // pendingUpdates parses `apt-get -s dist-upgrade` into a map keyed by

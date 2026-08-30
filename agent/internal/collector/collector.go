@@ -6,11 +6,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
 
+	"cadence/agent/internal/logging"
 	"cadence/agent/internal/report"
 )
 
@@ -24,11 +24,11 @@ func Collect(ctx context.Context, agentVersion string, runAptUpdate bool) (repor
 	if runAptUpdate {
 		if err := aptUpdate(ctx); err != nil {
 			// Non-fatal: proceed with whatever apt already knows locally.
-			log.Printf("warning: apt-get update failed, using existing package lists: %v", err)
+			logging.Warn("apt-get update failed, using existing package lists", "err", err)
 		}
 	}
 
-	updates, err := pendingUpdates(ctx)
+	updates, err := pendingUpdatesWithRetry(ctx)
 	if err != nil {
 		return report.Report{}, fmt.Errorf("simulating dist-upgrade: %w", err)
 	}

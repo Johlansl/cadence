@@ -490,11 +490,12 @@ agent     --POST /jobs/{id}/result--------------------->  job: succeeded | faile
   `systemctl start cadence-agent.service`.
 - **One active job per host** (`409` otherwise). The poll and the report both
   use `SELECT … FOR UPDATE SKIP LOCKED`, so only one ever claims a given job.
-- **Reboot** (see below). The `reboot_required` flag comes from
-  `/var/run/reboot-required`, created by **`update-notifier-common`** (Ubuntu,
-  Debian ≤12) or **`reboot-notifier`** (Debian 13, where `update-notifier-common`
-  was removed). `scripts/agent-install.sh` installs whichever is available;
-  without one, a kernel upgrade won't raise the flag.
+- **Reboot** (see below). `reboot_required` is true when
+  `/var/run/reboot-required` exists (created by **`update-notifier-common`** on
+  Ubuntu / Debian ≤12, **`reboot-notifier`** on Debian 13) **or** an installed
+  kernel image of the running flavour is newer than the running kernel (agent
+  ≥0.6.0, no package needed). `scripts/agent-install.sh` still installs a helper
+  when one is available.
 - Agent kill-switch: `CADENCE_ENABLE_UPGRADES=false` in `agent.env` — a
   triggered job is then reported back as `failed` with that reason.
 - The dashboard asks for the `X-Admin-Key` once (kept in `sessionStorage`) the

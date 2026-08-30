@@ -26,7 +26,7 @@ import (
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.5.2"
+const agentVersion = "0.6.0"
 
 func main() {
 	log.SetFlags(0)
