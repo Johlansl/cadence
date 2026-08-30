@@ -1,10 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { pill } from '../lib/pill'
-import type { HostDetail as HostDetailData, HostPackage, RebootPolicy } from '../types'
+import type { HostDetail as HostDetailData, RebootPolicy } from '../types'
 import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
 import { Freshness } from './Freshness'
 import { Jobs } from './Jobs'
+import { PackageTable } from './PackageTable'
 import { Schedule } from './Schedule'
 import { StatusBadge } from './StatusBadge'
 import { TagChips } from './TagChips'
@@ -277,13 +278,6 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-// security update first, then any update, then the rest — name as tie-breaker.
-function rank(p: HostPackage): number {
-  if (p.candidate_version && p.is_security_update) return 0
-  if (p.candidate_version) return 1
-  return 2
-}
-
 export function HostDetail({
   host,
   onChanged,
@@ -293,19 +287,10 @@ export function HostDetail({
   onChanged: () => void
   onDeleted: () => void
 }) {
-  const [onlyUpdates, setOnlyUpdates] = useState(true)
-
   const withUpdates = useMemo(
     () => host.packages.filter((p) => p.candidate_version).length,
     [host.packages],
   )
-
-  const rows = useMemo(() => {
-    const sorted = [...host.packages].sort(
-      (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name),
-    )
-    return onlyUpdates ? sorted.filter((p) => p.candidate_version) : sorted
-  }, [host.packages, onlyUpdates])
 
   return (
     <div className="flex h-full flex-col">
@@ -360,57 +345,7 @@ export function HostDetail({
         <Jobs hostId={host.id} />
         <Schedule hostId={host.id} />
 
-        <div className="flex items-center justify-between border-t border-zinc-800 px-6 py-2 text-xs text-zinc-500">
-          <span>
-            {rows.length} package{rows.length === 1 ? '' : 's'} shown
-            {onlyUpdates && withUpdates !== host.packages.length && ` (of ${host.packages.length})`}
-          </span>
-          <label className="flex cursor-pointer items-center gap-1.5 select-none">
-            <input
-              type="checkbox"
-              checked={onlyUpdates}
-              onChange={(e) => setOnlyUpdates(e.target.checked)}
-              className="accent-zinc-400"
-            />
-            only pending updates
-          </label>
-        </div>
-
-        <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 bg-zinc-950 text-xs uppercase tracking-wide text-zinc-600">
-            <tr>
-              <th className="px-6 py-2 font-medium">Package</th>
-              <th className="px-3 py-2 font-medium">Installed</th>
-              <th className="px-3 py-2 font-medium">Candidate</th>
-              <th className="px-3 py-2 font-medium">Origin</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-900 font-mono">
-            {rows.map((p) => (
-              <tr key={`${p.name}/${p.architecture}`} className="hover:bg-zinc-900/50">
-                <td className="px-6 py-1.5 text-zinc-200">
-                  {p.name}
-                  <span className="text-zinc-600">:{p.architecture}</span>
-                  {p.is_security_update && (
-                    <span className="ml-2 rounded bg-red-500/10 px-1 font-sans text-[10px] font-medium text-red-400 ring-1 ring-red-500/30">
-                      SEC
-                    </span>
-                  )}
-                </td>
-                <td className="px-3 py-1.5 text-zinc-500">{p.installed_version}</td>
-                <td className="px-3 py-1.5 text-zinc-300">{p.candidate_version ?? '—'}</td>
-                <td className="px-3 py-1.5 text-zinc-600">{p.update_origin ?? '—'}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-6 py-6 text-center font-sans text-zinc-600">
-                  {onlyUpdates ? 'No pending updates.' : 'No packages reported.'}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <PackageTable packages={host.packages} />
       </div>
     </div>
   )
