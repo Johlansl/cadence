@@ -20,12 +20,13 @@ import (
 	"cadence/agent/internal/collector"
 	"cadence/agent/internal/config"
 	"cadence/agent/internal/executor"
+	"cadence/agent/internal/logging"
 	"cadence/agent/internal/reboot"
 	"cadence/agent/internal/report"
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.5.1"
+const agentVersion = "0.5.2"
 
 func main() {
 	log.SetFlags(0)
@@ -42,7 +43,7 @@ func main() {
 	}
 
 	if err := run(*pollOnly); err != nil {
-		log.Printf("error: %v", err)
+		logging.Error("agent run failed", "err", err)
 		os.Exit(1)
 	}
 }
@@ -83,8 +84,9 @@ func run(pollOnly bool) error {
 	}
 
 	updates, security := rep.Counts()
-	log.Printf("report sent to %s: host=%s packages=%d updates=%d security=%d reboot_required=%v",
-		cfg.ServerURL, rep.Hostname, len(rep.Packages), updates, security, rep.RebootRequired)
+	logging.Info("report sent",
+		"server", cfg.ServerURL, "host", rep.Hostname, "packages", len(rep.Packages),
+		"updates", updates, "security", security, "reboot_required", rep.RebootRequired)
 
 	if job == nil {
 		return nil
@@ -93,7 +95,7 @@ func run(pollOnly bool) error {
 }
 
 func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
-	log.Printf("job received: id=%s type=%s", job.ID, job.JobType)
+	logging.Info("job received", "job_id", job.ID, "job_type", job.JobType)
 
 	submit := func(status string, exitCode int, logText string, reboot bool) error {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
@@ -114,7 +116,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			return submit("failed", 0,
 				"reboot is disabled on this host (CADENCE_ENABLE_REBOOT=false)", false)
 		}
-		log.Printf("job %s: dedicated reboot job -> systemctl --no-block reboot", job.ID)
+		logging.Info("dedicated reboot job -> systemctl --no-block reboot", "job_id", job.ID)
 		if err := submit("succeeded", 0,
 			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n", true); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
@@ -124,12 +126,12 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		if err := reboot.Issue(rctx); err != nil {
 			return fmt.Errorf("issuing reboot: %w", err)
 		}
-		log.Printf("job %s: reboot queued", job.ID)
+		logging.Info("reboot queued", "job_id", job.ID)
 		return nil
 	}
 
 	if !cfg.EnableUpgrades {
-		log.Printf("upgrades are disabled on this host; reporting job as failed")
+		logging.Warn("upgrades disabled on this host, reporting job as failed", "job_id", job.ID)
 		return submit("failed", 0,
 			"upgrades are disabled on this host (CADENCE_ENABLE_UPGRADES=false)", false)
 	}
@@ -140,14 +142,16 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	log.Printf("running apt-get dist-upgrade ...")
+	logging.Info("running apt-get dist-upgrade", "job_id", job.ID)
 	res := executor.RunAptUpgrade(ctx)
 
 	status := "succeeded"
 	if res.ExitCode != 0 || res.Err != nil {
 		status = "failed"
 	}
-	log.Printf("job %s %s: apt exit=%d reboot_required=%v", job.ID, status, res.ExitCode, res.RebootRequired)
+	logging.Info("apt-get dist-upgrade finished",
+		"job_id", job.ID, "status", status, "exit_code", res.ExitCode,
+		"reboot_required", res.RebootRequired)
 
 	// Decide about the reboot. The server already resolved the effective mode
 	// (per-job override, else host reboot_policy) into params.reboot.
@@ -184,13 +188,13 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	}
 
 	if willReboot {
-		log.Printf("job %s: reboot required and mode=auto -> issuing systemctl --no-block reboot", job.ID)
+		logging.Info("reboot required and mode=auto -> systemctl --no-block reboot", "job_id", job.ID)
 		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer rcancel()
 		if err := reboot.Issue(rctx); err != nil {
 			return fmt.Errorf("issuing reboot: %w", err)
 		}
-		log.Printf("job %s: reboot queued", job.ID)
+		logging.Info("reboot queued", "job_id", job.ID)
 	}
 	return nil
 }
@@ -203,14 +207,14 @@ func reportAfterJob(cfg config.Config, c *client.Client) {
 
 	rep, err := collector.Collect(ctx, agentVersion, cfg.RunAptUpdate)
 	if err != nil {
-		log.Printf("post-job report: collect failed: %v", err)
+		logging.Warn("post-job report: collect failed", "err", err)
 		return
 	}
 	if _, err := c.SendReport(ctx, rep); err != nil {
-		log.Printf("post-job report: send failed: %v", err)
+		logging.Warn("post-job report: send failed", "err", err)
 		return
 	}
 	updates, security := rep.Counts()
-	log.Printf("post-job report sent: updates=%d security=%d reboot_required=%v",
-		updates, security, rep.RebootRequired)
+	logging.Info("post-job report sent",
+		"updates", updates, "security", security, "reboot_required", rep.RebootRequired)
 }

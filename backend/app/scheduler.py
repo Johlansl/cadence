@@ -21,11 +21,17 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
 from app.db.base import SessionLocal
 from app.models.models import Job, Report, Schedule, SchedulerState
 
 log = logging.getLogger("cadence.scheduler")
+
+
+def _f(**fields: object) -> dict:
+    """Wrap structured fields for the logfmt formatter."""
+    return {"fields": fields}
 
 TICK_SECONDS = 60
 RETENTION_EVERY = timedelta(hours=24)
@@ -77,12 +83,14 @@ def tick(now: datetime | None = None, db: Session | None = None) -> int:
                 )
                 sched.last_run_at = now
                 queued += 1
-                log.info("schedule %s: window open -> job queued for host %s", sched.id, sched.host_id)
+                log.info(
+                    "schedule window open, job queued",
+                    extra=_f(schedule_id=sched.id, host_id=sched.host_id),
+                )
             else:
                 log.info(
-                    "schedule %s: skipped, host %s has an active job -> next window",
-                    sched.id,
-                    sched.host_id,
+                    "schedule window skipped, host busy",
+                    extra=_f(schedule_id=sched.id, host_id=sched.host_id),
                 )
             sched.next_run_at = next_run_at(
                 kind=sched.kind,
@@ -145,7 +153,8 @@ def reap_stuck_jobs(
             db.close()
     if reaped:
         log.warning(
-            "reaped %d stuck running job(s) (timeout=%ds)", reaped, timeout_seconds
+            "reaped stuck running jobs",
+            extra=_f(count=reaped, timeout_seconds=timeout_seconds),
         )
     return reaped
 
@@ -216,21 +225,21 @@ def run_retention_if_due(now: datetime | None = None) -> None:
         )
         _mark_retention_done(db, now)
     log.info(
-        "retention sweep: %d reports, %d jobs deleted (keep reports=%dd jobs=%dd)",
-        reports,
-        jobs,
-        settings.reports_retention_days,
-        settings.jobs_retention_days,
+        "retention sweep done",
+        extra=_f(
+            reports_deleted=reports,
+            jobs_deleted=jobs,
+            keep_reports_days=settings.reports_retention_days,
+            keep_jobs_days=settings.jobs_retention_days,
+        ),
     )
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+    configure_logging()
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
-    log.info("cadence scheduler started (tick=%ss)", TICK_SECONDS)
+    log.info("scheduler started", extra=_f(tick_seconds=TICK_SECONDS))
     while not _stop:
         try:
             reap_stuck_jobs()
@@ -242,7 +251,7 @@ def main() -> None:
             if _stop:
                 break
             time.sleep(1)
-    log.info("cadence scheduler stopped")
+    log.info("scheduler stopped")
 
 
 if __name__ == "__main__":
