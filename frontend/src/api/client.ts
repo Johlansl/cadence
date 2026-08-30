@@ -88,6 +88,14 @@ export const api = {
     return adminWrite<null>(`/admin/hosts/${hostId}/jobs`, adminKey, 'DELETE', undefined)
   },
 
+  // A dedicated reboot job (for reboot_policy "prompt" / an explicit reboot).
+  rebootHost(hostId: string, adminKey: string) {
+    return adminWrite<Job>(`/admin/hosts/${hostId}/jobs`, adminKey, 'POST', {
+      job_type: 'reboot',
+      requested_by: 'dashboard',
+    })
+  },
+
   patchHost(
     hostId: string,
     adminKey: string,

@@ -99,3 +99,63 @@ def test_per_job_override_can_disable_on_auto_host(client):
         json={"params": {"reboot": "never"}},
     )
     assert _claim(client, token)["params"]["reboot"] == "never"
+
+
+# --- 'prompt' mode + dedicated reboot job (F-30) --------------------------
+
+
+def test_reboot_policy_accepts_prompt(client):
+    host_id, _ = create_host(client)
+    assert _set_policy(client, host_id, "prompt").status_code == 200
+    assert client.get(f"/api/v1/hosts/{host_id}").json()["reboot_policy"] == "prompt"
+
+
+def test_prompt_host_upgrade_job_pins_prompt(client):
+    host_id, token = create_host(client)
+    _set_policy(client, host_id, "prompt")
+    client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
+    assert _claim(client, token)["params"]["reboot"] == "prompt"
+
+
+def test_dedicated_reboot_job(client, db_session):
+    host_id, token = create_host(client)
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs",
+        headers=ADMIN_HEADERS,
+        json={"job_type": "reboot"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["job_type"] == "reboot"
+
+    handoff = _claim(client, token)
+    assert handoff["job_type"] == "reboot"
+    # no reboot pinned into params for a non-upgrade job
+    assert "reboot" not in handoff["params"]
+
+
+def test_unknown_job_type_rejected(client):
+    host_id, _ = create_host(client)
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs",
+        headers=ADMIN_HEADERS,
+        json={"job_type": "format_c"},
+    )
+    assert r.status_code == 422
+
+
+def test_schedule_accepts_prompt_reboot_param(client):
+    host_id, _ = create_host(client)
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/schedules",
+        headers=ADMIN_HEADERS,
+        json={
+            "kind": "weekly",
+            "weekday": 0,
+            "hour": 3,
+            "minute": 0,
+            "timezone": "UTC",
+            "params": {"reboot": "prompt"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["params"]["reboot"] == "prompt"

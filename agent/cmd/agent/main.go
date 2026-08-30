@@ -25,7 +25,7 @@ import (
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.4.0"
+const agentVersion = "0.5.0"
 
 func main() {
 	log.SetFlags(0)
@@ -98,6 +98,28 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			Log:            logText,
 			RebootRequired: reboot,
 		})
+	}
+
+	// Dedicated reboot job (reboot_policy "prompt" / a "reboot now" from the
+	// dashboard): no upgrade, just reboot. Report success before issuing it so
+	// the job never hangs in "running".
+	if job.JobType == "reboot" {
+		if !cfg.EnableReboot {
+			return submit("failed", 0,
+				"reboot is disabled on this host (CADENCE_ENABLE_REBOOT=false)", false)
+		}
+		log.Printf("job %s: dedicated reboot job -> systemctl --no-block reboot", job.ID)
+		if err := submit("succeeded", 0,
+			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n", true); err != nil {
+			return fmt.Errorf("submitting job result: %w", err)
+		}
+		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+		defer rcancel()
+		if err := reboot.Issue(rctx); err != nil {
+			return fmt.Errorf("issuing reboot: %w", err)
+		}
+		log.Printf("job %s: reboot queued", job.ID)
+		return nil
 	}
 
 	if !cfg.EnableUpgrades {

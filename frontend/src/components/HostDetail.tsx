@@ -45,6 +45,7 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
         >
           <option value="never">never</option>
           <option value="auto">auto</option>
+          <option value="prompt">prompt</option>
         </select>
         {busy && <span className="text-xs text-zinc-500">saving…</span>}
       </dd>
@@ -202,6 +203,54 @@ function TagsControl({
   )
 }
 
+function RebootNowButton({ hostId, onChanged }: { hostId: string; onChanged: () => void }) {
+  const confirm = useConfirm()
+  const toast = useToast()
+  const action = useAdminKeyAction((key) => api.rebootHost(hostId, key))
+
+  const go = async () => {
+    if (
+      !(await confirm({
+        title: 'Reboot this host now?',
+        body: 'Queues a reboot job. The agent reboots the host as soon as it picks the job up (within ~1 min).',
+        confirmLabel: 'Reboot',
+        danger: true,
+      }))
+    )
+      return
+    const r = await action.run()
+    if (r?.ok) toast.notify('success', 'Reboot job queued.')
+  }
+  const onKeySubmit = async () => {
+    const r = await action.submitKey()
+    if (r?.ok) {
+      toast.notify('success', 'Reboot job queued.')
+      onChanged()
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => void go()}
+        disabled={action.busy}
+        className="rounded border border-orange-500/40 px-2 py-0.5 text-xs text-orange-300 hover:bg-orange-500/10 disabled:opacity-50"
+      >
+        {action.busy ? '…' : 'reboot now'}
+      </button>
+      {action.needKey && (
+        <AdminKeyPrompt
+          value={action.keyDraft}
+          onChange={action.setKeyDraft}
+          onSubmit={() => void onKeySubmit()}
+        />
+      )}
+      {action.error && <p className="text-xs text-red-400">{action.error}</p>}
+    </>
+  )
+}
+
 function HostActions({
   hostId,
   isActive,
@@ -338,6 +387,7 @@ export function HostDetail({
               </span>
             )}
             {host.reboot_required && <span className={pill('reboot')}>reboot required</span>}
+            {host.reboot_required && <RebootNowButton hostId={host.id} onChanged={onChanged} />}
           </div>
           <HostActions
             hostId={host.id}

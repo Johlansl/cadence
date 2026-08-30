@@ -3,7 +3,7 @@ export type HostStatus =
   | 'updates_available'
   | 'security_updates_available'
 
-export type RebootPolicy = 'auto' | 'never'
+export type RebootPolicy = 'auto' | 'never' | 'prompt'
 
 export interface HostSummary {
   id: string

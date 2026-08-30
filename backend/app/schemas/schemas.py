@@ -12,7 +12,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # What the agent does after an upgrade that leaves a reboot pending.
-RebootMode = Literal["auto", "never"]
+#   auto   -- reboot immediately
+#   never  -- leave it, operator handles reboots out of band
+#   prompt -- leave it, but the dashboard offers a one-click reboot job
+RebootMode = Literal["auto", "never", "prompt"]
+
+# Job kinds the API accepts. The scheduler only ever creates 'apt_upgrade'.
+JobType = Literal["apt_upgrade", "reboot"]
 
 
 # --- admin: host provisioning -------------------------------------------------
@@ -200,7 +206,7 @@ class HostDetail(HostSummary):
 # --- jobs ----------------------------------------------------------------
 
 class JobCreate(BaseModel):
-    job_type: str = "apt_upgrade"
+    job_type: JobType = "apt_upgrade"
     params: dict = Field(default_factory=dict)
     requested_by: str | None = None
 
@@ -209,8 +215,8 @@ class JobCreate(BaseModel):
     def _validate_reboot_override(cls, v: dict) -> dict:
         # Optional per-job override of the host's reboot_policy.
         reboot = v.get("reboot")
-        if reboot is not None and reboot not in ("auto", "never"):
-            raise ValueError("params.reboot must be 'auto' or 'never'")
+        if reboot is not None and reboot not in ("auto", "never", "prompt"):
+            raise ValueError("params.reboot must be 'auto', 'never' or 'prompt'")
         return v
 
 
@@ -273,8 +279,8 @@ class ScheduleIn(BaseModel):
         if self.kind == "weekly" and (self.weekday is None or self.day_of_month is not None):
             raise ValueError("weekly needs weekday and no day_of_month")
         reboot = self.params.get("reboot")
-        if reboot is not None and reboot not in ("auto", "never"):
-            raise ValueError("params.reboot must be 'auto' or 'never'")
+        if reboot is not None and reboot not in ("auto", "never", "prompt"):
+            raise ValueError("params.reboot must be 'auto', 'never' or 'prompt'")
         return self
 
 

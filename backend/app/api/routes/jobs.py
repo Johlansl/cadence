@@ -42,8 +42,9 @@ def claim_pending_job(db: Session, host: Host, now) -> Job | None:
     if job is not None:
         job.status = "running"
         job.started_at = now
-        effective_reboot = job.params.get("reboot") or host.reboot_policy
-        job.params = {**job.params, "reboot": effective_reboot}
+        if job.job_type == "apt_upgrade":
+            effective_reboot = job.params.get("reboot") or host.reboot_policy
+            job.params = {**job.params, "reboot": effective_reboot}
     return job
 
 
