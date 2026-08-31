@@ -36,6 +36,7 @@ def _f(**fields: object) -> dict:
 TICK_SECONDS = 60
 RETENTION_EVERY = timedelta(hours=24)
 RETENTION_STATE_KEY = "last_retention_at"
+HEARTBEAT_STATE_KEY = "last_tick_at"
 _stop = False
 
 
@@ -235,6 +236,26 @@ def run_retention_if_due(now: datetime | None = None) -> None:
     )
 
 
+def _mark_heartbeat(db: Session, now: datetime) -> None:
+    db.execute(
+        pg_insert(SchedulerState)
+        .values(key=HEARTBEAT_STATE_KEY, value=now.isoformat(), updated_at=now)
+        .on_conflict_do_update(
+            index_elements=["key"], set_={"value": now.isoformat(), "updated_at": now}
+        )
+    )
+    db.commit()
+
+
+def record_heartbeat(now: datetime | None = None) -> None:
+    """Persist 'the loop finished a full pass at this time'. The scheduler
+    service healthcheck (app.scheduler_healthcheck) fails once this goes
+    stale, catching a wedged loop that a bare PID check would miss."""
+    now = now or datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        _mark_heartbeat(db, now)
+
+
 def main() -> None:
     configure_logging()
     signal.signal(signal.SIGTERM, _request_stop)
@@ -245,6 +266,7 @@ def main() -> None:
             reap_stuck_jobs()
             tick()
             run_retention_if_due()
+            record_heartbeat()
         except Exception:  # noqa: BLE001 -- keep the loop alive
             log.exception("scheduler tick failed")
         for _ in range(TICK_SECONDS):

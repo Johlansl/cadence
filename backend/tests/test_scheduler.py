@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.models import Job, Schedule
-from app.scheduler import tick
+from app.models.models import Job, Schedule, SchedulerState
+from app.scheduler import HEARTBEAT_STATE_KEY, _mark_heartbeat, tick
 from tests.conftest import ADMIN_HEADERS, create_host
 
 
@@ -77,3 +77,19 @@ def test_tick_ignores_disabled_and_future(client, db_session):
     db_session.flush()
 
     assert tick(db=db_session) == 0
+
+
+def test_heartbeat_is_upserted(db_session):
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    _mark_heartbeat(db_session, first)
+    stored = db_session.execute(
+        select(SchedulerState.value).where(SchedulerState.key == HEARTBEAT_STATE_KEY)
+    ).scalar_one()
+    assert datetime.fromisoformat(stored) == first
+
+    later = first + timedelta(minutes=1)
+    _mark_heartbeat(db_session, later)
+    stored = db_session.execute(
+        select(SchedulerState.value).where(SchedulerState.key == HEARTBEAT_STATE_KEY)
+    ).scalar_one()
+    assert datetime.fromisoformat(stored) == later

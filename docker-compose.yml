@@ -93,13 +93,14 @@ services:
         condition: service_healthy
     command: ["python", "-m", "app.scheduler"]
     healthcheck:
-      # No socket to probe -- just assert the loop process is still PID 1
-      # (a crash exits the container and restart: unless-stopped takes over).
-      test: ["CMD-SHELL", "grep -qa app.scheduler /proc/1/cmdline"]
+      # The loop upserts a `last_tick_at` heartbeat every pass; this fails
+      # when it goes stale -- a wedged loop a PID check would not catch.
+      test: ["CMD-SHELL", "python -m app.scheduler_healthcheck"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 20s
+      # prestart (wait for DB + migrate) plus the first loop pass.
+      start_period: 45s
 
   frontend:
     build: ./frontend
