@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { relativeTime } from '../lib/time'
 import type { Schedule as ScheduleData, ScheduleInput, ScheduleKind } from '../types'
-import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
+import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { useToast } from './Toast'
 
@@ -142,10 +142,6 @@ export function Schedule({ hostId }: { hostId: string }) {
       await refresh()
     }
   }, [deleter, confirm, toast, refresh])
-  const onKeySubmit = useCallback(async () => {
-    const r = saver.needKey ? await saver.submitKey() : await deleter.submitKey()
-    if (r?.ok) await refresh()
-  }, [saver, deleter, refresh])
 
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }))
   const field =
@@ -279,16 +275,12 @@ export function Schedule({ hostId }: { hostId: string }) {
         )}
       </div>
 
-      {(saver.needKey || deleter.needKey) && (
-        <AdminKeyPrompt
-          value={saver.needKey ? saver.keyDraft : deleter.keyDraft}
-          onChange={saver.needKey ? saver.setKeyDraft : deleter.setKeyDraft}
-          onSubmit={() => void onKeySubmit()}
-        />
-      )}
-      {(saver.error || deleter.error) && (
-        <p className="mt-2 text-xs text-red-400">{saver.error ?? deleter.error}</p>
-      )}
+      <AdminActionFeedback
+        actions={[saver, deleter]}
+        onKeyAccepted={(r) => {
+          if (r?.ok) void refresh()
+        }}
+      />
     </section>
   )
 }

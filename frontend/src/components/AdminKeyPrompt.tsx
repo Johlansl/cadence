@@ -47,6 +47,42 @@ export function useAdminKeyAction<T>(action: (key: string) => Promise<AdminWrite
   return { run, submitKey, busy, error, setError, needKey, keyDraft, setKeyDraft }
 }
 
+export type AdminKeyAction = ReturnType<typeof useAdminKeyAction>
+
+// Renders the "enter the admin key" prompt for whichever of `actions` is
+// currently asking for it, plus the first error among them. Replaces the
+// `{(a.needKey || b.needKey) && <AdminKeyPrompt value={a.needKey ? ... : ...}/>}`
+// boilerplate that every admin-guarded control used to repeat.
+export function AdminActionFeedback({
+  actions,
+  onKeyAccepted,
+  errorClassName = 'mt-2 text-xs text-red-400',
+}: {
+  actions: AdminKeyAction | AdminKeyAction[]
+  // Called after the key is saved and the pending action retried, with its
+  // result and the action that ran (identity-comparable to disambiguate).
+  onKeyAccepted?: (res: AdminWriteResult<unknown> | undefined, action: AdminKeyAction) => void
+  errorClassName?: string
+}) {
+  const list = Array.isArray(actions) ? actions : [actions]
+  const active = list.find((a) => a.needKey)
+  const error = list.map((a) => a.error).find((e): e is string => Boolean(e))
+  return (
+    <>
+      {active && (
+        <AdminKeyPrompt
+          value={active.keyDraft}
+          onChange={active.setKeyDraft}
+          onSubmit={() => {
+            void active.submitKey().then((res) => onKeyAccepted?.(res, active))
+          }}
+        />
+      )}
+      {error && <p className={errorClassName}>{error}</p>}
+    </>
+  )
+}
+
 export function AdminKeyPrompt({
   value,
   onChange,

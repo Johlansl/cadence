@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import { pill, type Tone } from '../lib/pill'
 import { relativeTime } from '../lib/time'
 import type { Job, JobStatus, RebootPolicy } from '../types'
-import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
+import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { useToast } from './Toast'
 
@@ -145,12 +145,6 @@ export function Jobs({ hostId }: { hostId: string }) {
     }
   }, [clear, confirm, toast, refresh])
 
-  const onKeySubmit = useCallback(async () => {
-    if (trig.needKey) await trig.submitKey()
-    else await clear.submitKey()
-    await refresh()
-  }, [trig, clear, refresh])
-
   const shown = showAll ? allJobs : allJobs.slice(0, PREVIEW)
   const last = jobs[0]
   const canLoadOlder = showAll && !exhausted && allJobs.length >= PAGE
@@ -211,16 +205,7 @@ export function Jobs({ hostId }: { hostId: string }) {
         </p>
       ) : (
         <>
-          {(trig.needKey || clear.needKey) && (
-            <AdminKeyPrompt
-              value={trig.needKey ? trig.keyDraft : clear.keyDraft}
-              onChange={trig.needKey ? trig.setKeyDraft : clear.setKeyDraft}
-              onSubmit={() => void onKeySubmit()}
-            />
-          )}
-          {(trig.error || clear.error) && (
-            <p className="mt-2 text-xs text-red-400">{trig.error ?? clear.error}</p>
-          )}
+          <AdminActionFeedback actions={[trig, clear]} onKeyAccepted={() => void refresh()} />
 
           {jobs.length === 0 ? (
             <p className="mt-2 text-xs text-zinc-600">No jobs yet.</p>

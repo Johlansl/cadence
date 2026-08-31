@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { api } from '../api/client'
 import { pill } from '../lib/pill'
 import type { HostDetail as HostDetailData, RebootPolicy } from '../types'
-import { AdminKeyPrompt, useAdminKeyAction } from './AdminKeyPrompt'
+import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { Freshness } from './Freshness'
 import { HostHistory } from './HostHistory'
@@ -21,16 +21,16 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
     choiceRef.current = value
   }, [value])
 
-  const action = useCallback(
+  const patch = useCallback(
     (key: string) => api.patchHost(hostId, key, { reboot_policy: choiceRef.current }),
     [hostId],
   )
-  const { run, submitKey, busy, error, needKey, keyDraft, setKeyDraft } = useAdminKeyAction(action)
+  const act = useAdminKeyAction(patch)
 
   const change = (next: RebootPolicy) => {
     setChoice(next)
     choiceRef.current = next
-    void run()
+    void act.run()
   }
 
   return (
@@ -39,7 +39,7 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
       <dd className="mt-0.5 flex items-center gap-2 font-mono text-sm text-zinc-200">
         <select
           value={choice}
-          disabled={busy}
+          disabled={act.busy}
           onChange={(e) => change(e.target.value as RebootPolicy)}
           className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-sm text-zinc-200 outline-none focus:border-zinc-500 disabled:opacity-50"
         >
@@ -47,12 +47,9 @@ function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootP
           <option value="auto">auto</option>
           <option value="prompt">prompt</option>
         </select>
-        {busy && <span className="text-xs text-zinc-500">saving…</span>}
+        {act.busy && <span className="text-xs text-zinc-500">saving…</span>}
       </dd>
-      {needKey && (
-        <AdminKeyPrompt value={keyDraft} onChange={setKeyDraft} onSubmit={() => void submitKey()} />
-      )}
-      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+      <AdminActionFeedback actions={act} errorClassName="mt-1 text-xs text-red-400" />
     </div>
   )
 }
@@ -102,26 +99,19 @@ function TagsControl({
     update(next)
   }
 
-  const action = useCallback(
+  const patch = useCallback(
     (key: string) => api.patchHost(hostId, key, { tags: draftRef.current }),
     [hostId],
   )
-  const { run, submitKey, busy, error, needKey, keyDraft, setKeyDraft } = useAdminKeyAction(action)
+  const act = useAdminKeyAction(patch)
 
-  const save = async () => {
-    const r = await run()
+  const afterSave = (r: { ok: boolean } | undefined) => {
     if (r?.ok) {
       toast.notify('success', 'Tags saved.')
       onChanged()
     }
   }
-  const onKeySubmit = async () => {
-    const r = await submitKey()
-    if (r?.ok) {
-      toast.notify('success', 'Tags saved.')
-      onChanged()
-    }
-  }
+  const save = async () => afterSave(await act.run())
 
   const dirty = !sameTags(draft, tags)
   const inputCls =
@@ -135,10 +125,10 @@ function TagsControl({
           <button
             type="button"
             onClick={() => void save()}
-            disabled={busy}
+            disabled={act.busy}
             className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500"
           >
-            {busy ? 'saving…' : 'save tags'}
+            {act.busy ? 'saving…' : 'save tags'}
           </button>
         )}
       </div>
@@ -189,14 +179,7 @@ function TagsControl({
         </button>
       </div>
 
-      {needKey && (
-        <AdminKeyPrompt
-          value={keyDraft}
-          onChange={setKeyDraft}
-          onSubmit={() => void onKeySubmit()}
-        />
-      )}
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      <AdminActionFeedback actions={act} onKeyAccepted={(r) => afterSave(r)} />
     </section>
   )
 }
@@ -219,13 +202,6 @@ function RebootNowButton({ hostId, onChanged }: { hostId: string; onChanged: () 
     const r = await action.run()
     if (r?.ok) toast.notify('success', 'Reboot job queued.')
   }
-  const onKeySubmit = async () => {
-    const r = await action.submitKey()
-    if (r?.ok) {
-      toast.notify('success', 'Reboot job queued.')
-      onChanged()
-    }
-  }
 
   return (
     <>
@@ -237,14 +213,16 @@ function RebootNowButton({ hostId, onChanged }: { hostId: string; onChanged: () 
       >
         {action.busy ? '…' : 'reboot now'}
       </button>
-      {action.needKey && (
-        <AdminKeyPrompt
-          value={action.keyDraft}
-          onChange={action.setKeyDraft}
-          onSubmit={() => void onKeySubmit()}
-        />
-      )}
-      {action.error && <p className="text-xs text-red-400">{action.error}</p>}
+      <AdminActionFeedback
+        actions={action}
+        errorClassName="text-xs text-red-400"
+        onKeyAccepted={(r) => {
+          if (r?.ok) {
+            toast.notify('success', 'Reboot job queued.')
+            onChanged()
+          }
+        }}
+      />
     </>
   )
 }
@@ -297,22 +275,6 @@ function HostActions({
       onDeleted()
     }
   }
-  const onKeySubmit = async () => {
-    if (retire.needKey) {
-      const r = await retire.submitKey()
-      if (r?.ok) {
-        toast.notify('success', isActive ? 'Host retired.' : 'Host reactivated.')
-        onChanged()
-      }
-    } else {
-      const r = await remove.submitKey()
-      if (r?.ok) {
-        toast.notify('success', 'Host deleted.')
-        onDeleted()
-      }
-    }
-  }
-
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="flex items-center gap-2 text-xs">
@@ -333,16 +295,20 @@ function HostActions({
           delete
         </button>
       </div>
-      {(retire.needKey || remove.needKey) && (
-        <AdminKeyPrompt
-          value={retire.needKey ? retire.keyDraft : remove.keyDraft}
-          onChange={retire.needKey ? retire.setKeyDraft : remove.setKeyDraft}
-          onSubmit={() => void onKeySubmit()}
-        />
-      )}
-      {(retire.error || remove.error) && (
-        <p className="text-xs text-red-400">{retire.error ?? remove.error}</p>
-      )}
+      <AdminActionFeedback
+        actions={[retire, remove]}
+        errorClassName="text-xs text-red-400"
+        onKeyAccepted={(r, a) => {
+          if (!r?.ok) return
+          if (a === retire) {
+            toast.notify('success', isActive ? 'Host retired.' : 'Host reactivated.')
+            onChanged()
+          } else {
+            toast.notify('success', 'Host deleted.')
+            onDeleted()
+          }
+        }}
+      />
     </div>
   )
 }
