@@ -39,6 +39,42 @@ backend:
     - pip install -r backend/requirements-dev.txt
     - cd backend && pytest -q
 
+stack:
+  # Smoke-test the whole docker-compose stack from a clean state: build the
+  # images, bring everything up, and assert it converges. Catches broken
+  # Dockerfiles and schema/migration bootstrap regressions the unit suites
+  # (which build the DB from Alembic directly) cannot see.
+  stage: test
+  image: docker:27
+  services:
+    - docker:27-dind
+  timeout: 15m
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  before_script:
+    - docker compose version || apk add --no-cache docker-cli-compose
+    - |
+      cat > .env <<'EOF'
+      POSTGRES_USER=cadence
+      POSTGRES_PASSWORD=cadence-ci
+      POSTGRES_DB=cadence
+      CADENCE_ADMIN_KEY=ci-admin-key-0123456789abcdef
+      CADENCE_SITE_ADDRESS=cadence.ci.local
+      EOF
+    - mkdir -p dist   # caddy bind-mounts ./dist (gitignored, absent in CI)
+  script:
+    - docker compose up -d --build --wait --wait-timeout 240
+    - docker compose ps
+    - docker compose run --rm backend alembic current
+    - docker compose run --rm backend alembic current | grep -qE '^0006 \(head\)$'
+    - docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5); print('readyz ok')"
+  after_script:
+    - docker compose logs --tail=80 || true
+    - docker compose down -v || true
+
 frontend:
   stage: test
   image: node:22-alpine
