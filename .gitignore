@@ -1,4 +1,4 @@
-# secrets
+# secrets / local config
 .env
 *.env
 !.env.example
@@ -7,6 +7,7 @@
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
 
 # node
 node_modules/
@@ -19,8 +20,11 @@ agent/bin/
 /dist/*
 !/dist/.gitkeep
 
-# extracted Caddy CA / other local certs
-*.crt
+# extracted Caddy CA (written by scripts/publish-agent.sh / restore-check.sh)
+/cadence-ca.crt
 
 # local backups produced by scripts/backup.sh
 backups/
+
+# Claude Code local state
+.claude/
