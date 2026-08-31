@@ -167,23 +167,8 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 
 	// Decide about the reboot. The server already resolved the effective mode
 	// (per-job override, else host reboot_policy) into params.reboot.
-	mode := job.RebootMode()
-	if mode == "" {
-		mode = "never"
-	}
-	willReboot := status == "succeeded" && res.RebootRequired && mode == "auto" && cfg.EnableReboot
-
-	logText := res.Log
-	if status == "succeeded" && res.RebootRequired {
-		switch {
-		case mode != "auto":
-			logText += fmt.Sprintf("\n[cadence] reboot required; reboot mode is %q -> not rebooting\n", mode)
-		case !cfg.EnableReboot:
-			logText += "\n[cadence] reboot required and reboot mode is \"auto\", but CADENCE_ENABLE_REBOOT=false -> not rebooting\n"
-		default:
-			logText += "\n[cadence] reboot required and reboot mode is \"auto\" -> rebooting via systemctl --no-block reboot\n"
-		}
-	}
+	willReboot, logSuffix := rebootDecision(status, res.RebootRequired, cfg.EnableReboot, job.RebootMode())
+	logText := res.Log + logSuffix
 
 	if err := submit(status, res.ExitCode, logText, res.RebootRequired); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
@@ -209,6 +194,27 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		logging.Info("reboot queued", "job_id", job.ID)
 	}
 	return nil
+}
+
+// rebootDecision resolves whether a finished apt_upgrade job should trigger a
+// reboot, and the explanatory line to append to the job log. `mode` is the
+// server-resolved reboot mode (params.reboot, else host reboot_policy); "" is
+// treated as "never".
+func rebootDecision(status string, rebootRequired, enableReboot bool, mode string) (willReboot bool, logSuffix string) {
+	if mode == "" {
+		mode = "never"
+	}
+	if status != "succeeded" || !rebootRequired {
+		return false, ""
+	}
+	switch {
+	case mode != "auto":
+		return false, fmt.Sprintf("\n[cadence] reboot required; reboot mode is %q -> not rebooting\n", mode)
+	case !enableReboot:
+		return false, "\n[cadence] reboot required and reboot mode is \"auto\", but CADENCE_ENABLE_REBOOT=false -> not rebooting\n"
+	default:
+		return true, "\n[cadence] reboot required and reboot mode is \"auto\" -> rebooting via systemctl --no-block reboot\n"
+	}
 }
 
 // reportAfterJob collects and sends one report. Failures are logged, not
