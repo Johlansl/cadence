@@ -1,4 +1,6 @@
-# Cadence central server -- docker-compose: db + backend + frontend.
+# Cadence central server -- docker-compose: db + backend + scheduler +
+# frontend + caddy. Every service has a healthcheck; startup is ordered
+# db -> backend -> frontend -> caddy via depends_on: service_healthy.
 
 services:
   db:
@@ -42,6 +44,14 @@ services:
       # Interface is configurable: 127.0.0.1 (default) for a local test,
       # 0.0.0.0 to reach the API from other VMs. See CADENCE_BACKEND_BIND.
       - "${CADENCE_BACKEND_BIND:-127.0.0.1}:8000:8000"
+    healthcheck:
+      # /readyz does a SELECT 1; no curl in the slim image, so use stdlib.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Covers app.prestart (wait for DB + alembic upgrade head).
+      start_period: 40s
 
   scheduler:
     # The backend image, different command: a plain loop that turns due
@@ -62,16 +72,32 @@ services:
       db:
         condition: service_healthy
     command: ["python", "-m", "app.scheduler"]
+    healthcheck:
+      # No socket to probe -- just assert the loop process is still PID 1
+      # (a crash exits the container and restart: unless-stopped takes over).
+      test: ["CMD-SHELL", "grep -qa app.scheduler /proc/1/cmdline"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   frontend:
     build: ./frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       # Plain-HTTP dashboard. Loopback by default now that Caddy fronts it;
       # set CADENCE_FRONTEND_BIND=0.0.0.0 only to reach it without TLS.
       - "${CADENCE_FRONTEND_BIND:-127.0.0.1}:8080:80"
+    healthcheck:
+      # busybox wget -- always in the nginx:alpine image.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   caddy:
     image: caddy:2-alpine
@@ -79,7 +105,8 @@ services:
     environment:
       CADENCE_SITE_ADDRESS: ${CADENCE_SITE_ADDRESS}
     depends_on:
-      - frontend
+      frontend:
+        condition: service_healthy
     ports:
       # The public entrypoint. CADENCE_HTTP_BIND controls the interface
       # (0.0.0.0 to serve the LAN). 80 redirects to 443.
@@ -93,6 +120,13 @@ services:
       # Persist the internal CA + issued certs across restarts.
       - caddy_data:/data
       - caddy_config:/config
+    healthcheck:
+      # Caddy's admin API (loopback, IPv4 only) -- up whenever Caddy is.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:
