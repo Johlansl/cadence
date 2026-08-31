@@ -44,10 +44,10 @@ the poll path racing on the same job is safe — exactly one claims it.
 - **Admin writes** (create/delete hosts, queue jobs, edit schedules): a single
   shared `X-Admin-Key` header. The dashboard keeps it in `sessionStorage` and
   prompts for it on the first write of a session.
-- **Dashboard reads** (`GET /api/v1/hosts`, `/hosts/{id}`, `/hosts/{id}/jobs`,
-  `/fleet/summary`, …): **unauthenticated**. V1 is single-user and assumes the
-  API sits on a trusted network behind the reverse proxy. See
-  [decisions.md](decisions.md) and [../SECURITY.md](../SECURITY.md).
+- **Dashboard + read/admin API**: gated by a single shared HTTP basic-auth
+  credential at Caddy (`CADENCE_DASHBOARD_*`, on by default; the agent endpoints
+  above are exempt). No multi-user auth, no RBAC. See [decisions.md](decisions.md)
+  and [../SECURITY.md](../SECURITY.md).
 
 ## Data model
 

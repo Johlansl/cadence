@@ -16,18 +16,26 @@ have one. We aim to acknowledge within a few days.
 Cadence V1 is a **single-operator tool for a trusted network**. Read this before
 exposing it beyond a LAN you control.
 
-### The API's read endpoints are unauthenticated
+### One shared credential guards the dashboard and read/admin API
 
-Every `GET` under `/api/v1` (host list, per-host package inventory with exact
-installed/candidate versions, job logs, maintenance windows, fleet summary) is
-served without any credential. Anyone who can reach the site gets a full,
-ranked "what is unpatched and where, and when it will be down for a reboot" map
-of the fleet.
+There is **no multi-user auth and no RBAC** (a deliberate V1 choice). Instead,
+Caddy applies HTTP **basic auth** — a single shared username/password
+(`CADENCE_DASHBOARD_*`) — to everything except the agent endpoints
+(`/api/v1/reports`, `/api/v1/agent/*`, `/api/v1/jobs/*/result`, which use
+per-host Bearer tokens). It is **on by default**; `gen-secrets.sh` generates the
+credential and Caddy binds to `127.0.0.1` unless you set
+`CADENCE_HTTP_BIND=0.0.0.0`.
 
-This is a deliberate V1 choice (no multi-user, no RBAC). The reverse proxy
-(`Caddyfile`) ships with **no** auth in front of `/api`. If you deploy Cadence
-anywhere reachable by untrusted parties, put authentication in front of it
-(HTTP basic auth at Caddy, an allow-list, a VPN, …).
+What this does *not* give you: per-user identity or audit, brute-force
+protection at the proxy (rate-limit upstream if exposed), or defence against a
+leaked shared password. `CADENCE_DASHBOARD_AUTH=off` removes the gate entirely —
+only do that behind a VPN or on a management VLAN.
+
+Behind that gate, every `GET` under `/api/v1` still returns the full fleet
+picture — host list, per-host package inventory with exact installed/candidate
+versions, job logs, maintenance windows, the fleet summary. Treat the dashboard
+credential as protecting a "what is unpatched and where, and when it reboots"
+map of your fleet.
 
 ### The server is fully trusted by every agent
 

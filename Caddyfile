@@ -1,13 +1,29 @@
 # Cadence reverse proxy. One public entrypoint, TLS terminated here.
 #
-# CADENCE_SITE_ADDRESS must be a hostname that resolves to this server on your
-# LAN (LAN DNS or an /etc/hosts entry on every client and monitored VM). With a
-# bare hostname Caddy issues a certificate from its own internal CA -- export
-# that CA to the monitored VMs, see README "TLS".
+# CADENCE_SITE_ADDRESS must be a hostname that resolves to this server for every
+# client and monitored host (LAN DNS or /etc/hosts). With a bare hostname Caddy
+# issues a certificate from its own internal CA -- export it to the hosts, see
+# README "Trust Caddy's internal CA". For a public domain + Let's Encrypt, drop
+# `tls internal` below and add an ACME email.
+
+# Basic-auth gate on the dashboard and the read/admin API. On by default. The
+# agent endpoints authenticate with a per-host Bearer token, not these
+# credentials, so they are exempt.
+(on) {
+	@dashboard not path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
+	basic_auth @dashboard {
+		{$CADENCE_DASHBOARD_USER} {$CADENCE_DASHBOARD_PASSWORD_HASH}
+	}
+}
+
+# CADENCE_DASHBOARD_AUTH=off imports this instead: no gate. Only on a network
+# you fully trust (a VPN, a management VLAN).
+(off) {
+}
 
 # Plain HTTP: everything redirects to HTTPS, except the agent bootstrap assets
 # (the installer, the binary, the CA itself) -- those must be reachable before
-# the VM trusts the internal CA. Populated by scripts/publish-agent.sh.
+# the host trusts the internal CA. Populated by scripts/publish-agent.sh.
 http://{$CADENCE_SITE_ADDRESS} {
 	@bootstrap path /install.sh /agent/*
 	handle @bootstrap {
@@ -22,6 +38,8 @@ http://{$CADENCE_SITE_ADDRESS} {
 {$CADENCE_SITE_ADDRESS} {
 	tls internal
 	encode gzip
+
+	import {$CADENCE_DASHBOARD_AUTH:on}
 
 	# nginx in the frontend image already proxies /api/ to backend:8000,
 	# so everything can go to a single upstream.

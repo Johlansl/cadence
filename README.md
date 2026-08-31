@@ -10,9 +10,11 @@ homelab (RHEL Satellite / Uyuni: many GB of RAM, an imposed host OS, mandatory
 DNS) and tools that only show you the problem without fixing it. It gives you
 **visibility and remediation** in one place, on a 2 vCPU / 2 GB box.
 
-> **Status: v1, single-operator.** It works and is in real use, but it has no
-> multi-user auth and the read API is unauthenticated by design — it expects a
-> trusted network. Read [SECURITY.md](SECURITY.md) before exposing it.
+> **Status: v1, single-operator.** It works and is in real use. There is no
+> multi-user auth or RBAC; a single shared basic-auth credential gates the
+> dashboard and read/admin API (on by default), and agents fully trust the
+> server. Read [SECURITY.md](SECURITY.md) before exposing it beyond a trusted
+> network.
 
 ## What it does
 
@@ -71,11 +73,14 @@ Requires Docker with the Compose plugin. On the server:
 ```sh
 git clone <repo-url> cadence && cd cadence
 
-scripts/gen-secrets.sh          # writes .env with random POSTGRES_PASSWORD + CADENCE_ADMIN_KEY
-$EDITOR .env                    # set CADENCE_SITE_ADDRESS (a hostname that resolves to this box)
+scripts/gen-secrets.sh          # writes .env with random secrets; prints the dashboard login ONCE
+$EDITOR .env                    # set CADENCE_SITE_ADDRESS; set CADENCE_HTTP_BIND=0.0.0.0 to serve the LAN
 
 docker compose up -d --build    # first run must build; Alembic creates the schema on boot
 ```
+
+Save the dashboard user/password `gen-secrets.sh` printed — only the bcrypt hash
+is kept in `.env`.
 
 Check it:
 
@@ -84,9 +89,12 @@ curl -s http://127.0.0.1:8000/healthz              # {"status":"ok"}
 docker compose run --rm backend alembic current    # <latest revision> (head)
 ```
 
-Open the dashboard at `https://<CADENCE_SITE_ADDRESS>/`. Caddy terminates TLS
-on 80/443 (80 redirects to 443) using its own internal CA; the `backend` (8000)
-and plain-HTTP `frontend` (8080) ports stay on loopback. `restart:
+Open the dashboard at `https://<CADENCE_SITE_ADDRESS>/` and log in with those
+credentials. Caddy terminates TLS on 80/443 (80 redirects to 443) using its own
+internal CA, and gates everything except the agent endpoints with basic auth.
+By default Caddy binds to **`127.0.0.1`** (reachable only from the server) — set
+`CADENCE_HTTP_BIND=0.0.0.0` in `.env` to serve the LAN. The `backend` (8000) and
+plain-HTTP `frontend` (8080) ports always stay on loopback. `restart:
 unless-stopped` brings everything back after a reboot.
 
 `CADENCE_SITE_ADDRESS` must resolve to the server from the server itself and
@@ -170,8 +178,11 @@ All configuration is environment variables. Server variables live in `.env`
 | `POSTGRES_USER` / `POSTGRES_DB` | `cadence` / `cadence` | database role and name |
 | `POSTGRES_PASSWORD` | — | **read only on first boot** of the `pgdata` volume; changing it later needs `down -v` or an `ALTER ROLE` |
 | `CADENCE_ADMIN_KEY` | — | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
+| `CADENCE_DASHBOARD_AUTH` | `on` | basic-auth gate at Caddy on the dashboard + read/admin API (agent endpoints exempt). `off` disables it |
+| `CADENCE_DASHBOARD_USER` | `cadence` | basic-auth username |
+| `CADENCE_DASHBOARD_PASSWORD_HASH` | — | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` handles this) |
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
-| `CADENCE_HTTP_BIND` | `0.0.0.0` | interface for Caddy's 80/443 |
+| `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
@@ -327,10 +338,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md).
 
 ## Security
 
-Cadence v1 trusts its network. The read API is unauthenticated, a single shared
-key authorizes every write, and agents fully trust the server. Before exposing
-it beyond a LAN you control, read **[SECURITY.md](SECURITY.md)**. Report
-vulnerabilities privately (see the same file).
+A single shared basic-auth credential gates the dashboard and read/admin API
+(on by default; agent endpoints are exempt), Caddy binds to loopback by
+default, and `CADENCE_ADMIN_KEY` authorizes every write. There is no
+multi-user auth, no per-user audit trail, and agents fully trust the server.
+Before exposing Cadence beyond a network you control, read
+**[SECURITY.md](SECURITY.md)**. Report vulnerabilities privately (same file).
 
 ## License
 

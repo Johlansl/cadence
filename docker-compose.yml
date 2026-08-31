@@ -133,14 +133,19 @@ services:
     cpus: "1.0"
     environment:
       CADENCE_SITE_ADDRESS: ${CADENCE_SITE_ADDRESS}
+      # Basic-auth gate (see Caddyfile). Defaults keep it ON.
+      CADENCE_DASHBOARD_AUTH: ${CADENCE_DASHBOARD_AUTH:-on}
+      CADENCE_DASHBOARD_USER: ${CADENCE_DASHBOARD_USER:-cadence}
+      CADENCE_DASHBOARD_PASSWORD_HASH: ${CADENCE_DASHBOARD_PASSWORD_HASH:-}
     depends_on:
       frontend:
         condition: service_healthy
     ports:
-      # The public entrypoint. CADENCE_HTTP_BIND controls the interface
-      # (0.0.0.0 to serve the LAN). 80 redirects to 443.
-      - "${CADENCE_HTTP_BIND:-0.0.0.0}:80:80"
-      - "${CADENCE_HTTP_BIND:-0.0.0.0}:443:443"
+      # The public entrypoint. CADENCE_HTTP_BIND controls the interface:
+      # 127.0.0.1 by default (dashboard reachable only from this host); set it
+      # to 0.0.0.0 in .env to serve the LAN. 80 redirects to 443.
+      - "${CADENCE_HTTP_BIND:-127.0.0.1}:80:80"
+      - "${CADENCE_HTTP_BIND:-127.0.0.1}:443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Agent bootstrap assets (installer, binary, CA), served over HTTP.

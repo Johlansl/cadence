@@ -41,9 +41,11 @@ model.
   warrants more than an anonymous GET. Known limitation: total blast radius and
   no audit trail — a leaked key can queue an upgrade or reboot on the whole
   fleet.
-- **Dashboard reads are unauthenticated.** V1 is explicitly single-user with no
-  RBAC; the API is meant to sit on a trusted network behind the reverse proxy.
-  This is the first thing to change for an internet-facing deployment.
+- **One shared basic-auth credential**, not multi-user auth. V1 has no RBAC, so
+  Caddy gates the dashboard and the read/admin API with a single
+  username/password (agent endpoints, which carry per-host tokens, are exempt).
+  On by default; Caddy binds to loopback by default. Enough to keep a fleet
+  inventory off the open internet without building a user system.
 
 ## Data & schema
 
