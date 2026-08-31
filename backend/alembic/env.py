@@ -18,7 +18,9 @@ from app.core.config import settings
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Don't tear down loggers the caller already set up (app.prestart runs
+    # `alembic upgrade` in-process right after configuring logfmt logging).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 url = settings.database_url
 target_metadata = None

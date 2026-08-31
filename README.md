@@ -216,14 +216,23 @@ docker compose up -d db
 `0001`) and is only the first-boot bootstrap. Every schema change after that is
 a hand-written revision under `backend/alembic/versions/` (no autogenerate).
 
-```sh
-# fresh DB (init.sql just ran on first boot) OR an existing pre-Alembic DB:
-docker compose run --rm backend alembic stamp 0001     # record the baseline, runs no DDL
-docker compose run --rm backend alembic upgrade head   # apply every later revision
+**On a normal deploy there is nothing to run.** The backend/scheduler image
+entrypoint (`backend/entrypoint.sh` -> `python -m app.prestart`) waits for the
+database and runs `alembic upgrade head` before the app starts; the backend and
+the scheduler serialise on a Postgres advisory lock so only one migrates. So a
+deploy is just:
 
-# afterwards, on each deploy that ships new revisions:
-docker compose run --rm backend alembic upgrade head
-docker compose run --rm backend alembic current        # show the applied revision
+```sh
+git pull && docker compose up -d --build
+docker compose run --rm backend alembic current        # sanity: shows the applied revision
+```
+
+The one manual case is **adopting an existing pre-Alembic database** (its schema
+already matches `init.sql` but it has no `alembic_version` table):
+
+```sh
+docker compose run --rm backend alembic stamp 0001     # record the baseline, runs no DDL
+# the next `docker compose up -d` applies every later revision automatically
 ```
 
 Before the first `stamp` on an existing database, confirm it really matches the

@@ -59,5 +59,9 @@ class Settings:
             "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS", 7200
         )
 
+        # How long the container prestart waits for Postgres to accept
+        # connections before giving up. 0 = try once. Read by app.prestart.
+        self.db_wait_seconds: int = _non_negative_int("CADENCE_DB_WAIT_SECONDS", 60)
+
 
 settings = Settings()
