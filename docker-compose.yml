@@ -26,8 +26,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      # Schema applied on first startup, on an empty data volume.
-      - ./backend/app/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # The schema is owned by Alembic: the backend/scheduler entrypoint runs
+      # `alembic upgrade head` on boot (app.prestart), which builds a fresh
+      # database from revision 0001. init.sql is NOT mounted -- doing so would
+      # create the tables a second time and crash the first migration.
       - pgdata:/var/lib/postgresql/data
     ports:
       # Bound to loopback only -- convenience for a local psql client.

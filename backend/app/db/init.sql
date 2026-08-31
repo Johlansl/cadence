@@ -1,7 +1,10 @@
--- Cadence V1 schema.
--- Applied automatically by the postgres image on first startup via
--- /docker-entrypoint-initdb.d/. No Alembic in V1: schema changes on an
--- existing database will be introduced with Alembic later.
+-- Cadence V1 schema -- REFERENCE ONLY, no longer applied at runtime.
+--
+-- The live schema is owned by Alembic (backend/alembic/versions/). This file
+-- is kept byte-identical to the `0001` baseline revision so an operator can
+-- diff a pre-Alembic database against it before running `alembic stamp 0001`.
+-- It is NOT mounted into the postgres container -- app.prestart runs
+-- `alembic upgrade head` on boot and builds a fresh database from 0001.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

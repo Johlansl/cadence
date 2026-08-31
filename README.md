@@ -13,8 +13,8 @@ V1 brief, scope and architecture decisions.
 
 Incremental build, one testable step at a time (`CLAUDE.md` section 8).
 
-- [x] **Step 1 — database scaffolding**: `docker-compose.yml` (db service only)
-      + `init.sql` schema applied on first startup.
+- [x] **Step 1 — database scaffolding**: `docker-compose.yml` (db service only);
+      schema created by Alembic from the backend entrypoint (`app.prestart`).
 - [x] **Step 2 — backend (FastAPI)**: `GET /healthz`,
       `POST /api/v1/admin/hosts`, `POST /api/v1/reports`.
 - [x] **Step 3 — backend read views**: `GET /api/v1/hosts`,
@@ -180,64 +180,65 @@ set `CADENCE_BACKEND_BIND=127.0.0.1` (and `CADENCE_FRONTEND_BIND=127.0.0.1`) in
 Requires Docker with the `compose` plugin.
 
 ```sh
-cp .env.example .env          # adjust POSTGRES_PASSWORD
+cp .env.example .env          # set POSTGRES_PASSWORD (first boot only -- see the note there)
 docker compose up -d db
 ```
 
-### Verify
+`up -d db` starts an empty PostgreSQL. **The schema is created by Alembic**, run
+from the backend/scheduler entrypoint (`app.prestart`) the first time the full
+stack comes up (Step 6) -- there is no `init.sql` bootstrap.
+
+### Verify (after the full stack is up)
 
 ```sh
-# Container healthy, init.sql executed on first startup
-docker compose ps
-docker compose logs db
+docker compose ps                                      # db healthy
+docker compose run --rm backend alembic current        # 0006 (head)
 
-# Tables: hosts, packages, host_packages, reports, jobs
+# Tables: hosts, packages, host_packages, reports, jobs, schedules, scheduler_state, alembic_version
 docker compose exec db psql -U cadence -d cadence -c '\dt'
-
-# Named indexes
-docker compose exec db psql -U cadence -d cadence -c '\di'
-
-# pgcrypto extension
-docker compose exec db psql -U cadence -d cadence -c '\dx'
+docker compose exec db psql -U cadence -d cadence -c '\dx'   # pgcrypto extension
 ```
 
 ### Reset
 
-The schema is applied only on an empty data volume. To replay `init.sql`:
+To wipe the database and rebuild it from scratch:
 
 ```sh
 docker compose down -v
-docker compose up -d db
+docker compose up -d --build        # Alembic rebuilds the schema from revision 0001
 ```
 
 ## Database migrations (Alembic)
 
-`backend/app/db/init.sql` is **frozen at the baseline** (Alembic revision
-`0001`) and is only the first-boot bootstrap. Every schema change after that is
-a hand-written revision under `backend/alembic/versions/` (no autogenerate).
+Alembic owns the schema. Revision `0001` is the full V1 baseline; every change
+after it is a hand-written revision under `backend/alembic/versions/` (no
+autogenerate). `backend/app/db/init.sql` is kept only as a reference copy of
+`0001` for diffing an old database -- it is **not** applied anywhere.
 
 **On a normal deploy there is nothing to run.** The backend/scheduler image
 entrypoint (`backend/entrypoint.sh` -> `python -m app.prestart`) waits for the
 database and runs `alembic upgrade head` before the app starts; the backend and
-the scheduler serialise on a Postgres advisory lock so only one migrates. So a
-deploy is just:
+the scheduler serialise on a Postgres advisory lock so only one migrates. A
+fresh database is built straight from `0001`. So a deploy is just:
 
 ```sh
 git pull && docker compose up -d --build
 docker compose run --rm backend alembic current        # sanity: shows the applied revision
 ```
 
-The one manual case is **adopting an existing pre-Alembic database** (its schema
-already matches `init.sql` but it has no `alembic_version` table):
+**Adopting a pre-Alembic database** (one bootstrapped from the old `init.sql`
+mount, so it has the baseline tables but no `alembic_version`): `app.prestart`
+detects this and runs `alembic stamp 0001` automatically before upgrading. To do
+it by hand instead:
 
 ```sh
 docker compose run --rm backend alembic stamp 0001     # record the baseline, runs no DDL
-# the next `docker compose up -d` applies every later revision automatically
+docker compose up -d                                    # applies every later revision
 ```
 
-Before the first `stamp` on an existing database, confirm it really matches the
-baseline: dump its schema (`pg_dump --schema-only`) and diff it against a
-throwaway DB built from `init.sql`. If it differs, reconcile before stamping.
+Before stamping, confirm the database really matches the baseline: dump its
+schema (`pg_dump --schema-only`) and diff it against `backend/app/db/init.sql`.
+If it differs, reconcile before stamping.
 
 ## Backup & restore
 

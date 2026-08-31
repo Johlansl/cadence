@@ -20,7 +20,7 @@ import logging
 import time
 from pathlib import Path
 
-from sqlalchemy import create_engine, pool, text
+from sqlalchemy import create_engine, inspect, pool, text
 from sqlalchemy.exc import OperationalError
 
 from app.core.config import settings
@@ -70,7 +70,14 @@ def wait_for_db() -> None:
 
 def run_migrations() -> None:
     """Apply every pending Alembic revision, holding an advisory lock so the
-    peer container (same image) does not migrate concurrently."""
+    peer container (same image) does not migrate concurrently.
+
+    If the database already carries the baseline schema but has no
+    alembic_version table (a legacy deploy that bootstrapped from init.sql via
+    the postgres image's docker-entrypoint-initdb.d), stamp 0001 first --
+    otherwise `upgrade` would start from base and fail on a duplicate
+    `CREATE TABLE`. Fresh deploys skip this and build everything from 0001.
+    """
     from alembic import command
     from alembic.config import Config
 
@@ -84,6 +91,16 @@ def run_migrations() -> None:
             try:
                 cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
                 cfg.set_main_option("script_location", str(_BACKEND_DIR / "alembic"))
+
+                insp = inspect(conn)
+                if not insp.has_table("alembic_version") and insp.has_table("hosts"):
+                    log.warning(
+                        "baseline schema present without alembic_version; "
+                        "stamping 0001 (legacy init.sql bootstrap)"
+                    )
+                    command.stamp(cfg, "0001")
+                    configure_logging()
+
                 log.info("running alembic upgrade head")
                 command.upgrade(cfg, "head")
                 configure_logging()  # command.upgrade's fileConfig replaced our handler
