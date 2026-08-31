@@ -6,6 +6,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -14,6 +15,21 @@ import (
 	"cadence/agent/internal/apterr"
 	"cadence/agent/internal/rebootcheck"
 )
+
+// maxLogBytes bounds Result.Log so a large dist-upgrade cannot produce an
+// unbounded POST body. The head and tail are kept, the middle elided.
+const maxLogBytes = 128 * 1024
+
+func capLog(s string) string {
+	if len(s) <= maxLogBytes {
+		return s
+	}
+	half := maxLogBytes / 2
+	omitted := len(s) - 2*half
+	return s[:half] +
+		fmt.Sprintf("\n\n[cadence] ... %d bytes of output elided ...\n\n", omitted) +
+		s[len(s)-half:]
+}
 
 // dpkgConfigureTimeout bounds the `dpkg --configure -a` recovery run. It runs
 // under a fresh context, not the upgrade's, so recovery still happens when the
@@ -81,7 +97,7 @@ func RunAptUpgrade(ctx context.Context) Result {
 		cancel()
 	}
 
-	res.Log = out.String()
+	res.Log = capLog(out.String())
 	res.RebootRequired = rebootcheck.Pending()
 	return res
 }

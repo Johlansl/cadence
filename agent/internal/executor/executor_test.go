@@ -121,6 +121,24 @@ exit 0`)
 	}
 }
 
+func TestRunAptUpgradeCapsHugeOutput(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `case "$*" in *dist-upgrade*) yes cadence-output-line | head -c 400000; echo; exit 0;; esac; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+
+	res := RunAptUpgrade(context.Background())
+
+	if res.Err != nil {
+		t.Fatalf("unexpected err: %v", res.Err)
+	}
+	if len(res.Log) > maxLogBytes+512 {
+		t.Fatalf("log not capped: %d bytes", len(res.Log))
+	}
+	if !strings.Contains(res.Log, "bytes of output elided") {
+		t.Fatalf("expected an elision marker in a %d-byte log", len(res.Log))
+	}
+}
+
 func TestRunAptUpgradeRepairsDpkgOnAFreshContextAfterTheDeadline(t *testing.T) {
 	dir := fakePATH(t)
 	marker := filepath.Join(t.TempDir(), "configured")
