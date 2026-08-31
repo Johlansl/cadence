@@ -248,10 +248,12 @@ scripts/backup.sh
 `env` is a copy of `.env` (**secrets** — admin key, DB password — mode 0600);
 `MANIFEST` records the git commit, Alembic revision and sha256 sums.
 `CADENCE_BACKUP_DIR` sets the location, `CADENCE_BACKUP_KEEP` how many to retain
-(default 14). Nightly via cron, e.g.:
+(default 14). Installed on the central server as a nightly user cron job
+(`crontab -l`); `backup.sh` cd's into its own repo, so call it by absolute path:
 
 ```cron
-15 3 * * *  cd /home/cadence/cadence && scripts/backup.sh >> backups/backup.log 2>&1
+MAILTO=""
+15 3 * * *  /home/cadence/cadence/scripts/backup.sh >> /home/cadence/cadence/backups/backup.log 2>&1
 ```
 
 ### Verify a backup restores
