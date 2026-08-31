@@ -26,7 +26,8 @@ import (
 )
 
 // agentVersion is sent to the server and bumped by hand per release.
-const agentVersion = "0.6.0"
+// See agent/CHANGELOG.md.
+const agentVersion = "0.6.1"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
