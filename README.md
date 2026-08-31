@@ -22,7 +22,7 @@ Incremental build, one testable step at a time (`CLAUDE.md` section 8).
 - [x] **Step 4 — Go agent**: collect (dpkg / apt / os-release) + report.
 - [x] **Step 5 — systemd unit + timer** for the agent.
 - [x] **Step 6 — frontend**: master-detail dashboard (React + Vite + Tailwind).
-- [x] **Step 7 — end-to-end validation**: agent on `vm-japp` (real Debian 13),
+- [x] **Step 7 — end-to-end validation**: agent on a real Debian host,
       collection + report verified against the live stack.
 - [x] **Step 8 — apply updates (jobs)**: trigger endpoint + report piggyback,
       agent runs `apt dist-upgrade`, dashboard trigger button + job log.
