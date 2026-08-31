@@ -72,22 +72,45 @@ func parseInstLine(line string) (pendingUpdate, bool) {
 // simulation when the apt lock is held. A package var so tests can shorten it.
 var aptRetryWaits = []time.Duration{0, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 
-// pendingUpdatesWithRetry retries `apt-get -s dist-upgrade` a few times when it
-// fails on a held apt lock (unattended-upgrades). Other errors fail fast.
+// dpkgRepairTimeout bounds the one-shot `dpkg --configure -a` on the report
+// path so a wedged dpkg can't hang the whole report.
+const dpkgRepairTimeout = 5 * time.Minute
+
+// pendingUpdatesWithRetry runs `apt-get -s dist-upgrade`. It repairs a
+// half-configured dpkg state once (`dpkg --configure -a`) and retries, and it
+// retries a few times while another process holds the apt lock
+// (unattended-upgrades). Any other error fails fast.
 func pendingUpdatesWithRetry(ctx context.Context) (map[string]pendingUpdate, error) {
-	var err error
-	for _, wait := range aptRetryWaits {
-		if wait > 0 {
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			logging.Warn("apt lock held, retrying dist-upgrade simulation")
+	updates, err := pendingUpdates(ctx)
+	if err == nil {
+		return updates, nil
+	}
+
+	// A dpkg transaction left half-applied (a killed apt, a crash) makes every
+	// simulation fail until it is finished. Self-heal once instead of erroring
+	// on every report until an operator intervenes.
+	if apterr.IsInterrupted(err.Error()) {
+		logging.Warn("dpkg is in an interrupted state, running dpkg --configure -a")
+		if rerr := repairInterruptedDpkg(ctx); rerr != nil {
+			logging.Warn("dpkg --configure -a failed", "err", rerr)
+			return nil, err
 		}
-		var updates map[string]pendingUpdate
-		updates, err = pendingUpdates(ctx)
-		if err == nil {
+		if updates, err = pendingUpdates(ctx); err == nil {
+			return updates, nil
+		}
+	}
+
+	if !apterr.IsLockHeld(err.Error()) {
+		return nil, err
+	}
+	for i := 1; i < len(aptRetryWaits); i++ {
+		select {
+		case <-time.After(aptRetryWaits[i]):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		logging.Warn("apt lock held, retrying dist-upgrade simulation")
+		if updates, err = pendingUpdates(ctx); err == nil {
 			return updates, nil
 		}
 		if !apterr.IsLockHeld(err.Error()) {
@@ -95,6 +118,15 @@ func pendingUpdatesWithRetry(ctx context.Context) (map[string]pendingUpdate, err
 		}
 	}
 	return nil, err
+}
+
+// repairInterruptedDpkg finishes an interrupted dpkg transaction, bounded by
+// its own timeout (a child of ctx so it never outlives the report attempt).
+func repairInterruptedDpkg(ctx context.Context) error {
+	rctx, cancel := context.WithTimeout(ctx, dpkgRepairTimeout)
+	defer cancel()
+	_, err := runCommand(rctx, "dpkg", "--configure", "-a")
+	return err
 }
 
 // pendingUpdates parses `apt-get -s dist-upgrade` into a map keyed by
