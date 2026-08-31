@@ -11,11 +11,13 @@ import (
 func pkgKey(name, arch string) string { return name + "\t" + arch }
 
 // installedPackages returns the currently installed packages keyed by
-// name+architecture, using the exact dpkg-query format from the design brief
-// (CLAUDE.md section 7).
+// name+architecture. Based on the dpkg-query format from the design brief
+// (CLAUDE.md section 7), plus ${db:Status-Status} so packages that are removed
+// but not purged ("config-files", still carry a version) or mid-transaction
+// are excluded -- same check rebootcheck already makes.
 func installedPackages(ctx context.Context) (map[string]report.Package, error) {
 	out, err := runCommand(ctx, "dpkg-query", "-W",
-		"-f=${Package}\t${Architecture}\t${Version}\n")
+		"-f=${Package}\t${Architecture}\t${Version}\t${db:Status-Status}\n")
 	if err != nil {
 		return nil, err
 	}
@@ -26,13 +28,11 @@ func installedPackages(ctx context.Context) (map[string]report.Package, error) {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
+		if len(fields) != 4 {
 			continue
 		}
-		name, arch, version := fields[0], fields[1], fields[2]
-		// An empty version means the package is known to dpkg but was never
-		// unpacked (e.g. purge leftovers); not an installed package.
-		if name == "" || version == "" {
+		name, arch, version, status := fields[0], fields[1], fields[2], fields[3]
+		if name == "" || version == "" || status != "installed" {
 			continue
 		}
 		pkgs[pkgKey(name, arch)] = report.Package{
