@@ -131,7 +131,8 @@ docker run --rm -v "$cadvol":/v:ro postgres:16 sh -c '
 
 docker run -d --name "$cad" --network "$net" \
 	-v "$cadvol":/data -v "$repo/Caddyfile":/etc/caddy/Caddyfile:ro \
-	-e CADENCE_SITE_ADDRESS=cadence.lan -p 127.0.0.1:18443:443 \
+	-e CADENCE_SITE_ADDRESS=cadence.lan -e CADENCE_DASHBOARD_AUTH=off \
+	-p 127.0.0.1:18443:443 \
 	caddy:2-alpine >/dev/null
 docker run --rm -v "$cadvol":/v:ro postgres:16 \
 	cat /v/caddy/pki/authorities/local/root.crt >/tmp/rt_root.crt 2>/dev/null

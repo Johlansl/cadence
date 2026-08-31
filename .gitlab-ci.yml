@@ -63,6 +63,9 @@ stack:
       POSTGRES_DB=cadence
       CADENCE_ADMIN_KEY=ci-admin-key-0123456789abcdef
       CADENCE_SITE_ADDRESS=cadence.ci.local
+      CADENCE_DASHBOARD_AUTH=on
+      CADENCE_DASHBOARD_USER=cadence
+      CADENCE_DASHBOARD_PASSWORD_HASH=$$2a$$14$$9RzS8dzkDp0vCxfkusQZR.1l95oLIGKbReMUMdZwJ77Dz9SNKXqra
       EOF
     - mkdir -p dist   # caddy bind-mounts ./dist (gitignored, absent in CI)
   script:
@@ -71,6 +74,14 @@ stack:
     - docker compose run --rm backend alembic current
     - docker compose run --rm backend alembic current | grep -qE '^0006 \(head\)$'
     - docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5); print('readyz ok')"
+    # basic-auth gate (the placeholder hash above is bcrypt of "change-me")
+    - 'test "$(docker compose exec -T caddy sh -c ''curl -sk -o /dev/null -w "%{http_code}" --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/'')" = 401'
+    - 'test "$(docker compose exec -T caddy sh -c ''curl -sk -o /dev/null -w "%{http_code}" -u cadence:change-me --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/'')" = 200'
+    # agent endpoints must NOT be gated: the response must not carry a basic-auth challenge
+    - |
+      if docker compose exec -T caddy sh -c 'curl -sk -D - -o /dev/null -X POST --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/api/v1/agent/next-job' | grep -qi '^www-authenticate:.*basic'; then
+        echo "FAIL: /api/v1/agent/next-job is behind basic auth"; exit 1
+      fi
   after_script:
     - docker compose logs --tail=80 || true
     - docker compose down -v || true
