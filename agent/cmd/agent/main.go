@@ -28,6 +28,18 @@ import (
 // agentVersion is sent to the server and bumped by hand per release.
 const agentVersion = "0.6.0"
 
+// Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
+// exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
+// cgroup mid apt-get / dpkg:
+//
+//	cadence-agent.service       reportTimeout + jobTimeout + postJobReportTimeout
+//	cadence-agent-poll.service  jobTimeout + postJobReportTimeout
+const (
+	reportTimeout        = 10 * time.Minute // collect + POST /reports
+	jobTimeout           = 30 * time.Minute // apt-get dist-upgrade for a job
+	postJobReportTimeout = 5 * time.Minute  // the fresh report sent after a job
+)
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("cadence-agent: ")
@@ -70,7 +82,7 @@ func run(pollOnly bool) error {
 	}
 
 	// Full path: collect, report, then run a piggybacked job if there is one.
-	reportCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	reportCtx, cancel := context.WithTimeout(context.Background(), reportTimeout)
 	defer cancel()
 
 	rep, err := collector.Collect(reportCtx, agentVersion, cfg.RunAptUpdate)
@@ -139,7 +151,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		return submit("failed", 0, "unsupported job type: "+job.JobType, false)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 	defer cancel()
 
 	logging.Info("running apt-get dist-upgrade", "job_id", job.ID)
@@ -202,7 +214,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 // reportAfterJob collects and sends one report. Failures are logged, not
 // propagated: the job it follows has already been recorded.
 func reportAfterJob(cfg config.Config, c *client.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), postJobReportTimeout)
 	defer cancel()
 
 	rep, err := collector.Collect(ctx, agentVersion, cfg.RunAptUpdate)
