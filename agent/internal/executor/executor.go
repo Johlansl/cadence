@@ -8,9 +8,26 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"syscall"
+	"time"
 
+	"cadence/agent/internal/apterr"
 	"cadence/agent/internal/rebootcheck"
 )
+
+// dpkgConfigureTimeout bounds the `dpkg --configure -a` recovery run. It runs
+// under a fresh context, not the upgrade's, so recovery still happens when the
+// upgrade failed *because* its own deadline expired.
+const dpkgConfigureTimeout = 10 * time.Minute
+
+// aptWaitDelay is how long to wait, after SIGTERM on context cancel, before
+// SIGKILL and giving up on the command's output -- so an orphaned grandchild
+// holding the output pipe can't wedge the run.
+const aptWaitDelay = 30 * time.Second
+
+// aptLockRetryWaits is the backoff before re-running dist-upgrade when another
+// process (unattended-upgrades) holds the apt lock. A var so tests can shorten it.
+var aptLockRetryWaits = []time.Duration{0, 15 * time.Second, 30 * time.Second, 60 * time.Second}
 
 type Result struct {
 	ExitCode       int
@@ -29,49 +46,83 @@ func aptEnv() []string {
 	)
 }
 
+// aptCommand builds an apt/dpkg command with a stable env and a graceful
+// cancel: on context deadline/cancel it gets SIGTERM (letting dpkg finish the
+// package it is mid-way through), then SIGKILL after aptWaitDelay.
+func aptCommand(ctx context.Context, out *bytes.Buffer, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = aptEnv()
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = aptWaitDelay
+	return cmd
+}
+
 // RunAptUpgrade refreshes the package lists, then runs a non-interactive
-// `apt-get dist-upgrade -y`. If the upgrade fails it runs `dpkg --configure -a`
-// so a half-applied transaction is left as consistent as possible. Output from
-// all three commands is captured in execution order.
+// `apt-get dist-upgrade -y`, retrying while another process holds the apt lock.
+// If the upgrade still fails it runs `dpkg --configure -a` (under a fresh
+// context) so a half-applied transaction is left as consistent as possible.
+// Output from every command is captured in execution order.
 func RunAptUpgrade(ctx context.Context) Result {
 	var out bytes.Buffer
 
 	// Refresh lists so the upgrade reflects current apt state. Non-fatal: a
 	// failure here just means we apply whatever apt already knows.
-	upd := exec.CommandContext(ctx, "apt-get", "update")
-	upd.Env = aptEnv()
-	upd.Stdout, upd.Stderr = &out, &out
-	if err := upd.Run(); err != nil {
+	if err := aptCommand(ctx, &out, "apt-get", "update").Run(); err != nil {
 		out.WriteString("\n[cadence] apt-get update failed; using existing lists\n")
 	}
 
-	cmd := exec.CommandContext(ctx, "apt-get",
-		"-o", "Dpkg::Options::=--force-confdef",
-		"-o", "Dpkg::Options::=--force-confold",
-		"-y", "dist-upgrade",
-	)
-	cmd.Env = aptEnv()
-	cmd.Stdout, cmd.Stderr = &out, &out
+	res := runDistUpgrade(ctx, &out)
 
-	err := cmd.Run()
-	res := Result{}
-	if err != nil {
-		res.Err = err
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			res.ExitCode = exitErr.ExitCode()
-		} else {
-			res.ExitCode = -1 // failed to start, or context deadline/cancel
-		}
-
-		// Best-effort: leave dpkg in a configured state.
+	if res.Err != nil {
 		out.WriteString("\n[cadence] apt failed; running dpkg --configure -a\n")
-		fix := exec.CommandContext(ctx, "dpkg", "--configure", "-a")
-		fix.Env = aptEnv()
-		fix.Stdout, fix.Stderr = &out, &out
-		_ = fix.Run()
+		fixCtx, cancel := context.WithTimeout(context.Background(), dpkgConfigureTimeout)
+		_ = aptCommand(fixCtx, &out, "dpkg", "--configure", "-a").Run()
+		cancel()
 	}
 
 	res.Log = out.String()
 	res.RebootRequired = rebootcheck.Pending()
+	return res
+}
+
+// runDistUpgrade runs `apt-get -y dist-upgrade`, retrying on a held apt lock.
+// Every attempt's output is appended to out in order.
+func runDistUpgrade(ctx context.Context, out *bytes.Buffer) Result {
+	var res Result
+	last := len(aptLockRetryWaits) - 1
+	for i, wait := range aptLockRetryWaits {
+		if wait > 0 {
+			out.WriteString("\n[cadence] apt lock held, retrying dist-upgrade\n")
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return Result{ExitCode: -1, Err: ctx.Err()}
+			}
+		}
+
+		var attempt bytes.Buffer
+		err := aptCommand(ctx, &attempt, "apt-get",
+			"-o", "Dpkg::Options::=--force-confdef",
+			"-o", "Dpkg::Options::=--force-confold",
+			"-y", "dist-upgrade",
+		).Run()
+		out.Write(attempt.Bytes())
+
+		if err == nil {
+			return Result{}
+		}
+
+		res = Result{Err: err, ExitCode: -1} // -1: failed to start, or killed
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			res.ExitCode = exitErr.ExitCode()
+		}
+
+		// Only a held lock is worth another attempt; a real package failure
+		// (or an expired deadline) is final.
+		if i == last || !apterr.IsLockHeld(attempt.String()) {
+			return res
+		}
+	}
 	return res
 }
