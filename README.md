@@ -417,7 +417,7 @@ Two oneshot units on their own timers (`agent/systemd/`):
 
 | Unit | Cadence | Does |
 |---|---|---|
-| `cadence-agent.service` / `.timer` | `OnBootSec=3min`, then **every 30 min** (`RandomizedDelaySec=5min`, `Persistent=true`) | full package/OS report, runs a piggybacked job if any |
+| `cadence-agent.service` / `.timer` | `OnBootSec=1min`, then **every 30 min** (`RandomizedDelaySec=5min`) | full package/OS report, runs a piggybacked job if any |
 | `cadence-agent-poll.service` / `.timer` | **every 1 min** (`-poll`) | claims a pending job and runs it — no collection; nothing pending → exits silently |
 
 | File | Installed as |

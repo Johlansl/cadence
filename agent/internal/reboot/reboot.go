@@ -4,17 +4,26 @@
 package reboot
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 )
 
-// Issue asks systemd to reboot without blocking: the call returns immediately
-// and the shutdown proceeds, so the agent process can exit cleanly.
+// Issue reboots the host. It prefers `systemctl --no-block reboot` (returns
+// immediately so the agent can exit cleanly) and falls back to
+// `shutdown -r now` on a host without systemd.
 func Issue(ctx context.Context) error {
 	out, err := exec.CommandContext(ctx, "systemctl", "--no-block", "reboot").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("systemctl --no-block reboot: %w: %s", err, out)
+	if err == nil {
+		return nil
 	}
-	return nil
+	first := fmt.Errorf("systemctl --no-block reboot: %w: %s", err, bytes.TrimSpace(out))
+
+	out2, err2 := exec.CommandContext(ctx, "shutdown", "-r", "now").CombinedOutput()
+	if err2 == nil {
+		return nil
+	}
+	return errors.Join(first, fmt.Errorf("shutdown -r now: %w: %s", err2, bytes.TrimSpace(out2)))
 }
