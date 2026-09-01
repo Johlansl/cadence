@@ -39,7 +39,6 @@ class Host(Base):
     hostname: Mapped[str] = mapped_column(Text, nullable=False)
     fqdn: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
-    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     os_family: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'debian'"))
     os_name: Mapped[str | None] = mapped_column(Text)
     os_version: Mapped[str | None] = mapped_column(Text)
@@ -62,6 +61,29 @@ class Host(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class AgentToken(Base):
+    """A bearer token for one host's agent. Several may be active at once so a
+    token can be rotated without downtime. State is derived from revoked_at /
+    expires_at only -- no boolean flag that could drift. Nothing here touches
+    jobs: revoking a token is an auth-plane change, it does not cancel jobs.
+    See migration 0008."""
+
+    __tablename__ = "agent_tokens"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    host_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    label: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Package(Base):

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.api.audit import record_audit
 from app.api.deps import get_db, require_admin_key
 from app.api.pagination import before_keyset
-from app.models.models import AuditLog, Host, Job
+from app.models.models import AgentToken, AuditLog, Host, Job
 from app.schemas.schemas import (
     AuditEntry,
     HostCreate,
@@ -36,7 +36,8 @@ router = APIRouter(
 def create_host(
     request: Request, payload: HostCreate, db: Session = Depends(get_db)
 ) -> HostCreated:
-    # Generate the agent token; only its sha256 hash is ever stored.
+    # Generate the agent's first token; only its sha256 hash is ever stored.
+    # Further tokens are issued/revoked via /admin/hosts/{id}/tokens.
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
@@ -44,10 +45,10 @@ def create_host(
         hostname=payload.hostname,
         fqdn=payload.fqdn,
         description=payload.description,
-        token_hash=token_hash,
     )
     db.add(host)
-    db.flush()  # populate host.id for the audit row
+    db.flush()  # populate host.id for the token + audit rows
+    db.add(AgentToken(host_id=host.id, token_hash=token_hash, label="initial"))
     record_audit(
         db, request, "host.create", target_type="host", target_id=host.id,
         detail={"hostname": host.hostname},
