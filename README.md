@@ -317,6 +317,20 @@ Covered by `CADENCE_*_RETENTION_DAYS` above; the sweep runs once a day in the
 scheduler (`retention sweep: …` in `docker compose logs scheduler`).
 `host_packages` is replaced wholesale on every report, so it does not grow.
 
+### Audit trail
+
+Every successful admin write (host create/patch/delete, job queue/clear,
+schedule create/update/delete) is logged. Read it with the admin key, newest
+first; page with `before` + `before_id` from the last row, and filter on
+`action` / `target_type` / `target_id`:
+
+```sh
+curl -s https://<site>/api/v1/admin/audit -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
+```
+
+Callers may set `X-Actor: alice` on their writes to stamp the `actor` column
+(it defaults to `admin` — the shared key proves no identity on its own).
+
 ## Development
 
 ```sh
@@ -341,10 +355,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md).
 
 A single shared basic-auth credential gates the dashboard and read/admin API
 (on by default; agent endpoints are exempt), Caddy binds to loopback by
-default, and `CADENCE_ADMIN_KEY` authorizes every write. There is no
-multi-user auth, no per-user audit trail, and agents fully trust the server.
-Before exposing Cadence beyond a network you control, read
-**[SECURITY.md](SECURITY.md)**. Report vulnerabilities privately (same file).
+default, and `CADENCE_ADMIN_KEY` authorizes every write. Successful admin
+writes are recorded in an audit trail (`GET /api/v1/admin/audit`), though the
+shared key means it cannot attribute them to a real user. There is no
+multi-user auth and agents fully trust the server. Before exposing Cadence
+beyond a network you control, read **[SECURITY.md](SECURITY.md)**. Report
+vulnerabilities privately (same file).
 
 ## License
 

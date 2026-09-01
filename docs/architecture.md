@@ -43,7 +43,8 @@ the poll path racing on the same job is safe — exactly one claims it.
   creation and transmitted once. Only its SHA-256 hash is stored.
 - **Admin writes** (create/delete hosts, queue jobs, edit schedules): a single
   shared `X-Admin-Key` header. The dashboard keeps it in `sessionStorage` and
-  prompts for it on the first write of a session.
+  prompts for it on the first write of a session. Each successful write appends
+  a row to `audit_log`; `GET /api/v1/admin/audit` reads it back (same key).
 - **Dashboard + read/admin API**: gated by a single shared HTTP basic-auth
   credential at Caddy (`CADENCE_DASHBOARD_*`, on by default; the agent endpoints
   above are exempt). No multi-user auth, no RBAC. See [decisions.md](decisions.md)
@@ -65,6 +66,8 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   jsonb `params` and a captured `log`.
 - `schedules` — one maintenance window per host (`weekly` / `monthly`).
 - `scheduler_state` — small key/value store (last retention sweep, heartbeat).
+- `audit_log` — append-only trail of successful admin writes, one row per
+  mutating `X-Admin-Key` call, written in the mutation's own transaction.
 
 Extensibility is built in without over-engineering: `os_family` /
 `package_manager` leave room for non-apt package managers, `jobs.params` and

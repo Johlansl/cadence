@@ -38,9 +38,12 @@ model.
   limitations: no rotation, no expiry, no revocation short of deactivating or
   deleting the host.
 - **A single shared `X-Admin-Key`** guards every admin write. Changing a system
-  warrants more than an anonymous GET. Known limitation: total blast radius and
-  no audit trail — a leaked key can queue an upgrade or reboot on the whole
-  fleet.
+  warrants more than an anonymous GET. It can be rotated live via
+  `CADENCE_ADMIN_KEY_PREVIOUS`. Known limitation: total blast radius — a leaked
+  key can queue an upgrade or reboot on the whole fleet. Successful writes are
+  appended to `audit_log` in the same transaction as the mutation, but the
+  shared key means the recorded actor is only what the caller put in an
+  optional `X-Actor` header (default `admin`), not a proven identity.
 - **One shared basic-auth credential**, not multi-user auth. V1 has no RBAC, so
   Caddy gates the dashboard and the read/admin API with a single
   username/password (agent endpoints, which carry per-host tokens, are exempt).

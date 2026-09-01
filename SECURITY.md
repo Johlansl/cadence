@@ -26,7 +26,8 @@ per-host Bearer tokens). It is **on by default**; `gen-secrets.sh` generates the
 credential and Caddy binds to `127.0.0.1` unless you set
 `CADENCE_HTTP_BIND=0.0.0.0`.
 
-What this does *not* give you: per-user identity or audit, brute-force
+What this does *not* give you: per-user identity (writes are audited, but only
+as far as the optional `X-Actor` header — see *Admin key* below), brute-force
 protection at the proxy (rate-limit upstream if exposed), or defence against a
 leaked shared password. `CADENCE_DASHBOARD_AUTH=off` removes the gate entirely —
 only do that behind a VPN or on a management VLAN.
@@ -47,10 +48,17 @@ the outbound-only, piggyback design.
 ### Admin key
 
 A single shared `X-Admin-Key` secret authorizes every privileged action
-(create/delete hosts, queue jobs and reboots on any host). There is no rotation
-mechanism, no per-purpose scoping, and no audit log. Treat a leak as
-fleet-wide. Generate a strong value (`scripts/gen-secrets.sh` or
-`openssl rand -hex 32`) and keep `.env` at mode `0600`.
+(create/delete hosts, queue jobs and reboots on any host). There is no
+per-purpose scoping, so a leak is fleet-wide — generate a strong value
+(`scripts/gen-secrets.sh` or `openssl rand -hex 32`) and keep `.env` at mode
+`0600`. The key can be rotated without downtime by setting the new value and
+moving the old one to `CADENCE_ADMIN_KEY_PREVIOUS` while clients catch up.
+
+Every successful admin write is recorded in the `audit_log` table (readable
+at `GET /api/v1/admin/audit`, same key). Because the key is shared it cannot
+prove *who* acted: the `actor` column is whatever the caller sent in an
+optional `X-Actor` header, defaulting to `admin`. Rows are pruned after
+`CADENCE_AUDIT_RETENTION_DAYS` (default 365).
 
 ### Agent tokens
 
