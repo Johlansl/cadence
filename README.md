@@ -184,6 +184,7 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
 | `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |
+| `CADENCE_TRUSTED_PROXIES` | — (empty) | reverse-proxy networks (CIDRs) whose `X-Forwarded-For` is trusted for the auth throttle and audit `client`; empty = use the direct peer IP. Set to the compose network subnet — see [Recording the real client IP](#recording-the-real-client-ip) |
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
 | `CADENCE_AUDIT_RETENTION_DAYS` | `365` | daily prune of the admin audit trail (`audit_log`); `0` = keep forever |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
@@ -353,6 +354,27 @@ curl -s https://<site>/api/v1/admin/audit -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
 
 Callers may set `X-Actor: alice` on their writes to stamp the `actor` column
 (it defaults to `admin` — the shared key proves no identity on its own).
+
+### Recording the real client IP
+
+The auth-failure throttle and the audit `client` column use the caller's IP.
+The backend sits behind Caddy + nginx, so out of the box that IP is always the
+nginx container's — `X-Forwarded-For` is **not** trusted by default (a client
+could forge it). To record the real client, set `CADENCE_TRUSTED_PROXIES` to
+the compose network subnet:
+
+```sh
+docker network inspect cadence_default \
+  --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'   # e.g. 172.18.0.0/16
+# in .env:
+CADENCE_TRUSTED_PROXIES=172.18.0.0/16
+docker compose up -d backend                            # picks up the change
+```
+
+With it set, `X-Forwarded-For` is walked right-to-left, trusted hops are
+skipped, and the first address outside the trusted networks is used. Leave it
+empty on any setup where the backend is reachable without going through the
+bundled proxies.
 
 ## Development
 

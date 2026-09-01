@@ -57,8 +57,10 @@ moving the old one to `CADENCE_ADMIN_KEY_PREVIOUS` while clients catch up.
 Every successful admin write is recorded in the `audit_log` table (readable
 at `GET /api/v1/admin/audit`, same key). Because the key is shared it cannot
 prove *who* acted: the `actor` column is whatever the caller sent in an
-optional `X-Actor` header, defaulting to `admin`. Rows are pruned after
-`CADENCE_AUDIT_RETENTION_DAYS` (default 365).
+optional `X-Actor` header, defaulting to `admin`. The `client` column is the
+caller's IP; `X-Forwarded-For` is only honoured for connections from
+`CADENCE_TRUSTED_PROXIES`, otherwise the direct peer is recorded. Rows are
+pruned after `CADENCE_AUDIT_RETENTION_DAYS` (default 365).
 
 ### Agent tokens
 

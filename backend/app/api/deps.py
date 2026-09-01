@@ -41,8 +41,10 @@ async def require_admin_key(
     ok = hmac.compare_digest(x_admin_key, settings.admin_key)
     if settings.admin_key_previous:
         ok |= hmac.compare_digest(x_admin_key, settings.admin_key_previous)
+    ip = client_ip(request)
     if not ok:
-        await _reject_401(client_ip(request), "admin-key", "invalid admin key")
+        await _reject_401(ip, "admin-key", "invalid admin key")
+    throttle.record_success(ip)  # clear any backoff earned by earlier typos
 
 
 async def get_current_host(
@@ -83,5 +85,6 @@ async def get_current_host(
     if host is None or not host.is_active:
         await _reject_401(ip, "bearer", "invalid token")
 
+    throttle.record_success(ip)  # clear any backoff earned by earlier failures
     tok.last_used_at = now  # opportunistic; rides the request's own commit
     return host

@@ -14,11 +14,14 @@ the request path can starve the thread pool and stall the dashboard.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import threading
 import time
 from dataclasses import dataclass
+
+from app.core.config import settings
 
 log = logging.getLogger("cadence.auth")
 
@@ -92,10 +95,32 @@ throttle = AuthThrottle(
 )
 
 
+def _is_trusted(addr: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return any(ip in net for net in settings.trusted_proxies)
+
+
 def client_ip(request) -> str:  # noqa: ANN001 -- starlette Request
-    """Best-effort caller IP. The backend sits behind Caddy + nginx, so the
-    real client is the first X-Forwarded-For hop when present."""
+    """Best-effort caller IP, used for the auth throttle and the audit
+    `client` column.
+
+    X-Forwarded-For is only believed when the direct connection comes from a
+    CADENCE_TRUSTED_PROXIES network. In that case the header is walked
+    right-to-left, skipping further trusted hops, and the first untrusted
+    address is returned -- a client-supplied XFF value cannot be trusted past
+    the real proxy chain. With no trusted proxy configured (the default), the
+    header is ignored entirely and the direct peer address is used.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if not settings.trusted_proxies or not _is_trusted(peer):
+        return peer
     xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    if not xff:
+        return peer
+    for hop in reversed([h.strip() for h in xff.split(",") if h.strip()]):
+        if not _is_trusted(hop):
+            return hop
+    return peer

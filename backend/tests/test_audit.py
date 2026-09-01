@@ -27,6 +27,12 @@ def _audit(db, **where):
     return list(db.execute(stmt).scalars().all())
 
 
+def _nets(cidrs: list[str]):
+    import ipaddress
+
+    return [ipaddress.ip_network(c) for c in cidrs]
+
+
 def _request(headers: dict[str, str], *, client_host: str = "10.9.9.9") -> Request:
     raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
     req = Request(
@@ -54,7 +60,13 @@ def test_audit_row_round_trips_through_the_orm(db_session):
     assert row.detail == {"a": 1}
 
 
-def test_record_audit_stages_without_committing(db_session):
+def test_record_audit_stages_without_committing(db_session, monkeypatch):
+    from app.core.config import settings
+
+    # trust the two proxy hops so the real client past them is recorded
+    monkeypatch.setattr(
+        settings, "trusted_proxies", _nets(["10.9.9.0/24", "10.0.0.0/24"])
+    )
     req = _request({"x-forwarded-for": "203.0.113.7, 10.0.0.1"})
     host_id = uuid.uuid4()
 
@@ -72,7 +84,7 @@ def test_record_audit_stages_without_committing(db_session):
     assert row.target_type == "host"
     assert row.target_id == str(host_id)  # stringified
     assert row.actor == "admin"  # no X-Actor header
-    assert row.client == "203.0.113.7"  # first X-Forwarded-For hop, not 10.9.9.9
+    assert row.client == "203.0.113.7"  # real client, past both trusted hops
     assert row.request_id == "req-abc123"
 
 

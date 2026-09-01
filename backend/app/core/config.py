@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from urllib.parse import quote
+
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 def _build_database_url() -> str:
@@ -19,6 +22,20 @@ def _build_database_url() -> str:
         f"postgresql+psycopg2://{quote(user, safe='')}:{quote(password, safe='')}"
         f"@{host}:{port}/{name}"
     )
+
+
+def _trusted_proxies(var: str) -> list[IPNetwork]:
+    """Parse a comma/space-separated list of CIDRs or bare IPs. Empty by
+    default: with no trusted proxy, X-Forwarded-For is not believed and the
+    direct connection IP is used (fail-safe). Read by app.core.throttle."""
+    raw = os.environ.get(var, "").replace(",", " ").split()
+    nets: list[IPNetwork] = []
+    for item in raw:
+        try:
+            nets.append(ipaddress.ip_network(item, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(f"{var}: {item!r} is not a valid CIDR or IP") from exc
+    return nets
 
 
 def _non_negative_int(var: str, default: int) -> int:
@@ -52,6 +69,11 @@ class Settings:
         # can be rotated without a flag day: set the new key, move the old one
         # here, update clients, then drop it.
         self.admin_key_previous: str = os.environ.get("CADENCE_ADMIN_KEY_PREVIOUS", "")
+
+        # Networks whose X-Forwarded-For header is trusted (the reverse
+        # proxies in front of the backend). Empty -> the direct connection IP
+        # is used for the auth throttle and the audit `client` column.
+        self.trusted_proxies: list[IPNetwork] = _trusted_proxies("CADENCE_TRUSTED_PROXIES")
 
         # Retention, applied by the scheduler's daily sweep. 0 = keep forever.
         self.reports_retention_days: int = _non_negative_int(
