@@ -196,7 +196,7 @@ All configuration is environment variables. Server variables live in `.env`
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `CADENCE_SERVER_URL` | yes | — | backend base URL, e.g. `https://cadence.lan` |
-| `CADENCE_TOKEN` | yes | — | per-host token from host registration |
+| `CADENCE_TOKEN` | yes | — | a per-host token (from registration, or issued via `/api/v1/admin/hosts/{id}/tokens`) |
 | `CADENCE_RUN_APT_UPDATE` | no | `true` (installer) | run `apt-get update` before collecting; failure is non-fatal |
 | `CADENCE_ENABLE_UPGRADES` | no | `true` | kill-switch: if `false`, a triggered job is reported `failed` |
 | `CADENCE_ENABLE_REBOOT` | no | `true` | kill-switch: if `false`, never reboot even under an `auto` policy |
@@ -311,6 +311,29 @@ After an agent release, on the server: `scripts/publish-agent.sh`. Then on each
 host, re-run the one-liner (it preserves the token) or the manual build, and
 `systemctl restart cadence-agent.service`. See `agent/CHANGELOG.md`.
 
+### Rotating a host's agent token
+
+Tokens live in `agent_tokens`; a host can have several active at once. Rotate
+roll-forward so the host never has a gap:
+
+```sh
+# 1. issue a new token (optional label / future expires_at)
+curl -s -X POST https://<site>/api/v1/admin/hosts/<id>/tokens \
+  -H "X-Admin-Key: $CADENCE_ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"label":"rotation 2026-09"}'                      # -> {"id":..,"token":".."}
+
+# 2. put the new token in /etc/cadence/agent.env on the host, restart the agent
+# 3. confirm it is the one being used, then revoke the old token by its id
+curl -s https://<site>/api/v1/admin/hosts/<id>/tokens -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
+curl -s -X DELETE https://<site>/api/v1/admin/hosts/<id>/tokens/<old_token_id> \
+  -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
+```
+
+The list shows `created_at`, `last_used_at` and a `state` of
+`active` / `expired` / `revoked` for each token. Revoking is auth-plane only —
+it does not cancel a job already queued or running (deactivate the host for
+that).
+
 ### Retention
 
 Covered by `CADENCE_*_RETENTION_DAYS` above; the sweep runs once a day in the
@@ -357,7 +380,8 @@ A single shared basic-auth credential gates the dashboard and read/admin API
 (on by default; agent endpoints are exempt), Caddy binds to loopback by
 default, and `CADENCE_ADMIN_KEY` authorizes every write. Successful admin
 writes are recorded in an audit trail (`GET /api/v1/admin/audit`), though the
-shared key means it cannot attribute them to a real user. There is no
+shared key means it cannot attribute them to a real user. Agent tokens
+(`agent_tokens`) can be rotated, given an expiry and revoked. There is no
 multi-user auth and agents fully trust the server. Before exposing Cadence
 beyond a network you control, read **[SECURITY.md](SECURITY.md)**. Report
 vulnerabilities privately (same file).

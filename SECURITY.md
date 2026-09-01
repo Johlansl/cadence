@@ -62,10 +62,21 @@ optional `X-Actor` header, defaulting to `admin`. Rows are pruned after
 
 ### Agent tokens
 
-One bearer token per host, SHA-256-hashed at rest. There is **no rotation, no
-expiry, and no revocation** short of deactivating (`is_active=false`) or
-deleting the host. A leaked token is valid indefinitely and can be replayed
-from anywhere.
+Bearer tokens, SHA-256-hashed at rest, in the `agent_tokens` table (one per
+host at provisioning, more can be issued). Each can be given an optional
+`expires_at` and revoked at any time (`revoked_at`); a token is accepted only
+while it is neither expired nor revoked *and* its host is `is_active`. Issue,
+list (with a derived active/expired/revoked state) and revoke via
+`/api/v1/admin/hosts/{id}/tokens`.
+
+Rotation is roll-forward: issue a new token, move the agent onto it, then
+revoke the old one — no window where the host cannot report. Revocation is
+auth-plane only: it does **not** cancel a job already queued or running for
+that host (deactivate the host to stop new jobs being handed out).
+
+Caveats: tokens still default to **no expiry** unless one is set; a leaked
+token is valid until it expires or is revoked, and can be replayed from
+anywhere until then; the plaintext is shown only once at issue time.
 
 ### Agent bootstrap is trust-on-first-use over plain HTTP
 

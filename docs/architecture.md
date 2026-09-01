@@ -39,8 +39,11 @@ the poll path racing on the same job is safe — exactly one claims it.
 
 ## Authentication
 
-- **Agent → server:** one bearer token per host, generated server-side at host
-  creation and transmitted once. Only its SHA-256 hash is stored.
+- **Agent → server:** per-host bearer tokens (`agent_tokens` table), generated
+  server-side and transmitted once. Only the SHA-256 hash is stored. Several
+  can be active at once for roll-forward rotation; each has an optional
+  `expires_at` / `revoked_at`. A token is accepted only while not
+  expired/revoked and its host is `is_active`.
 - **Admin writes** (create/delete hosts, queue jobs, edit schedules): a single
   shared `X-Admin-Key` header. The dashboard keeps it in `sessionStorage` and
   prompts for it on the first write of a session. Each successful write appends
@@ -58,6 +61,9 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
 - `hosts` — one row per monitored host: identity, OS, `package_manager`,
   `tags` (jsonb), `reboot_policy` (`auto` / `never` / `prompt`), `is_active`,
   `last_seen_at`.
+- `agent_tokens` — per-host bearer tokens (SHA-256 hash, optional
+  `expires_at` / `revoked_at`, `last_used_at`). Several may be active for
+  roll-forward rotation.
 - `packages` — a shared `(name, architecture)` dimension, never deleted.
 - `host_packages` — the current per-host package state (installed version,
   candidate version, security flag). Replaced wholesale on every report.

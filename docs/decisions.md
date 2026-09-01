@@ -33,10 +33,14 @@ model.
 
 ## Authentication
 
-- **One bearer token per host**, SHA-256-hashed at rest, transmitted once at
-  provisioning. Simple, and enough for a single-operator tool. Known
-  limitations: no rotation, no expiry, no revocation short of deactivating or
-  deleting the host.
+- **Bearer tokens per host** (`agent_tokens` table), SHA-256-hashed at rest,
+  transmitted once at issue time. One is created at provisioning; more can be
+  issued so a token is rotated roll-forward (new one issued, agent moved onto
+  it, old one revoked) with no reporting gap. Each token has an optional
+  `expires_at` and a `revoked_at`; state is *derived* from those two, there is
+  no separate flag. Revocation is auth-plane only — it never touches queued or
+  running jobs (deactivate the host for that). Simple, and enough for a
+  single-operator tool. Remaining limitation: tokens default to no expiry.
 - **A single shared `X-Admin-Key`** guards every admin write. Changing a system
   warrants more than an anonymous GET. It can be rotated live via
   `CADENCE_ADMIN_KEY_PREVIOUS`. Known limitation: total blast radius — a leaked
