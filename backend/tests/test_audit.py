@@ -13,7 +13,17 @@ from sqlalchemy import func, select
 from starlette.requests import Request
 
 from app.api.audit import record_audit
-from app.models.models import AuditLog
+from app.models.models import AuditLog, Host
+from tests.conftest import ADMIN_HEADERS, create_host
+
+WEEKLY = {"kind": "weekly", "weekday": 6, "hour": 3, "minute": 0, "timezone": "UTC"}
+
+
+def _audit(db, **where):
+    stmt = select(AuditLog).order_by(AuditLog.id)
+    for col, val in where.items():
+        stmt = stmt.where(getattr(AuditLog, col) == val)
+    return list(db.execute(stmt).scalars().all())
 
 
 def _request(headers: dict[str, str], *, client_host: str = "10.9.9.9") -> Request:
@@ -75,3 +85,99 @@ def test_record_audit_blank_x_actor_falls_back_to_admin(db_session):
     record_audit(db_session, _request({"x-actor": "   "}), "job.create")
     db_session.flush()
     assert db_session.execute(select(AuditLog.actor)).scalar_one() == "admin"
+
+
+# --- the eight admin handlers, end to end -----------------------------------
+
+
+def test_host_lifecycle_is_audited(client, db_session):
+    r = client.post(
+        "/api/v1/admin/hosts",
+        headers={**ADMIN_HEADERS, "X-Actor": "alice"},
+        json={"hostname": "vm-audit"},
+    )
+    host_id = r.json()["id"]
+
+    client.patch(
+        f"/api/v1/admin/hosts/{host_id}",
+        headers=ADMIN_HEADERS,
+        json={"is_active": False},
+    )
+    client.delete(f"/api/v1/admin/hosts/{host_id}", headers=ADMIN_HEADERS)
+
+    rows = _audit(db_session, target_type="host")
+    assert [row.action for row in rows] == ["host.create", "host.update", "host.delete"]
+    assert all(row.target_id == host_id for row in rows)
+    assert rows[0].actor == "alice"  # X-Actor flowed through
+    assert rows[1].actor == "admin"  # header absent -> default
+    assert rows[1].detail == {"fields": ["is_active"]}
+    # the delete row survives the cascade that removed the host
+    assert rows[2].detail == {"hostname": "vm-audit"}
+    assert db_session.get(Host, host_id) is None
+
+
+def test_failed_mutation_writes_no_audit_row(client, db_session):
+    r = client.patch(
+        f"/api/v1/admin/hosts/{uuid.uuid4()}",
+        headers=ADMIN_HEADERS,
+        json={"is_active": False},
+    )
+    assert r.status_code == 404
+    assert _audit(db_session) == []
+
+
+def test_rejected_admin_key_writes_no_audit_row(client, db_session):
+    r = client.post(
+        "/api/v1/admin/hosts", headers={"X-Admin-Key": "wrong"}, json={"hostname": "x"}
+    )
+    assert r.status_code == 401
+    assert _audit(db_session) == []
+
+
+def test_job_create_and_clear_are_audited(client, db_session):
+    host_id, _ = create_host(client)
+
+    r = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
+    job_id = r.json()["id"]
+    client.delete(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS)
+
+    created = _audit(db_session, action="job.create")[0]
+    assert created.target_type == "job" and created.target_id == job_id
+    assert created.detail["host_id"] == host_id and created.detail["job_type"] == "apt_upgrade"
+
+    cleared = _audit(db_session, action="job.clear")[0]
+    assert cleared.target_type == "host" and cleared.target_id == host_id
+    assert cleared.detail == {"deleted": 1}
+
+
+def test_schedule_lifecycle_is_audited(client, db_session):
+    host_id, _ = create_host(client)
+
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/schedules", headers=ADMIN_HEADERS, json=WEEKLY
+    )
+    sid = r.json()["id"]
+    client.patch(
+        f"/api/v1/admin/schedules/{sid}", headers=ADMIN_HEADERS, json={"enabled": False}
+    )
+    client.delete(f"/api/v1/admin/schedules/{sid}", headers=ADMIN_HEADERS)
+
+    rows = _audit(db_session, target_type="schedule")
+    assert [row.action for row in rows] == [
+        "schedule.create",
+        "schedule.update",
+        "schedule.delete",
+    ]
+    assert all(row.target_id == sid for row in rows)
+    assert rows[1].detail == {"fields": ["enabled"]}
+    assert rows[2].detail == {"host_id": host_id}
+
+
+def test_audit_row_carries_request_id_from_the_middleware(client, db_session):
+    client.post(
+        "/api/v1/admin/hosts",
+        headers={**ADMIN_HEADERS, "X-Request-ID": "trace-42"},
+        json={"hostname": "vm-trace"},
+    )
+    row = _audit(db_session, action="host.create")[0]
+    assert row.request_id == "trace-42"
