@@ -89,7 +89,7 @@ stack:
         '^x-content-type-options: nosniff' \
         '^x-frame-options: DENY' \
         '^referrer-policy: no-referrer' \
-        '^content-security-policy-report-only: .*frame-ancestors'; do
+        '^content-security-policy: .*frame-ancestors'; do
         echo "$H" | grep -qi "$want" || { echo "FAIL: missing header matching /$want/"; echo "$H"; exit 1; }
       done
       if echo "$H" | grep -qi '^server:'; then echo "FAIL: Server header leaked:"; echo "$H" | grep -i '^server:'; exit 1; fi

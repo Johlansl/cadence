@@ -38,6 +38,14 @@ versions, job logs, maintenance windows, the fleet summary. Treat the dashboard
 credential as protecting a "what is unpatched and where, and when it reboots"
 map of your fleet.
 
+Caddy sends a strict `Content-Security-Policy` (`default-src 'self'`, no
+`unsafe-inline`, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
+`Cross-Origin-Opener-Policy: same-origin`, and strips `Server`. There is no
+HSTS: the default deployment uses an internal CA on a `.lan` hostname, where
+HSTS would lock out a legitimate first visit. Add it (and drop `tls internal`)
+if you move to a public domain with ACME.
+
 ### The server is fully trusted by every agent
 
 The agent runs jobs the server hands it (`apt-get dist-upgrade`, `reboot`),
