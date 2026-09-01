@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Cadence agent periodically
+
+[Timer]
+# First run soon after boot (also confirms reboot-required is cleared), then
+# every 30 min relative to the last run.
+OnBootSec=1min
+OnUnitActiveSec=30min
+# Spread load across a fleet so reports don't all hit the server at once.
+RandomizedDelaySec=5min
+# (Persistent= is only honoured for OnCalendar= timers, so it is not set here.
+# A monotonic timer already runs ~1min after every boot, which covers downtime.)
+Unit=cadence-agent.service
+
+[Install]
+WantedBy=timers.target

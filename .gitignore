@@ -1,0 +1,31 @@
+# secrets / local config
+.env
+*.env
+!.env.example
+
+# minisign signing key -- never commit (agent/minisign.pub is fine to commit)
+minisign.key
+*.minisign.key
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# node
+node_modules/
+frontend/dist/
+
+# go
+agent/bin/
+
+# agent bootstrap assets staged by scripts/publish-agent.sh
+/dist/*
+!/dist/.gitkeep
+
+# extracted Caddy CA (written by scripts/publish-agent.sh / restore-check.sh)
+/cadence-ca.crt
+
+# local backups produced by scripts/backup.sh
+backups/

@@ -1,0 +1,176 @@
+# Cadence central server -- docker-compose: db + backend + scheduler +
+# frontend + caddy. Every service has a healthcheck; startup is ordered
+# db -> backend -> frontend -> caddy via depends_on: service_healthy.
+#
+# mem_limit / cpus are sized for the target VM (2 vCPU / 2 GB): the limits
+# sum to ~1.3 GB, several times idle usage, so normal operation never hits
+# them -- they only cap a runaway container.
+
+# Shared log rotation: cap each container's json-file log at 10 MB x 3 files.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: "1.5"
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # The schema is owned by Alembic: the backend/scheduler entrypoint runs
+      # `alembic upgrade head` on boot (app.prestart), which builds a fresh
+      # database from revision 0001. init.sql is NOT mounted -- doing so would
+      # create the tables a second time and crash the first migration.
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound to loopback only -- convenience for a local psql client.
+      # `docker compose exec db psql ...` works without this mapping.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    image: cadence-backend
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 384m
+    cpus: "1.5"
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      CADENCE_ADMIN_KEY: ${CADENCE_ADMIN_KEY}
+      CADENCE_ADMIN_KEY_PREVIOUS: ${CADENCE_ADMIN_KEY_PREVIOUS:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Interface is configurable: 127.0.0.1 (default) for a local test,
+      # 0.0.0.0 to reach the API from other VMs. See CADENCE_BACKEND_BIND.
+      - "${CADENCE_BACKEND_BIND:-127.0.0.1}:8000:8000"
+    healthcheck:
+      # /readyz does a SELECT 1; no curl in the slim image, so use stdlib.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Covers app.prestart (wait for DB + alembic upgrade head).
+      start_period: 40s
+
+  scheduler:
+    # The backend image, different command: a plain loop that turns due
+    # `schedules` rows into `jobs` rows and runs the daily retention sweep.
+    # No ports -- it only touches the DB. `docker compose build backend`
+    # rebuilds this too.
+    image: cadence-backend
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 192m
+    cpus: "0.75"
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      CADENCE_ADMIN_KEY: ${CADENCE_ADMIN_KEY}
+      CADENCE_ADMIN_KEY_PREVIOUS: ${CADENCE_ADMIN_KEY_PREVIOUS:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "app.scheduler"]
+    healthcheck:
+      # The loop upserts a `last_tick_at` heartbeat every pass; this fails
+      # when it goes stale -- a wedged loop a PID check would not catch.
+      test: ["CMD-SHELL", "python -m app.scheduler_healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # prestart (wait for DB + migrate) plus the first loop pass.
+      start_period: 45s
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
+    cpus: "0.5"
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      # Plain-HTTP dashboard. Loopback by default now that Caddy fronts it;
+      # set CADENCE_FRONTEND_BIND=0.0.0.0 only to reach it without TLS.
+      - "${CADENCE_FRONTEND_BIND:-127.0.0.1}:8080:80"
+    healthcheck:
+      # busybox wget -- always in the nginx:alpine image.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    cpus: "1.0"
+    environment:
+      CADENCE_SITE_ADDRESS: ${CADENCE_SITE_ADDRESS}
+      # Basic-auth gate (see Caddyfile). Defaults keep it ON.
+      CADENCE_DASHBOARD_AUTH: ${CADENCE_DASHBOARD_AUTH:-on}
+      CADENCE_DASHBOARD_USER: ${CADENCE_DASHBOARD_USER:-cadence}
+      CADENCE_DASHBOARD_PASSWORD_HASH: ${CADENCE_DASHBOARD_PASSWORD_HASH:-}
+    # Wrapper checks the dashboard hash is a well-formed bcrypt string before
+    # starting Caddy -- compose eats single `$` in .env, so a hash that wasn't
+    # `$`-doubled would otherwise start Caddy with a silently broken password.
+    entrypoint: ["/bin/sh", "/etc/caddy/entrypoint.sh"]
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      # The public entrypoint. CADENCE_HTTP_BIND controls the interface:
+      # 127.0.0.1 by default (dashboard reachable only from this host); set it
+      # to 0.0.0.0 in .env to serve the LAN. 80 redirects to 443.
+      - "${CADENCE_HTTP_BIND:-127.0.0.1}:80:80"
+      - "${CADENCE_HTTP_BIND:-127.0.0.1}:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/entrypoint.sh:/etc/caddy/entrypoint.sh:ro
+      # Agent bootstrap assets (installer, binary, CA), served over HTTP.
+      # Populated by scripts/publish-agent.sh; may be absent until then.
+      - ./dist:/srv/dist:ro
+      # Persist the internal CA + issued certs across restarts.
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      # Caddy's admin API (loopback, IPv4 only) -- up whenever Caddy is.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Lint + test the three components (agent / backend / frontend), lint the
+# shell scripts, and smoke-test the full docker compose stack from a clean
+# state.
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - working-directory: agent
+        run: |
+          go vet ./...
+          go test ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/cadence-agent ./cmd/agent
+          ./bin/cadence-agent -version
+          (cd bin && sha256sum cadence-agent > cadence-agent.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cadence-agent
+          path: |
+            agent/bin/cadence-agent
+            agent/bin/cadence-agent.sha256
+          retention-days: 30
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version && shellcheck scripts/*.sh caddy/*.sh
+      - name: caddy entrypoint rejects a broken dashboard hash
+        run: |
+          if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH=2a14brokenhash sh caddy/entrypoint.sh true; then
+            echo "FAIL: entrypoint accepted a mangled hash"; exit 1
+          fi
+          if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH= sh caddy/entrypoint.sh true; then
+            echo "FAIL: entrypoint accepted an empty hash with auth on"; exit 1
+          fi
+          if ! CADENCE_DASHBOARD_AUTH=off sh caddy/entrypoint.sh true; then
+            echo "FAIL: entrypoint should skip the check when auth is off"; exit 1
+          fi
+          echo "entrypoint validation checks OK"
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cadence
+          POSTGRES_PASSWORD: cadence
+          POSTGRES_DB: cadence
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cadence"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      POSTGRES_USER: cadence
+      POSTGRES_PASSWORD: cadence
+      POSTGRES_DB: cadence
+      POSTGRES_HOST: localhost
+      CADENCE_ADMIN_KEY: ci-admin-key-01
+      PIP_NO_CACHE_DIR: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements-dev.txt
+      - working-directory: backend
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+
+  stack:
+    # Whole docker-compose stack from a clean state: build, bring up, assert it
+    # converges. Catches broken Dockerfiles and migration bootstrap regressions
+    # the unit suites (which build the DB from Alembic directly) cannot see.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: write CI .env
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_USER=cadence
+          POSTGRES_PASSWORD=cadence-ci
+          POSTGRES_DB=cadence
+          CADENCE_ADMIN_KEY=ci-admin-key-0123456789abcdef
+          CADENCE_SITE_ADDRESS=cadence.ci.local
+          CADENCE_DASHBOARD_AUTH=on
+          CADENCE_DASHBOARD_USER=cadence
+          CADENCE_DASHBOARD_PASSWORD_HASH=$$2a$$14$$9RzS8dzkDp0vCxfkusQZR.1l95oLIGKbReMUMdZwJ77Dz9SNKXqra
+          EOF
+          mkdir -p dist   # caddy bind-mounts ./dist (gitignored, absent in CI)
+      - run: docker compose up -d --build --wait --wait-timeout 240
+      - run: docker compose ps
+      - run: docker compose run --rm backend alembic current | grep -qE '^0008 \(head\)$'
+      - run: docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5); print('readyz ok')"
+      - name: basic-auth gate (placeholder hash is bcrypt of "change-me")
+        run: |
+          test "$(docker compose exec -T caddy sh -c 'curl -sk -o /dev/null -w "%{http_code}" --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/')" = 401
+          test "$(docker compose exec -T caddy sh -c 'curl -sk -o /dev/null -w "%{http_code}" -u cadence:change-me --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/')" = 200
+      - name: agent endpoints must not be gated
+        run: |
+          if docker compose exec -T caddy sh -c 'curl -sk -D - -o /dev/null -X POST --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/api/v1/agent/next-job' | grep -qi '^www-authenticate:.*basic'; then
+            echo "FAIL: /api/v1/agent/next-job is behind basic auth"; exit 1
+          fi
+      - name: security headers on the dashboard response
+        run: |
+          H=$(docker compose exec -T caddy sh -c 'curl -sk -D - -o /dev/null -u cadence:change-me --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/')
+          for want in \
+            '^x-content-type-options: nosniff' \
+            '^x-frame-options: DENY' \
+            '^referrer-policy: no-referrer' \
+            '^content-security-policy: .*frame-ancestors'; do
+            echo "$H" | grep -qi "$want" || { echo "FAIL: missing header matching /$want/"; echo "$H"; exit 1; }
+          done
+          if echo "$H" | grep -qi '^server:'; then echo "FAIL: Server header leaked:"; echo "$H" | grep -i '^server:'; exit 1; fi
+      - name: dump logs
+        if: always()
+        run: docker compose logs --tail=80 || true
+      - name: tear down
+        if: always()
+        run: docker compose down -v || true

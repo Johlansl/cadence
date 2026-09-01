@@ -1,0 +1,7 @@
+# Test-only dependencies. Not installed in the runtime image (see Dockerfile).
+# Run:  docker compose run --rm -v "$PWD/backend:/app" backend \
+#         sh -c "pip install -q -r requirements-dev.txt && pytest -q"
+-r requirements.txt
+
+pytest==8.3.4
+httpx==0.28.1
