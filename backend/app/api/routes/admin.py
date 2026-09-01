@@ -23,6 +23,9 @@ from app.schemas.schemas import (
     HostUpdate,
     JobCreate,
     JobOut,
+    TokenCreate,
+    TokenIssued,
+    TokenOut,
 )
 
 router = APIRouter(
@@ -167,6 +170,102 @@ def clear_host_jobs(
         detail={"deleted": deleted},
     )
     db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _token_state(tok: AgentToken, now: datetime) -> str:
+    if tok.revoked_at is not None:
+        return "revoked"
+    if tok.expires_at is not None and tok.expires_at <= now:
+        return "expired"
+    return "active"
+
+
+@router.get("/hosts/{host_id}/tokens", response_model=list[TokenOut])
+def list_host_tokens(host_id: uuid.UUID, db: Session = Depends(get_db)) -> list[TokenOut]:
+    """Every agent token for the host -- active, expired and revoked -- so a
+    stale one is obvious at a glance. The hash is never returned."""
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+    now = datetime.now(timezone.utc)
+    rows = db.execute(
+        select(AgentToken).where(AgentToken.host_id == host_id)
+    ).scalars().all()
+    out = [
+        TokenOut(
+            id=t.id,
+            label=t.label,
+            created_at=t.created_at,
+            last_used_at=t.last_used_at,
+            expires_at=t.expires_at,
+            revoked_at=t.revoked_at,
+            state=_token_state(t, now),
+        )
+        for t in rows
+    ]
+    # active first, then newest first (id is monotonic, unlike a shared now())
+    out.sort(key=lambda t: (t.state != "active", -t.id))
+    return out
+
+
+@router.post(
+    "/hosts/{host_id}/tokens",
+    response_model=TokenIssued,
+    status_code=status.HTTP_201_CREATED,
+)
+def issue_host_token(
+    request: Request,
+    host_id: uuid.UUID,
+    payload: TokenCreate,
+    db: Session = Depends(get_db),
+) -> TokenIssued:
+    """Issue an additional token so the agent can be rotated onto it before the
+    old one is revoked. The plaintext is returned once."""
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+
+    secret = secrets.token_urlsafe(32)
+    tok = AgentToken(
+        host_id=host_id,
+        token_hash=hashlib.sha256(secret.encode()).hexdigest(),
+        label=payload.label,
+        expires_at=payload.expires_at,
+    )
+    db.add(tok)
+    db.flush()  # populate tok.id for the audit row
+    record_audit(
+        db, request, "token.issue", target_type="token", target_id=tok.id,
+        detail={
+            "host_id": str(host_id),
+            "label": tok.label,
+            "expires_at": tok.expires_at.isoformat() if tok.expires_at else None,
+        },
+    )
+    db.commit()
+    db.refresh(tok)
+    return TokenIssued(
+        id=tok.id, label=tok.label, expires_at=tok.expires_at, token=secret
+    )
+
+
+@router.delete(
+    "/hosts/{host_id}/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def revoke_host_token(
+    request: Request, host_id: uuid.UUID, token_id: int, db: Session = Depends(get_db)
+) -> Response:
+    """Revoke one token (auth-plane only -- pending/running jobs are untouched).
+    Idempotent: revoking an already-revoked token is a no-op 204."""
+    tok = db.get(AgentToken, token_id)
+    if tok is None or tok.host_id != host_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "token not found")
+    if tok.revoked_at is None:
+        tok.revoked_at = datetime.now(timezone.utc)
+        record_audit(
+            db, request, "token.revoke", target_type="token", target_id=tok.id,
+            detail={"host_id": str(host_id), "label": tok.label},
+        )
+        db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

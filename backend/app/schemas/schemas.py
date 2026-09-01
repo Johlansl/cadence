@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -69,6 +69,50 @@ class HostPatched(BaseModel):
     reboot_policy: str
     is_active: bool
     tags: dict[str, str]
+
+
+# --- admin: agent tokens -------------------------------------------------------
+
+class TokenCreate(BaseModel):
+    """Issue an additional agent token for a host."""
+
+    label: str | None = Field(default=None, max_length=80)
+    expires_at: datetime | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def _must_be_future(cls, v: datetime | None) -> datetime | None:
+        if v is None:
+            return v
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        if v <= datetime.now(timezone.utc):
+            raise ValueError("expires_at must be in the future")
+        return v
+
+
+class TokenIssued(BaseModel):
+    id: int
+    label: str | None
+    expires_at: datetime | None
+    # Plaintext token, returned exactly once at issue time.
+    token: str
+
+
+TokenState = Literal["active", "expired", "revoked"]
+
+
+class TokenOut(BaseModel):
+    """One agent token, hash never included. `state` is derived at read time
+    from revoked_at / expires_at."""
+
+    id: int
+    label: str | None
+    created_at: datetime
+    last_used_at: datetime | None
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    state: TokenState
 
 
 # --- agent report ingestion -------------------------------------------------

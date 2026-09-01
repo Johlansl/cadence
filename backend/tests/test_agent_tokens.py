@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.models import AgentToken, Host
+from app.models.models import AgentToken, AuditLog, Host
 from tests.conftest import ADMIN_HEADERS, bearer, create_host, report_payload
 
 
@@ -130,3 +130,128 @@ def test_deleting_a_host_cascades_to_its_tokens(client, db_session):
         select(AgentToken).where(AgentToken.host_id == host_id)
     ).scalars().all() == []
     assert db_session.get(Host, host_id) is None
+
+
+# --- issue / list / revoke endpoints -------------------------------------
+
+
+def test_issue_list_revoke_flow(client, db_session):
+    host_id, initial = create_host(client)
+
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/tokens",
+        headers=ADMIN_HEADERS,
+        json={"label": "rotated"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    new_id, secret = body["id"], body["token"]
+    assert body["label"] == "rotated" and len(secret) >= 32
+
+    # the new token authenticates
+    assert client.post(
+        "/api/v1/reports", headers=bearer(secret), json=report_payload()
+    ).status_code == 200
+
+    lst = client.get(
+        f"/api/v1/admin/hosts/{host_id}/tokens", headers=ADMIN_HEADERS
+    ).json()
+    assert len(lst) == 2
+    assert lst[0]["id"] == new_id  # newest active first
+    assert {t["state"] for t in lst} == {"active"}
+    fields = {"id", "label", "created_at", "last_used_at", "expires_at", "revoked_at", "state"}
+    for t in lst:
+        assert fields <= t.keys()
+        assert "token_hash" not in t and "token" not in t
+
+    # revoke the new one
+    assert client.delete(
+        f"/api/v1/admin/hosts/{host_id}/tokens/{new_id}", headers=ADMIN_HEADERS
+    ).status_code == 204
+    assert client.post(
+        "/api/v1/reports", headers=bearer(secret), json=report_payload()
+    ).status_code == 401
+    assert client.post(
+        "/api/v1/reports", headers=bearer(initial), json=report_payload()
+    ).status_code == 200  # the initial token is untouched
+
+    lst = client.get(
+        f"/api/v1/admin/hosts/{host_id}/tokens", headers=ADMIN_HEADERS
+    ).json()
+    by_id = {t["id"]: t for t in lst}
+    assert by_id[new_id]["state"] == "revoked" and by_id[new_id]["revoked_at"] is not None
+    assert lst[-1]["id"] == new_id  # revoked sorts after active
+
+    # second revoke is a no-op 204
+    assert client.delete(
+        f"/api/v1/admin/hosts/{host_id}/tokens/{new_id}", headers=ADMIN_HEADERS
+    ).status_code == 204
+
+
+def test_issue_with_past_expiry_is_rejected(client):
+    host_id, _ = create_host(client)
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/tokens",
+        headers=ADMIN_HEADERS,
+        json={"expires_at": "2000-01-01T00:00:00Z"},
+    )
+    assert r.status_code == 422
+
+
+def test_expired_token_shows_expired_state(client, db_session):
+    host_id, _ = create_host(client)
+    tid = client.post(
+        f"/api/v1/admin/hosts/{host_id}/tokens", headers=ADMIN_HEADERS, json={}
+    ).json()["id"]
+    tok = db_session.get(AgentToken, tid)
+    tok.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db_session.commit()
+
+    lst = client.get(
+        f"/api/v1/admin/hosts/{host_id}/tokens", headers=ADMIN_HEADERS
+    ).json()
+    assert {t["id"]: t["state"] for t in lst}[tid] == "expired"
+
+
+def test_token_endpoints_unknown_host_404(client):
+    import uuid
+
+    missing = uuid.uuid4()
+    assert client.get(
+        f"/api/v1/admin/hosts/{missing}/tokens", headers=ADMIN_HEADERS
+    ).status_code == 404
+    assert client.post(
+        f"/api/v1/admin/hosts/{missing}/tokens", headers=ADMIN_HEADERS, json={}
+    ).status_code == 404
+
+    host_id, _ = create_host(client)
+    assert client.delete(
+        f"/api/v1/admin/hosts/{host_id}/tokens/999999", headers=ADMIN_HEADERS
+    ).status_code == 404
+
+
+def test_revoke_rejects_a_token_from_another_host(client, db_session):
+    host_a, _ = create_host(client, "vm-a")
+    host_b, _ = create_host(client, "vm-b")
+    tid = db_session.execute(
+        select(AgentToken.id).where(AgentToken.host_id == host_b)
+    ).scalar_one()
+
+    assert client.delete(
+        f"/api/v1/admin/hosts/{host_a}/tokens/{tid}", headers=ADMIN_HEADERS
+    ).status_code == 404
+
+
+def test_token_issue_and_revoke_are_audited(client, db_session):
+    host_id, _ = create_host(client)
+    tid = client.post(
+        f"/api/v1/admin/hosts/{host_id}/tokens", headers=ADMIN_HEADERS, json={"label": "ci"}
+    ).json()["id"]
+    client.delete(f"/api/v1/admin/hosts/{host_id}/tokens/{tid}", headers=ADMIN_HEADERS)
+
+    actions = db_session.execute(
+        select(AuditLog.action)
+        .where(AuditLog.target_type == "token", AuditLog.target_id == str(tid))
+        .order_by(AuditLog.id)
+    ).scalars().all()
+    assert actions == ["token.issue", "token.revoke"]
