@@ -27,7 +27,10 @@ def get_db() -> Iterator[Session]:
 def require_admin_key(
     request: Request, x_admin_key: str = Header(..., alias="X-Admin-Key")
 ) -> None:
-    if not hmac.compare_digest(x_admin_key, settings.admin_key):
+    ok = hmac.compare_digest(x_admin_key, settings.admin_key)
+    if settings.admin_key_previous:
+        ok |= hmac.compare_digest(x_admin_key, settings.admin_key_previous)
+    if not ok:
         throttle.record_failure(client_ip(request), kind="admin-key")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid admin key")
 

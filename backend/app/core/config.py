@@ -43,6 +43,15 @@ class Settings:
         self.admin_key: str = os.environ.get("CADENCE_ADMIN_KEY", "")
         if not self.admin_key:
             raise RuntimeError("CADENCE_ADMIN_KEY is required")
+        if len(self.admin_key) < 12:
+            raise RuntimeError(
+                "CADENCE_ADMIN_KEY must be at least 12 characters "
+                "(use `openssl rand -hex 32`)"
+            )
+        # Optional second key accepted alongside CADENCE_ADMIN_KEY, so the key
+        # can be rotated without a flag day: set the new key, move the old one
+        # here, update clients, then drop it.
+        self.admin_key_previous: str = os.environ.get("CADENCE_ADMIN_KEY_PREVIOUS", "")
 
         # Retention, applied by the scheduler's daily sweep. 0 = keep forever.
         self.reports_retention_days: int = _non_negative_int(

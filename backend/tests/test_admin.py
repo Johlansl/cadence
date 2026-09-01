@@ -1,5 +1,6 @@
 import uuid
 
+from app.core.config import settings
 from tests.conftest import ADMIN_HEADERS, create_host
 
 
@@ -28,6 +29,25 @@ def test_create_host_rejects_bad_admin_key(client):
 def test_create_host_requires_admin_key_header(client):
     r = client.post("/api/v1/admin/hosts", json={"hostname": "nope"})
     assert r.status_code == 422  # missing required header
+
+
+def test_previous_admin_key_is_accepted_during_rotation(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_key_previous", "the-old-admin-key")
+
+    r = client.post(
+        "/api/v1/admin/hosts",
+        headers={"X-Admin-Key": "the-old-admin-key"},
+        json={"hostname": "rotated"},
+    )
+    assert r.status_code == 201, r.text
+
+    # a key that is neither the current nor the previous one is still rejected
+    r = client.post(
+        "/api/v1/admin/hosts",
+        headers={"X-Admin-Key": "neither-key"},
+        json={"hostname": "nope"},
+    )
+    assert r.status_code == 401
 
 
 def test_create_job_conflicts_when_one_is_active(client):
