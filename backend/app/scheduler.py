@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
 from app.db.base import SessionLocal
-from app.models.models import Job, Report, Schedule, SchedulerState
+from app.models.models import AuditLog, Job, Report, Schedule, SchedulerState
 
 log = logging.getLogger("cadence.scheduler")
 
@@ -161,12 +161,14 @@ def reap_stuck_jobs(
 
 
 def retention_sweep(
-    db: Session, now: datetime, *, reports_days: int, jobs_days: int
-) -> tuple[int, int]:
+    db: Session, now: datetime, *, reports_days: int, jobs_days: int, audit_days: int
+) -> tuple[int, int, int]:
     """Delete old append-only rows. 0 days = keep forever. Terminal jobs only
-    (pending/running are never removed here). Returns (reports, jobs) deleted."""
+    (pending/running are never removed here). Returns (reports, jobs, audit)
+    deleted."""
     reports_deleted = 0
     jobs_deleted = 0
+    audit_deleted = 0
     if reports_days > 0:
         cutoff = now - timedelta(days=reports_days)
         reports_deleted = db.execute(
@@ -181,8 +183,13 @@ def retention_sweep(
                 Job.completed_at < cutoff,
             )
         ).rowcount
+    if audit_days > 0:
+        cutoff = now - timedelta(days=audit_days)
+        audit_deleted = db.execute(
+            delete(AuditLog).where(AuditLog.at < cutoff)
+        ).rowcount
     db.commit()
-    return reports_deleted, jobs_deleted
+    return reports_deleted, jobs_deleted, audit_deleted
 
 
 def _retention_due(db: Session, now: datetime) -> bool:
@@ -213,16 +220,21 @@ def _mark_retention_done(db: Session, now: datetime) -> None:
 
 def run_retention_if_due(now: datetime | None = None) -> None:
     now = now or datetime.now(timezone.utc)
-    if settings.reports_retention_days == 0 and settings.jobs_retention_days == 0:
+    if (
+        settings.reports_retention_days == 0
+        and settings.jobs_retention_days == 0
+        and settings.audit_retention_days == 0
+    ):
         return
     with SessionLocal() as db:
         if not _retention_due(db, now):
             return
-        reports, jobs = retention_sweep(
+        reports, jobs, audit = retention_sweep(
             db,
             now,
             reports_days=settings.reports_retention_days,
             jobs_days=settings.jobs_retention_days,
+            audit_days=settings.audit_retention_days,
         )
         _mark_retention_done(db, now)
     log.info(
@@ -230,8 +242,10 @@ def run_retention_if_due(now: datetime | None = None) -> None:
         extra=_f(
             reports_deleted=reports,
             jobs_deleted=jobs,
+            audit_deleted=audit,
             keep_reports_days=settings.reports_retention_days,
             keep_jobs_days=settings.jobs_retention_days,
+            keep_audit_days=settings.audit_retention_days,
         ),
     )
 

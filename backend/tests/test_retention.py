@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.models import Job, Report
+from app.models.models import AuditLog, Job, Report
 from app.scheduler import (
     RETENTION_EVERY,
     _mark_retention_done,
@@ -45,8 +45,10 @@ def test_sweep_deletes_old_reports_only(client, db_session):
     _report(db_session, host_id, age_days=10)
     db_session.flush()
 
-    reports, jobs = retention_sweep(db_session, NOW, reports_days=90, jobs_days=90)
-    assert (reports, jobs) == (2, 0)
+    reports, jobs, audit = retention_sweep(
+        db_session, NOW, reports_days=90, jobs_days=90, audit_days=0
+    )
+    assert (reports, jobs, audit) == (2, 0, 0)
 
     left = db_session.execute(
         select(Report).where(Report.host_id == host_id)
@@ -63,7 +65,9 @@ def test_sweep_keeps_pending_and_recent_jobs(client, db_session):
     _job(db_session, host_id, status="running", created_age_days=300)
     db_session.flush()
 
-    _, jobs = retention_sweep(db_session, NOW, reports_days=0, jobs_days=90)
+    _, jobs, _ = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=90, audit_days=0
+    )
     assert jobs == 2  # the two old terminal jobs
 
     remaining = {
@@ -81,7 +85,23 @@ def test_sweep_disabled_with_zero(client, db_session):
     _job(db_session, host_id, status="succeeded", completed_age_days=999)
     db_session.flush()
 
-    assert retention_sweep(db_session, NOW, reports_days=0, jobs_days=0) == (0, 0)
+    assert retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=0, audit_days=0
+    ) == (0, 0, 0)
+
+
+def test_sweep_deletes_old_audit_rows_only(db_session):
+    db_session.add(AuditLog(at=NOW - timedelta(days=400), action="host.create"))
+    db_session.add(AuditLog(at=NOW - timedelta(days=200), action="host.delete"))
+    db_session.flush()
+
+    reports, jobs, audit = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=0, audit_days=365
+    )
+    assert (reports, jobs, audit) == (0, 0, 1)
+
+    left = db_session.execute(select(AuditLog.action)).scalars().all()
+    assert left == ["host.delete"]
 
 
 def test_retention_due_is_persisted_across_restarts(client, db_session):

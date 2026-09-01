@@ -60,6 +60,10 @@ class Settings:
         self.jobs_retention_days: int = _non_negative_int(
             "CADENCE_JOBS_RETENTION_DAYS", 90
         )
+        # The admin audit trail is small and worth keeping longer. 0 = forever.
+        self.audit_retention_days: int = _non_negative_int(
+            "CADENCE_AUDIT_RETENTION_DAYS", 365
+        )
 
         # A job left 'running' longer than this is failed by the scheduler's
         # reaper -- a dead agent would otherwise block every future job for
