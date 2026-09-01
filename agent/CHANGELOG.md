@@ -3,6 +3,17 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.6.2
+
+Security:
+
+- The `CADENCE_*` variables (`CADENCE_TOKEN` among them) are stripped from the
+  environment of every command the agent runs — `apt-get`, `dpkg-query`,
+  `dpkg`, `systemctl`, `shutdown`. They were inherited by those children,
+  exposing the host token via `/proc/<pid>/environ`, apt hooks and dpkg
+  maintainer scripts. New `internal/procenv` helper; no behaviour change for a
+  healthy host.
+
 ## 0.6.1
 
 Robustness (no behaviour change for a healthy host):

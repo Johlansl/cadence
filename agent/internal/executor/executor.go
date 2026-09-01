@@ -7,12 +7,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"syscall"
 	"time"
 
 	"cadence/agent/internal/apterr"
+	"cadence/agent/internal/procenv"
 	"cadence/agent/internal/rebootcheck"
 )
 
@@ -53,7 +53,7 @@ type Result struct {
 }
 
 func aptEnv() []string {
-	return append(os.Environ(),
+	return procenv.For(
 		"LC_ALL=C",
 		"LANG=C",
 		"DEBIAN_FRONTEND=noninteractive",

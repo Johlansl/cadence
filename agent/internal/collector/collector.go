@@ -6,11 +6,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
 	"cadence/agent/internal/logging"
+	"cadence/agent/internal/procenv"
 	"cadence/agent/internal/report"
 )
 
@@ -53,7 +53,7 @@ func Collect(ctx context.Context, agentVersion string, runAptUpdate bool) (repor
 // environment so its output can be parsed reliably.
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C", "DEBIAN_FRONTEND=noninteractive")
+	cmd.Env = procenv.For("LC_ALL=C", "LANG=C", "DEBIAN_FRONTEND=noninteractive")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

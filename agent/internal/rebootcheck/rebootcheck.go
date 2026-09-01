@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"cadence/agent/internal/procenv"
 )
 
 // Pending reports whether the host needs a reboot.
@@ -27,7 +29,7 @@ func run(name string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
+	cmd.Env = procenv.For("LC_ALL=C", "LANG=C")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -88,5 +90,7 @@ func kernelPending() bool {
 func dpkgVersionGreater(a, b string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "dpkg", "--compare-versions", a, "gt", b).Run() == nil
+	cmd := exec.CommandContext(ctx, "dpkg", "--compare-versions", a, "gt", b)
+	cmd.Env = procenv.For()
+	return cmd.Run() == nil
 }

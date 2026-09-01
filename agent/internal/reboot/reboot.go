@@ -9,19 +9,25 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+
+	"cadence/agent/internal/procenv"
 )
 
 // Issue reboots the host. It prefers `systemctl --no-block reboot` (returns
 // immediately so the agent can exit cleanly) and falls back to
 // `shutdown -r now` on a host without systemd.
 func Issue(ctx context.Context) error {
-	out, err := exec.CommandContext(ctx, "systemctl", "--no-block", "reboot").CombinedOutput()
+	systemctl := exec.CommandContext(ctx, "systemctl", "--no-block", "reboot")
+	systemctl.Env = procenv.For()
+	out, err := systemctl.CombinedOutput()
 	if err == nil {
 		return nil
 	}
 	first := fmt.Errorf("systemctl --no-block reboot: %w: %s", err, bytes.TrimSpace(out))
 
-	out2, err2 := exec.CommandContext(ctx, "shutdown", "-r", "now").CombinedOutput()
+	shutdown := exec.CommandContext(ctx, "shutdown", "-r", "now")
+	shutdown.Env = procenv.For()
+	out2, err2 := shutdown.CombinedOutput()
 	if err2 == nil {
 		return nil
 	}
