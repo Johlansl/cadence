@@ -315,3 +315,22 @@ class ScheduleOut(BaseModel):
     next_run_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+# --- audit -------------------------------------------------------------------
+
+
+class AuditEntry(BaseModel):
+    """One row of the admin audit trail (GET /api/v1/admin/audit)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    at: datetime
+    action: str
+    target_type: str | None
+    target_id: str | None
+    actor: str
+    client: str | None
+    request_id: str | None
+    detail: dict | None

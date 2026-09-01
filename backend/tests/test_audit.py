@@ -8,6 +8,7 @@ helper derives actor / client / request_id correctly without committing.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from starlette.requests import Request
@@ -181,3 +182,60 @@ def test_audit_row_carries_request_id_from_the_middleware(client, db_session):
     )
     row = _audit(db_session, action="host.create")[0]
     assert row.request_id == "trace-42"
+
+
+# --- GET /api/v1/admin/audit ----------------------------------------------
+
+
+def test_audit_endpoint_requires_admin_key(client):
+    assert client.get("/api/v1/admin/audit").status_code == 422  # header missing
+    assert (
+        client.get("/api/v1/admin/audit", headers={"X-Admin-Key": "no"}).status_code
+        == 401
+    )
+
+
+def test_audit_endpoint_lists_newest_first_and_filters(client, db_session):
+    host_id, _ = create_host(client)
+    client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
+    client.delete(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS)
+
+    rows = client.get("/api/v1/admin/audit", headers=ADMIN_HEADERS).json()
+    actions = [r["action"] for r in rows]
+    assert actions == ["job.clear", "job.create", "host.create"]  # newest first
+    assert rows[-1]["actor"] == "admin"
+
+    only_create = client.get(
+        "/api/v1/admin/audit?action=job.create", headers=ADMIN_HEADERS
+    ).json()
+    assert [r["action"] for r in only_create] == ["job.create"]
+
+    by_target = client.get(
+        f"/api/v1/admin/audit?target_type=host&target_id={host_id}",
+        headers=ADMIN_HEADERS,
+    ).json()
+    assert {r["action"] for r in by_target} == {"host.create", "job.clear"}
+
+
+def test_audit_endpoint_keyset_pages_through_a_shared_timestamp(client, db_session):
+    from app.models.models import AuditLog as _AL
+
+    t = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    stamps = [t, t + timedelta(seconds=1), t + timedelta(seconds=1), t + timedelta(seconds=1), t + timedelta(seconds=2)]
+    for i, at in enumerate(stamps):
+        db_session.add(_AL(at=at, action=f"test.{i}", actor="admin"))
+    db_session.commit()
+
+    seen: list[int] = []
+    url = "/api/v1/admin/audit?limit=2"
+    for _ in range(10):
+        page = client.get(url, headers=ADMIN_HEADERS).json()
+        seen.extend(r["id"] for r in page)
+        if len(page) < 2:
+            break
+        last = page[-1]
+        url = f"/api/v1/admin/audit?limit=2&before={last['at']}&before_id={last['id']}"
+
+    full = [r["id"] for r in client.get("/api/v1/admin/audit?limit=500", headers=ADMIN_HEADERS).json()]
+    assert seen == full
+    assert len(set(seen)) == len(full) >= 5

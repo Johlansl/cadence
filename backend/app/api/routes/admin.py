@@ -7,14 +7,16 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
 from app.api.deps import get_db, require_admin_key
-from app.models.models import Host, Job
+from app.api.pagination import before_keyset
+from app.models.models import AuditLog, Host, Job
 from app.schemas.schemas import (
+    AuditEntry,
     HostCreate,
     HostCreated,
     HostPatched,
@@ -165,3 +167,34 @@ def clear_host_jobs(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/audit", response_model=list[AuditEntry])
+def list_audit(
+    limit: int = Query(50, ge=1, le=500),
+    action: str | None = Query(None, description="exact match on the action verb"),
+    target_type: str | None = Query(None),
+    target_id: str | None = Query(None),
+    before: datetime | None = Query(
+        None, description="page cursor: `at` of the last row you have"
+    ),
+    before_id: int | None = Query(
+        None, description="page cursor: `id` of the last row you have (pass with `before`)"
+    ),
+    db: Session = Depends(get_db),
+) -> list[AuditLog]:
+    """The admin audit trail, newest first. Guarded by X-Admin-Key like the
+    writes it records. Page with (`before`, `before_id`) = the `at` and `id`
+    of the oldest row you already have."""
+    stmt = select(AuditLog)
+    if action is not None:
+        stmt = stmt.where(AuditLog.action == action)
+    if target_type is not None:
+        stmt = stmt.where(AuditLog.target_type == target_type)
+    if target_id is not None:
+        stmt = stmt.where(AuditLog.target_id == target_id)
+    keyset = before_keyset(AuditLog.at, AuditLog.id, before, before_id)
+    if keyset is not None:
+        stmt = stmt.where(keyset)
+    stmt = stmt.order_by(AuditLog.at.desc(), AuditLog.id.desc()).limit(limit)
+    return list(db.execute(stmt).scalars().all())
