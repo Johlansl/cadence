@@ -20,8 +20,8 @@
 
 set -eu
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo=$(CDPATH= cd -- "$here/.." && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo=$(CDPATH='' cd -- "$here/.." && pwd)
 env_file=${CADENCE_ENV_FILE:-$repo/.env}
 backup_dir=${CADENCE_BACKUP_DIR:-$repo/backups}
 keep=${CADENCE_BACKUP_KEEP:-14}
@@ -86,6 +86,8 @@ alembic_rev=$(docker compose exec -T backend alembic current 2>/dev/null \
 
 # 5. Prune old backups, keep the newest $keep.
 if [ "$keep" -gt 0 ]; then
+	# backup dirs are timestamp-named (no spaces/newlines), so ls is safe here
+	# shellcheck disable=SC2012
 	ls -1d "$backup_dir"/*/ 2>/dev/null | sort | head -n "-$keep" | while read -r old; do
 		echo "backup.sh: pruning $old"
 		rm -rf "$old"

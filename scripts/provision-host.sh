@@ -26,7 +26,7 @@ fi
 api=${CADENCE_API:-http://127.0.0.1:8000}
 agent_url=${CADENCE_AGENT_URL:-https://cadence.lan}
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 env_file=${CADENCE_ENV_FILE:-$here/../.env}
 
 admin_key=${CADENCE_ADMIN_KEY:-}

@@ -20,6 +20,15 @@ agent:
       - agent/bin/cadence-agent.sha256
     expire_in: 30 days
 
+scripts:
+  stage: test
+  image:
+    name: koalaman/shellcheck-alpine:stable
+    entrypoint: [""]
+  script:
+    - shellcheck --version
+    - shellcheck scripts/*.sh
+
 backend:
   stage: test
   image: python:3.12-slim

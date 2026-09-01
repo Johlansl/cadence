@@ -20,11 +20,13 @@
 
 set -eu
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo=$(CDPATH= cd -- "$here/.." && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo=$(CDPATH='' cd -- "$here/.." && pwd)
 cd "$repo"
 
 backup_dir=${CADENCE_BACKUP_DIR:-$repo/backups}
+# backup dirs are timestamp-named (no spaces/newlines), so ls is safe here
+# shellcheck disable=SC2012
 src=${1:-$(ls -1d "$backup_dir"/*/ 2>/dev/null | sort | tail -n 1)}
 src=${src%/}
 if [ -z "$src" ] || [ ! -f "$src/db.dump" ]; then
@@ -85,6 +87,8 @@ while [ "$ok" -lt 2 ]; do
 done
 echo
 
+# the middle branch is a bare echo, so this really is A-then-else-C here
+# shellcheck disable=SC2015
 docker exec -i "$db" pg_restore -U "$pg_user" -d "$pg_db" --clean --if-exists \
 	<"$src/db.dump" >/tmp/rt_pg_restore.log 2>&1 \
 	&& echo "  [ok] 1/4  pg_restore loaded the dump" \
