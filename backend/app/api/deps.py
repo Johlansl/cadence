@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
-from typing import Iterator
+from typing import Iterator, NoReturn
 
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
@@ -24,18 +25,26 @@ def get_db() -> Iterator[Session]:
         db.close()
 
 
-def require_admin_key(
+async def _reject_401(ip: str, kind: str, detail: str) -> NoReturn:
+    """Record the auth failure, wait out the throttle's backoff without
+    blocking the event loop, then raise 401."""
+    delay = throttle.record_failure(ip, kind=kind)
+    if delay:
+        await asyncio.sleep(delay)
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
+
+
+async def require_admin_key(
     request: Request, x_admin_key: str = Header(..., alias="X-Admin-Key")
 ) -> None:
     ok = hmac.compare_digest(x_admin_key, settings.admin_key)
     if settings.admin_key_previous:
         ok |= hmac.compare_digest(x_admin_key, settings.admin_key_previous)
     if not ok:
-        throttle.record_failure(client_ip(request), kind="admin-key")
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid admin key")
+        await _reject_401(client_ip(request), "admin-key", "invalid admin key")
 
 
-def get_current_host(
+async def get_current_host(
     request: Request,
     authorization: str = Header(..., alias="Authorization"),
     db: Session = Depends(get_db),
@@ -44,14 +53,12 @@ def get_current_host(
     scheme, _, token = authorization.partition(" ")
     token = token.strip()
     if scheme.lower() != "bearer" or not token:
-        throttle.record_failure(ip, kind="bearer")
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid authorization header")
+        await _reject_401(ip, "bearer", "invalid authorization header")
 
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     host = db.execute(
         select(Host).where(Host.token_hash == token_hash)
     ).scalar_one_or_none()
     if host is None or not host.is_active:
-        throttle.record_failure(ip, kind="bearer")
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+        await _reject_401(ip, "bearer", "invalid token")
     return host

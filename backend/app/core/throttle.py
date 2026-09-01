@@ -5,6 +5,11 @@ are compared in constant time already. It slows blind brute force against a
 reachable port and, more usefully, makes a burst of failures visible in the
 logs. State is per-process and best-effort (lost on restart, not shared
 between workers). Set CADENCE_DISABLE_AUTH_THROTTLE=1 to turn it off (tests).
+
+`record_failure` only does bookkeeping and returns the delay the caller
+owes; the caller applies it with a non-blocking `await asyncio.sleep`
+(see app/api/deps.py). It must never sleep here -- a synchronous sleep on
+the request path can starve the thread pool and stall the dashboard.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ log = logging.getLogger("cadence.auth")
 _WINDOW_SECONDS = 300.0
 _FREE_ATTEMPTS = 3          # first failures in the window are not delayed
 _STEP_SECONDS = 0.25       # added delay per failure past the free ones
-_MAX_SLEEP_SECONDS = 2.0   # cap so a worker thread is never tied up long
+_MAX_DELAY_SECONDS = 2.0   # cap the backoff a single 401 response waits
 _MAX_TRACKED = 2048        # bound the state dict
 
 
@@ -36,9 +41,12 @@ class AuthThrottle:
         self._lock = threading.Lock()
         self._by_ip: dict[str, _Entry] = {}
 
-    def record_failure(self, ip: str, *, kind: str) -> None:
+    def record_failure(self, ip: str, *, kind: str) -> float:
+        """Count one auth failure for `ip` and return the backoff (seconds)
+        the caller should apply before answering -- 0.0 while inside the free
+        allowance or when disabled. Never sleeps: see the module docstring."""
         if not self.enabled:
-            return
+            return 0.0
         now = time.monotonic()
         with self._lock:
             self._evict(now)
@@ -52,13 +60,13 @@ class AuthThrottle:
 
         over = count - _FREE_ATTEMPTS
         if over <= 0:
-            return
-        delay = min(_MAX_SLEEP_SECONDS, _STEP_SECONDS * over)
+            return 0.0
+        delay = min(_MAX_DELAY_SECONDS, _STEP_SECONDS * over)
         log.warning(
             "repeated %s auth failure from %s (%d in %ds); delaying %.2fs",
             kind, ip, count, int(_WINDOW_SECONDS), delay,
         )
-        time.sleep(delay)
+        return delay
 
     def record_success(self, ip: str) -> None:
         if not self.enabled:
