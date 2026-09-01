@@ -76,6 +76,23 @@ model.
 - **Pinned base images** (`postgres:16`, `node:22-alpine`, `nginx:1.27-alpine`,
   Go 1.23): stable, no reason to move.
 
+## Versioning
+
+Two version lines on purpose:
+
+- **The server** — backend, frontend and the `docker compose` stack — ships as
+  one unit under a single version (`backend/app/__init__.py` `__version__`,
+  `frontend/package.json`; `0.1.0` at first public release). They are always
+  deployed together, so one number is enough.
+- **The agent** carries its own (`agent/cmd/agent/main.go` `agentVersion`,
+  `agent/CHANGELOG.md`; `0.6.x`). It is distributed and upgraded separately,
+  runs against a range of server versions, and had a release history before the
+  repo went public — forcing it back to `0.1.0` would erase that. It reports
+  its version on every report so the dashboard shows what each host runs.
+
+The two do not need to match; the server's API stays backward compatible within
+a minor line.
+
 ## V1 scope
 
 Deliberately **out of the initial version** (the data model stays extensible
