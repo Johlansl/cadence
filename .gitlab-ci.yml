@@ -27,7 +27,20 @@ scripts:
     entrypoint: [""]
   script:
     - shellcheck --version
-    - shellcheck scripts/*.sh
+    - shellcheck scripts/*.sh caddy/*.sh
+    # the caddy entrypoint must reject a hash whose `$` were eaten by compose,
+    # and an empty hash when auth is on (the positive path is covered by `stack`)
+    - |
+      if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH=2a14brokenhash sh caddy/entrypoint.sh true; then
+        echo "FAIL: entrypoint accepted a mangled hash"; exit 1
+      fi
+      if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH= sh caddy/entrypoint.sh true; then
+        echo "FAIL: entrypoint accepted an empty hash with auth on"; exit 1
+      fi
+      if ! CADENCE_DASHBOARD_AUTH=off sh caddy/entrypoint.sh true; then
+        echo "FAIL: entrypoint should skip the check when auth is off"; exit 1
+      fi
+      echo "entrypoint validation checks OK"
 
 backend:
   stage: test

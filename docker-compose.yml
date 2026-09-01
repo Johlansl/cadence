@@ -139,6 +139,11 @@ services:
       CADENCE_DASHBOARD_AUTH: ${CADENCE_DASHBOARD_AUTH:-on}
       CADENCE_DASHBOARD_USER: ${CADENCE_DASHBOARD_USER:-cadence}
       CADENCE_DASHBOARD_PASSWORD_HASH: ${CADENCE_DASHBOARD_PASSWORD_HASH:-}
+    # Wrapper checks the dashboard hash is a well-formed bcrypt string before
+    # starting Caddy -- compose eats single `$` in .env, so a hash that wasn't
+    # `$`-doubled would otherwise start Caddy with a silently broken password.
+    entrypoint: ["/bin/sh", "/etc/caddy/entrypoint.sh"]
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
     depends_on:
       frontend:
         condition: service_healthy
@@ -150,6 +155,7 @@ services:
       - "${CADENCE_HTTP_BIND:-127.0.0.1}:443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/entrypoint.sh:/etc/caddy/entrypoint.sh:ro
       # Agent bootstrap assets (installer, binary, CA), served over HTTP.
       # Populated by scripts/publish-agent.sh; may be absent until then.
       - ./dist:/srv/dist:ro

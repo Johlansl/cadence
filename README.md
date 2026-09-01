@@ -80,7 +80,10 @@ docker compose up -d --build    # first run must build; Alembic creates the sche
 ```
 
 Save the dashboard user/password `gen-secrets.sh` printed — only the bcrypt hash
-is kept in `.env`.
+is kept in `.env`. To change it later, run `scripts/rotate-dashboard-password.sh`
+then `docker compose up -d caddy` (don't hand-edit the hash — every `$` in it
+must be doubled for `docker compose`, and Caddy now refuses to start if it
+isn't).
 
 Check it:
 
@@ -206,7 +209,7 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_ADMIN_KEY` | — | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
 | `CADENCE_DASHBOARD_AUTH` | `on` | basic-auth gate at Caddy on the dashboard + read/admin API (agent endpoints exempt). `off` disables it |
 | `CADENCE_DASHBOARD_USER` | `cadence` | basic-auth username |
-| `CADENCE_DASHBOARD_PASSWORD_HASH` | — | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` handles this) |
+| `CADENCE_DASHBOARD_PASSWORD_HASH` | — | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash) |
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
 | `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |

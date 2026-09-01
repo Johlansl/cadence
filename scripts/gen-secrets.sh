@@ -41,6 +41,15 @@ sed \
 	.env.example >.env
 chmod 0600 .env
 
+# The hash in .env must un-double back to exactly what caddy produced, or the
+# basic-auth password is silently broken (docker compose eats single `$`).
+stored=$(grep '^CADENCE_DASHBOARD_PASSWORD_HASH=' .env | cut -d= -f2- | sed 's/[$][$]/$/g')
+if [ "$stored" != "$dash_hash" ]; then
+	echo "gen-secrets.sh: failed to escape the dashboard hash into .env" >&2
+	rm -f .env
+	exit 1
+fi
+
 cat <<EOF
 gen-secrets.sh: wrote .env (0600).
 

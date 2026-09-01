@@ -35,7 +35,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --version && shellcheck scripts/*.sh
+      - run: shellcheck --version && shellcheck scripts/*.sh caddy/*.sh
+      - name: caddy entrypoint rejects a broken dashboard hash
+        run: |
+          if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH=2a14brokenhash sh caddy/entrypoint.sh true; then
+            echo "FAIL: entrypoint accepted a mangled hash"; exit 1
+          fi
+          if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH= sh caddy/entrypoint.sh true; then
+            echo "FAIL: entrypoint accepted an empty hash with auth on"; exit 1
+          fi
+          if ! CADENCE_DASHBOARD_AUTH=off sh caddy/entrypoint.sh true; then
+            echo "FAIL: entrypoint should skip the check when auth is off"; exit 1
+          fi
+          echo "entrypoint validation checks OK"
 
   backend:
     runs-on: ubuntu-latest
