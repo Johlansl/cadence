@@ -82,6 +82,17 @@ stack:
       if docker compose exec -T caddy sh -c 'curl -sk -D - -o /dev/null -X POST --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/api/v1/agent/next-job' | grep -qi '^www-authenticate:.*basic'; then
         echo "FAIL: /api/v1/agent/next-job is behind basic auth"; exit 1
       fi
+    # security headers on the dashboard response
+    - |
+      H=$(docker compose exec -T caddy sh -c 'curl -sk -D - -o /dev/null -u cadence:change-me --resolve cadence.ci.local:443:127.0.0.1 https://cadence.ci.local/')
+      for want in \
+        '^x-content-type-options: nosniff' \
+        '^x-frame-options: DENY' \
+        '^referrer-policy: no-referrer' \
+        '^content-security-policy-report-only: .*frame-ancestors'; do
+        echo "$H" | grep -qi "$want" || { echo "FAIL: missing header matching /$want/"; echo "$H"; exit 1; }
+      done
+      if echo "$H" | grep -qi '^server:'; then echo "FAIL: Server header leaked:"; echo "$H" | grep -i '^server:'; exit 1; fi
   after_script:
     - docker compose logs --tail=80 || true
     - docker compose down -v || true

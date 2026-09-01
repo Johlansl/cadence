@@ -25,6 +25,13 @@
 # (the installer, the binary, the CA itself) -- those must be reachable before
 # the host trusts the internal CA. Populated by scripts/publish-agent.sh.
 http://{$CADENCE_SITE_ADDRESS} {
+	# defer so -Server also strips it from Caddy-generated responses.
+	header {
+		defer
+		-Server
+		X-Content-Type-Options nosniff
+	}
+
 	@bootstrap path /install.sh /agent/*
 	handle @bootstrap {
 		root * /srv/dist
@@ -38,6 +45,35 @@ http://{$CADENCE_SITE_ADDRESS} {
 {$CADENCE_SITE_ADDRESS} {
 	tls internal
 	encode gzip
+
+	# defer so every field (Server removal included) lands on Caddy's own
+	# responses too, e.g. the basic_auth 401. The CSP is served Report-Only
+	# first -- flip to enforcing (drop the -Report-Only suffix) once the
+	# browser console is confirmed free of violations. The dashboard is a
+	# self-contained Vite build: one same-origin <script> and <link>, no
+	# inline code, no external assets, no eval.
+	header {
+		defer
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Cross-Origin-Opener-Policy same-origin
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+	}
+	# basic_auth's 401 is a Caddy-generated error response and bypasses the
+	# handler chain above; re-apply the same hardening on the error path.
+	handle_errors {
+		header {
+			defer
+			-Server
+			X-Content-Type-Options nosniff
+			X-Frame-Options DENY
+			Referrer-Policy no-referrer
+			Cross-Origin-Opener-Policy same-origin
+		}
+		respond "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
+	}
 
 	import {$CADENCE_DASHBOARD_AUTH:on}
 
