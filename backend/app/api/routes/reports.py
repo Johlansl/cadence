@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_host, get_db
+from app.api.pagination import before_keyset
 from app.api.routes.jobs import claim_pending_job
 from app.models.models import Host, HostPackage, Package, Report
 from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn, ReportSummary
@@ -146,16 +147,23 @@ def create_report(
 def list_host_reports(
     host_id: uuid.UUID,
     limit: int = Query(50, ge=1, le=500),
-    before: datetime | None = Query(None, description="return reports strictly older than this"),
+    before: datetime | None = Query(
+        None, description="page cursor: received_at of the last row you have"
+    ),
+    before_id: int | None = Query(
+        None, description="page cursor: id of the last row you have (pass with `before`)"
+    ),
     db: Session = Depends(get_db),
 ) -> list[Report]:
     """Report history for a host: the counters over time, without the bulky
-    raw_payload. Newest first; page with `before` = the oldest received_at
-    you already have. No auth, like the other read views."""
+    raw_payload. Newest first; page with (`before`, `before_id`) = the
+    received_at and id of the oldest row you already have. No auth, like the
+    other read views."""
     if db.get(Host, host_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
     stmt = select(Report).where(Report.host_id == host_id)
-    if before is not None:
-        stmt = stmt.where(Report.received_at < before)
-    stmt = stmt.order_by(Report.received_at.desc()).limit(limit)
+    keyset = before_keyset(Report.received_at, Report.id, before, before_id)
+    if keyset is not None:
+        stmt = stmt.where(keyset)
+    stmt = stmt.order_by(Report.received_at.desc(), Report.id.desc()).limit(limit)
     return db.execute(stmt).scalars().all()

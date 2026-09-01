@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_host, get_db
+from app.api.pagination import before_keyset
 from app.models.models import Host, Job
 from app.schemas.schemas import JobHandoff, JobOut, JobResultIn, NextJob
 
@@ -69,16 +70,20 @@ def list_host_jobs(
     host_id: uuid.UUID,
     limit: int = Query(20, ge=1, le=200),
     before: datetime | None = Query(
-        None, description="return jobs created strictly before this timestamp"
+        None, description="page cursor: created_at of the last row you have"
+    ),
+    before_id: uuid.UUID | None = Query(
+        None, description="page cursor: id of the last row you have (pass with `before`)"
     ),
     db: Session = Depends(get_db),
 ) -> list[Job]:
     if db.get(Host, host_id) is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "host not found")
     stmt = select(Job).where(Job.host_id == host_id)
-    if before is not None:
-        stmt = stmt.where(Job.created_at < before)
-    stmt = stmt.order_by(Job.created_at.desc()).limit(limit)
+    keyset = before_keyset(Job.created_at, Job.id, before, before_id)
+    if keyset is not None:
+        stmt = stmt.where(keyset)
+    stmt = stmt.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit)
     return list(db.execute(stmt).scalars().all())
 
 
