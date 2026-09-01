@@ -1,0 +1,184 @@
+# Maintaining Cadence — private ↔ public mirror
+
+Cadence is developed in a **private GitLab repo** and mirrored to a **public
+GitHub repo**. This file documents that workflow. It is intentionally **kept out
+of the public mirror** (alongside `.gitlab-ci.yml` and `CLAUDE.md`) because it
+only concerns this project's dual-repo setup.
+
+## The two repos
+
+| Repo | Path on `vm-cadence` | Remote | Role |
+|------|----------------------|--------|------|
+| Private | `~/cadence` | `https://gitlab.com/Johlansl/cadence.git` (project `85865420`) | Working repo. Every change lands here first. Fast-forward only on `main`. |
+| Public | `~/cadence-public` | `git@github.com:Johlansl/cadence.git` | Mirror. Never edited directly — only re-seeded from the private tree. |
+
+### Intended divergence
+
+The public tree is byte-for-byte the private tree **except** these files, which
+live only in the private repo:
+
+- `.gitlab-ci.yml` — the public repo uses `.github/workflows/ci.yml` instead
+- `CLAUDE.md` — Claude Code working notes
+- `MAINTAINING.md` — this file
+
+Anything else that differs is a mistake.
+
+## Routine change (private repo)
+
+```sh
+cd ~/cadence
+git switch -c <branch>                 # don't commit straight to main
+# ... edit, test (build/test matrix in README.md / CLAUDE.md) ...
+git commit
+git switch main && git merge --ff-only <branch>
+```
+
+### Pushing to GitLab
+
+The stored PAT is short-lived and is usually already revoked. Mint a fresh one
+(GitLab → Settings → Access Tokens, `write_repository` scope) and pass it inline
+— do **not** persist it in the remote URL or `.git/config`:
+
+```sh
+git push https://oauth2:<PAT>@gitlab.com/Johlansl/cadence.git main:main
+```
+
+Poll the pipeline:
+
+```sh
+curl --header "PRIVATE-TOKEN: <PAT>" \
+  "https://gitlab.com/api/v4/projects/85865420/pipelines?ref=main&per_page=1"
+```
+
+## Keeping the two CI configs in sync
+
+`.gitlab-ci.yml` (private) and `.github/workflows/ci.yml` (public) must run the
+**same five jobs**: `agent`, `scripts`, `backend`, `frontend`, `stack`. When the
+test matrix changes, update both in the same change.
+
+## Syncing new commits to the public mirror
+
+**The public history is append-only.** `3ad7269` ("Initial public release")
+squashed away the pre-launch dev history **once** and is now a permanent base.
+From here on, every private change reaches the public repo as an ordinary new
+commit **on top** of what is already there. Never squash, rebase, amend, or
+`push --force` the public `main` — a fork or clone must never have its history
+rewritten under it. The two repos therefore share file *content* but not commit
+SHAs.
+
+### One-time setup
+
+```sh
+cd ~/cadence-public
+git remote add private ~/cadence                       # local path, never pushed
+git config remote.origin.pushurl git@github.com:Johlansl/cadence.git
+git update-ref refs/mirror/private-head 1c08096        # private commit the seed matches
+```
+
+`refs/mirror/private-head` only records how far the mirror has got. It is a
+local convenience: it is not pushed and a fresh clone will not have it. It is
+**not** at risk from `git gc` — every ref under `refs/` (not just `refs/heads`
+and `refs/tags`) is a reachability root, `gc` never deletes refs, and
+`git pack-refs` just moves it into `.git/packed-refs` (verified with
+`gc --prune=now --aggressive`). It can still be lost to a manual `.git` edit or
+a re-clone; the authoritative record is the `Mirrored-from:` trailer on each
+public commit (see "If the bookmark is lost" below).
+
+### Each sync
+
+```sh
+cd ~/cadence-public
+git fetch private
+git log --oneline "$(git rev-parse refs/mirror/private-head)"..private/main
+```
+
+Replay that range **one private commit at a time, in order**. Each private
+commit becomes one public commit carrying a `Mirrored-from: <full private sha>`
+trailer:
+
+- **Touches only shared files:**
+  ```sh
+  git cherry-pick <sha>
+  git commit --amend --no-edit --trailer "Mirrored-from: $(git rev-parse <sha>)"
+  ```
+- **Also touches a private-only file** (`.gitlab-ci.yml`, `CLAUDE.md`,
+  `MAINTAINING.md`) — apply the diff with those paths filtered out, keeping the
+  original message/author/date:
+  ```sh
+  git -C ~/cadence show <sha> -- . \
+    ':(exclude).gitlab-ci.yml' ':(exclude)CLAUDE.md' ':(exclude)MAINTAINING.md' \
+    | git apply --index --3way
+  git commit -C <sha> --trailer "Mirrored-from: $(git rev-parse <sha>)"
+  ```
+- **Touches only private-only files** (e.g. an edit to this file) — skip it,
+  nothing to mirror.
+
+Then move the bookmark and push, fast-forward only:
+
+```sh
+git -C ~/cadence-public update-ref refs/mirror/private-head private/main
+git -C ~/cadence-public push origin main:main          # SSH key ~/.ssh/id_ed25519
+```
+
+If `git push` reports a non-fast-forward, **stop and investigate** — something
+rewrote the public `main`. Do not `--force`.
+
+### If the bookmark is lost
+
+Rebuild it from the public history, which is authoritative and survives a
+re-clone:
+
+```sh
+cd ~/cadence-public && git fetch private
+# newest Mirrored-from: trailer on public main
+last=$(git log -1 --format=%B origin/main | sed -n 's/^Mirrored-from: *//p')
+git update-ref refs/mirror/private-head "$last"
+```
+
+If public `main` predates the trailer convention, find the match by tree
+instead — the private commit whose content (minus the three private-only
+files) equals public `main`:
+
+```sh
+for sha in $(git rev-list --reverse 1c08096..private/main); do
+  git diff --quiet origin/main "$sha" -- . \
+    ':(exclude).gitlab-ci.yml' ':(exclude)CLAUDE.md' ':(exclude)MAINTAINING.md' \
+    && { echo "public main == private $sha"; break; }
+done
+```
+
+Either way, run the sanity check below before trusting the rebuilt bookmark.
+
+### Sanity check after a sync
+
+Every shared tracked file must be byte-identical in both repos:
+
+```sh
+cd ~/cadence && diff \
+  <(git ls-files -s | grep -vxE '.*\t(\.gitlab-ci\.yml|CLAUDE\.md|MAINTAINING\.md)') \
+  <(git -C ~/cadence-public ls-files -s) && echo OK
+```
+
+**If that diff is ever non-empty on a path outside the three private-only
+files: stop.** Do not edit either repo to make it match. Print the diff, run
+`git log` for the offending path on both sides to find which commit introduced
+the drift, and work out the cause — a sync step skipped, a commit replayed
+twice, or a manual edit made straight in `~/cadence-public`. Fix that cause,
+not the symptom. There is no automated reconciliation, by design.
+
+`rsync` is not installed on the host, hence the git-native replay above rather
+than a tree copy. The `grep` exclude list here is the single source of truth
+for the intended divergence — keep it equal to the "Intended divergence"
+section.
+
+Poll GitHub Actions:
+
+```sh
+curl -s "https://api.github.com/repos/Johlansl/cadence/actions/runs?per_page=3"
+```
+
+## Release tarballs (separate concern)
+
+`git archive` honours the `export-ignore` attributes in `.gitattributes`
+(`.github/`, `.gitattributes`, `.gitignore`) to keep repo-meta out of release
+tarballs. That list is independent of the mirror exclude list above.
