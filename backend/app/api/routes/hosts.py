@@ -1,7 +1,7 @@
 """Read-only host views for the dashboard.
 
 No auth in V1: Cadence is single-user and these endpoints are meant to sit
-behind the reverse proxy / on a trusted network (see CLAUDE.md section 2).
+behind the reverse proxy / on a trusted network (see SECURITY.md).
 """
 
 from __future__ import annotations

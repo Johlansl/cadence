@@ -29,6 +29,3 @@ agent/bin/
 
 # local backups produced by scripts/backup.sh
 backups/
-
-# Claude Code local state
-.claude/

@@ -9,7 +9,7 @@ import { useToast } from './Toast'
 type RebootChoice = 'default' | RebootPolicy
 
 // Bulk actions over the checked hosts. Independent jobs, one POST per host --
-// no multi-host sequencing (out of scope, CLAUDE.md section 2).
+// no multi-host sequencing (out of scope for V1, see docs/decisions.md).
 export function BulkActionBar({
   hostIds,
   onClear,

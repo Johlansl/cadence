@@ -423,7 +423,7 @@ npm run dev            # http://localhost:5173, proxies /api to http://localhost
 ```
 
 CI runs the three suites plus a full `docker compose` bring-up on every push.
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [CLAUDE.md](CLAUDE.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
 

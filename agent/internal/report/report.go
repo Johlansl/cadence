@@ -1,6 +1,6 @@
 // Package report defines the JSON payload the agent sends to the Cadence server
-// (POST /api/v1/reports) and the shape of the response. See CLAUDE.md section 5
-// for the wire contract.
+// (POST /api/v1/reports) and the shape of the response. See
+// docs/architecture.md, "Communication model", for the wire contract.
 package report
 
 import "encoding/json"
@@ -30,7 +30,7 @@ type Report struct {
 }
 
 // JobHandoff is a job the server wants this host to run, delivered in the
-// response to a report (piggyback, CLAUDE.md section 3).
+// response to a report (piggyback -- see docs/architecture.md).
 type JobHandoff struct {
 	ID      string          `json:"id"`
 	JobType string          `json:"job_type"`

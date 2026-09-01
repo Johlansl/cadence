@@ -3,8 +3,7 @@
 *.png binary
 *.ico binary
 
-# Keep tooling / repo-meta files out of release archives (`git archive`).
-/CLAUDE.md export-ignore
+# Keep repo-meta files out of release archives (`git archive`).
 /.github/ export-ignore
 /.gitattributes export-ignore
 /.gitignore export-ignore

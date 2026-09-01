@@ -17,8 +17,8 @@ discuss an approach before a large PR usually saves everyone time.
   [docs/decisions.md](docs/decisions.md#v1-scope). Please open an issue before
   building one of those.
 
-See [CLAUDE.md](CLAUDE.md) for the repo layout and [README.md](README.md) for
-deployment/ops.
+See [docs/architecture.md](docs/architecture.md) for the layout and how the
+pieces fit, and [README.md](README.md) for deployment/ops.
 
 ## Development
 

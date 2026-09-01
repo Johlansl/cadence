@@ -11,10 +11,10 @@ import (
 func pkgKey(name, arch string) string { return name + "\t" + arch }
 
 // installedPackages returns the currently installed packages keyed by
-// name+architecture. Based on the dpkg-query format from the design brief
-// (CLAUDE.md section 7), plus ${db:Status-Status} so packages that are removed
-// but not purged ("config-files", still carry a version) or mid-transaction
-// are excluded -- same check rebootcheck already makes.
+// name+architecture. It asks dpkg-query for name/arch/version plus
+// ${db:Status-Status} so packages that are removed but not purged
+// ("config-files", still carry a version) or mid-transaction are excluded --
+// same check rebootcheck already makes.
 func installedPackages(ctx context.Context) (map[string]report.Package, error) {
 	out, err := runCommand(ctx, "dpkg-query", "-W",
 		"-f=${Package}\t${Architecture}\t${Version}\t${db:Status-Status}\n")

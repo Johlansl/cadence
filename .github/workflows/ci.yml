@@ -5,8 +5,9 @@ on:
     branches: [main]
   pull_request:
 
-# Mirrors .gitlab-ci.yml (kept for the private GitLab archive). Keep the two
-# in sync when the test matrix changes.
+# Lint + test the three components (agent / backend / frontend), lint the
+# shell scripts, and smoke-test the full docker compose stack from a clean
+# state.
 
 jobs:
   agent:

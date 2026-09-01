@@ -1,6 +1,6 @@
 // Package executor runs an apt upgrade for an apt_upgrade job and captures its
 // combined output. It never reboots; it only reports whether a reboot became
-// required (report-only, per CLAUDE.md V1 scope).
+// required (report-only -- see docs/decisions.md, "Updates").
 package executor
 
 import (
