@@ -14,6 +14,10 @@
 #                       (default: http://cadence.lan)
 #   CADENCE_SERVER_URL  HTTPS API URL written into agent.env
 #                       (default: https://<host of CADENCE_BASE_URL>)
+#   CADENCE_MINISIGN_PUB  release public key (the "RW..." line, or a path to a
+#                       file holding it), distributed out of band. When set,
+#                       the binary's minisign signature is verified and a
+#                       failure aborts the install.
 
 set -eu
 
@@ -35,8 +39,8 @@ echo "install.sh: server $base"
 #    avoid update-ca-certificates "duplicate" noise on re-runs).
 tmp_ca=$(mktemp)
 fetch agent/ca.crt >"$tmp_ca"
-if find /usr/local/share/ca-certificates -name '*.crt' 2>/dev/null \
-	-exec cmp -s "$tmp_ca" {} \; -print | grep -q .; then
+if find /usr/local/share/ca-certificates -name '*.crt' \
+	-exec cmp -s "$tmp_ca" {} \; -print 2>/dev/null | grep -q .; then
 	echo "install.sh: CA already trusted"
 else
 	install -m 0644 "$tmp_ca" /usr/local/share/ca-certificates/cadence-internal.crt
@@ -67,7 +71,10 @@ else
 	fi
 fi
 
-# 3. Agent binary, checksum-verified.
+# 3. Agent binary. Always sha256-checked (guards against a truncated download).
+#    Also minisign-verified when you pass the release public key out of band in
+#    CADENCE_MINISIGN_PUB (the key line itself, or a path to it) -- that is the
+#    only check that resists tampering on this plain-HTTP channel.
 tmp_bin=$(mktemp)
 fetch agent/cadence-agent >"$tmp_bin"
 want=$(fetch agent/cadence-agent.sha256 | awk '{print $1}')
@@ -77,6 +84,34 @@ if [ "$want" != "$got" ]; then
 	rm -f "$tmp_bin"
 	exit 1
 fi
+
+pub=${CADENCE_MINISIGN_PUB:-}
+if [ -n "$pub" ]; then
+	if ! command -v minisign >/dev/null 2>&1; then
+		echo "install.sh: CADENCE_MINISIGN_PUB is set but minisign is not installed" >&2
+		echo "  run 'apt-get install minisign', or unset it to rely on sha256 only" >&2
+		rm -f "$tmp_bin"
+		exit 1
+	fi
+	tmp_sig=$(mktemp)
+	if ! fetch agent/cadence-agent.minisig >"$tmp_sig" 2>/dev/null; then
+		echo "install.sh: the server has no cadence-agent.minisig (release not signed)" >&2
+		rm -f "$tmp_bin" "$tmp_sig"
+		exit 1
+	fi
+	if [ -f "$pub" ]; then set -- -p "$pub"; else set -- -P "$pub"; fi
+	if minisign -V "$@" -m "$tmp_bin" -x "$tmp_sig" >/dev/null 2>&1; then
+		echo "install.sh: minisign signature OK"
+	else
+		echo "install.sh: minisign signature INVALID -- refusing to install" >&2
+		rm -f "$tmp_bin" "$tmp_sig"
+		exit 1
+	fi
+	rm -f "$tmp_sig"
+else
+	echo "install.sh: sha256 OK (set CADENCE_MINISIGN_PUB to also check the signature)"
+fi
+
 install -m 0755 "$tmp_bin" /usr/local/bin/cadence-agent
 rm -f "$tmp_bin"
 echo "install.sh: agent $(/usr/local/bin/cadence-agent -version 2>/dev/null || echo '(installed)')"

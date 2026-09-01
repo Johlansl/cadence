@@ -166,6 +166,32 @@ sudo update-ca-certificates
 
 The one-liner installer does this for you.
 
+### Signed agent releases (optional)
+
+The installer fetches the agent over plain HTTP and checks a SHA-256 sum — that
+catches a truncated download but not tampering. For tamper-evidence, sign the
+binary with [minisign](https://jedisct1.github.io/minisign/):
+
+```sh
+# once, on the server: generate a passwordless key pair
+minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key
+git add agent/minisign.pub && git commit -m "add agent signing key"
+```
+
+`scripts/publish-agent.sh` then signs each build (`cadence-agent.minisig`
+alongside the binary) and prints the public key. Distribute that key to each
+host **out of band** (not over the install channel) and pass it to the
+installer:
+
+```sh
+curl -fsSL http://cadence.lan/install.sh \
+  | sudo CADENCE_TOKEN=<token> CADENCE_MINISIGN_PUB='RW...' sh
+```
+
+With `CADENCE_MINISIGN_PUB` set, a missing or invalid signature aborts the
+install. Without it, the installer uses the SHA-256 check only (the default,
+unchanged).
+
 ## Configuration
 
 All configuration is environment variables. Server variables live in `.env`

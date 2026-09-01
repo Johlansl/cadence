@@ -10,13 +10,21 @@
 # serves over plain HTTP at:
 #   /install.sh
 #   /agent/cadence-agent   /agent/cadence-agent.sha256
+#   /agent/cadence-agent.minisig   (only if a signing key is configured)
 #   /agent/ca.crt
 #   /agent/systemd/<unit>
+#
+# Signing (optional): with `minisign` installed and a secret key at
+# CADENCE_MINISIGN_KEY (default ~/.cadence/minisign.key), the binary is signed
+# and cadence-agent.minisig is published. Generate a passwordless key once with
+#   minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key
+# then commit agent/minisign.pub and hand it to each host out of band. Without
+# a key, publishing continues unsigned (hosts fall back to the sha256 check).
 
 set -eu
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo=$(CDPATH= cd -- "$here/.." && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo=$(CDPATH='' cd -- "$here/.." && pwd)
 cd "$repo"
 
 dist="$repo/dist"
@@ -28,6 +36,27 @@ docker run --rm -v "$repo/agent":/s -w /s golang:1.23 sh -c \
 
 install -m 0755 "$repo/agent/bin/cadence-agent" "$dist/agent/cadence-agent"
 ( cd "$dist/agent" && sha256sum cadence-agent >cadence-agent.sha256 )
+
+version=$("$dist/agent/cadence-agent" -version 2>/dev/null || echo '?')
+
+# Sign the binary if a minisign key is available; otherwise clear any stale
+# signature and carry on unsigned.
+minisign_key=${CADENCE_MINISIGN_KEY:-$HOME/.cadence/minisign.key}
+if command -v minisign >/dev/null 2>&1 && [ -f "$minisign_key" ]; then
+	minisign -S -s "$minisign_key" \
+		-m "$dist/agent/cadence-agent" \
+		-x "$dist/agent/cadence-agent.minisig" \
+		-t "cadence-agent $version"
+	echo "publish-agent.sh: signed cadence-agent.minisig"
+	if [ -f "$repo/agent/minisign.pub" ]; then
+		echo "publish-agent.sh: hand this public key to every host OUT OF BAND:"
+		sed 's/^/    /' "$repo/agent/minisign.pub"
+	fi
+else
+	rm -f "$dist/agent/cadence-agent.minisig"
+	echo "publish-agent.sh: NOT signed (no minisign or no key at $minisign_key)" \
+		"-- hosts will use the sha256 check only"
+fi
 
 install -m 0644 "$repo/scripts/agent-install.sh" "$dist/install.sh"
 for unit in cadence-agent.service cadence-agent.timer \
@@ -43,6 +72,5 @@ fi
 docker compose exec -T caddy \
 	cat /data/caddy/pki/authorities/local/root.crt >"$dist/agent/ca.crt"
 
-version=$("$dist/agent/cadence-agent" -version 2>/dev/null || echo '?')
 echo "publish-agent.sh: staged agent $version + CA + units in $dist"
 echo "  test: curl -fsSL http://\${CADENCE_SITE_ADDRESS:-cadence.lan}/install.sh | head"

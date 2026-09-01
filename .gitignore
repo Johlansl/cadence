@@ -3,6 +3,10 @@
 *.env
 !.env.example
 
+# minisign signing key -- never commit (agent/minisign.pub is fine to commit)
+minisign.key
+*.minisign.key
+
 # python
 __pycache__/
 *.pyc
