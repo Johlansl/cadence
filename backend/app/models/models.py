@@ -178,6 +178,28 @@ class Schedule(Base):
     )
 
 
+class AuditLog(Base):
+    """Append-only trail of successful admin writes. One row per mutating
+    X-Admin-Key call, staged on the handler's session and committed in the
+    same transaction as the change (migration 0007). No FK on target_id so a
+    row survives the deletion of the host / schedule / job it describes.
+    `action` is free text ("resource.verb")."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    target_type: Mapped[str | None] = mapped_column(Text)
+    target_id: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'admin'"))
+    client: Mapped[str | None] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict | None] = mapped_column(JSONB)
+
+
 class SchedulerState(Base):
     """Small key/value store for the scheduler process. Currently just the
     timestamp of the last retention sweep, so a restart doesn't re-run it.
