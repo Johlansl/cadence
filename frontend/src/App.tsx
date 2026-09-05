@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api/client'
 import { BulkActionBar } from './components/BulkActionBar'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { FleetOverview } from './components/FleetOverview'
 import { HostDetail } from './components/HostDetail'
 import { HostFilters } from './components/HostFilters'
@@ -213,7 +214,9 @@ export default function App() {
                 </p>
               )}
               <div className="min-h-0 flex-1">
-                <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
+                <ErrorBoundary key={detail.id}>
+                  <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
+                </ErrorBoundary>
               </div>
             </>
           ) : selectedId ? (

@@ -30,6 +30,25 @@ export interface AdminWriteResult<T> {
   detail?: string
 }
 
+// FastAPI returns a string `detail` for our own HTTPExceptions, but a list of
+// {type, loc, msg, ...} objects for 422 request-validation errors. Flatten it to
+// a readable string so callers can render it straight into the DOM.
+function errorDetail(body: unknown, status: number): string {
+  const d = body && typeof body === 'object' ? (body as { detail?: unknown }).detail : undefined
+  if (typeof d === 'string' && d) return d
+  if (Array.isArray(d)) {
+    const msgs = d.flatMap((e) => {
+      if (!e || typeof e !== 'object' || !('msg' in e)) return []
+      const rawLoc = (e as { loc?: unknown }).loc
+      const loc = Array.isArray(rawLoc) ? rawLoc.filter((p) => p !== 'body').join('.') : ''
+      const msg = String((e as { msg: unknown }).msg)
+      return [loc ? `${loc}: ${msg}` : msg]
+    })
+    if (msgs.length) return msgs.join('; ')
+  }
+  return `Request failed (${status}).`
+}
+
 async function adminWrite<T>(
   path: string,
   adminKey: string,
@@ -51,9 +70,9 @@ async function adminWrite<T>(
   }
   let detail: string | undefined
   try {
-    detail = ((await res.json()) as { detail?: string }).detail
+    detail = errorDetail(await res.json(), res.status)
   } catch {
-    /* no JSON body */
+    /* no JSON body -- caller falls back to a generic message */
   }
   return { ok: false, status: res.status, detail }
 }
