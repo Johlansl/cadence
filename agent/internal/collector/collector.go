@@ -33,7 +33,7 @@ func Collect(ctx context.Context, agentVersion string, runAptUpdate bool) (repor
 		return report.Report{}, fmt.Errorf("simulating dist-upgrade: %w", err)
 	}
 
-	osFamily, osName, osVersion := readOSRelease()
+	osFamily, osName, osVersion, osCodename := readOSRelease()
 	host, fqdn := hostnameInfo()
 
 	return report.Report{
@@ -43,6 +43,7 @@ func Collect(ctx context.Context, agentVersion string, runAptUpdate bool) (repor
 		OSFamily:       osFamily,
 		OSName:         strOrNil(osName),
 		OSVersion:      strOrNil(osVersion),
+		OSCodename:     strOrNil(osCodename),
 		PackageManager: "apt",
 		RebootRequired: rebootRequired(),
 		Packages:       mergeUpdates(installed, updates),

@@ -14,6 +14,10 @@ type Package struct {
 	CandidateVersion *string `json:"candidate_version"`
 	IsSecurityUpdate bool    `json:"is_security_update"`
 	UpdateOrigin     *string `json:"update_origin"`
+	// SourcePackage is the Debian source package name (from dpkg's
+	// ${source:Package}); omitted when unknown. The server uses it to link
+	// security advisories precisely for library binaries.
+	SourcePackage string `json:"source_package,omitempty"`
 }
 
 // Report is the full body of a single agent report.
@@ -24,6 +28,7 @@ type Report struct {
 	OSFamily       string    `json:"os_family"`
 	OSName         *string   `json:"os_name"`
 	OSVersion      *string   `json:"os_version"`
+	OSCodename     *string   `json:"os_codename"`
 	PackageManager string    `json:"package_manager"`
 	RebootRequired bool      `json:"reboot_required"`
 	Packages       []Package `json:"packages"`

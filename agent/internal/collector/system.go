@@ -8,14 +8,21 @@ import (
 	"cadence/agent/internal/rebootcheck"
 )
 
-// readOSRelease parses /etc/os-release and returns (family, name, version).
-// family defaults to "debian" and is taken from the ID field when present.
-func readOSRelease() (family, name, version string) {
+// readOSRelease parses /etc/os-release and returns
+// (family, name, version, codename). family defaults to "debian" and is taken
+// from the ID field when present; codename is VERSION_CODENAME verbatim
+// ("bookworm", "trixie") and is "" when the file omits it.
+func readOSRelease() (family, name, version, codename string) {
+	return readOSReleaseFrom("/etc/os-release")
+}
+
+// readOSReleaseFrom is readOSRelease with the path injected, for testing.
+func readOSReleaseFrom(path string) (family, name, version, codename string) {
 	family = "debian"
 
-	f, err := os.Open("/etc/os-release")
+	f, err := os.Open(path)
 	if err != nil {
-		return family, "", ""
+		return family, "", "", ""
 	}
 	defer f.Close()
 
@@ -35,7 +42,7 @@ func readOSRelease() (family, name, version string) {
 	if v := kv["ID"]; v != "" {
 		family = strings.ToLower(v)
 	}
-	return family, kv["NAME"], kv["VERSION_ID"]
+	return family, kv["NAME"], kv["VERSION_ID"], kv["VERSION_CODENAME"]
 }
 
 // hostnameInfo returns (shortHostname, fqdn). fqdn is nil unless the OS hostname
