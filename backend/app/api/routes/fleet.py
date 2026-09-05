@@ -23,6 +23,8 @@ SILENT_AFTER = timedelta(minutes=15)
 @router.get("/fleet/summary", response_model=FleetSummary)
 def fleet_summary(db: Session = Depends(get_db)) -> FleetSummary:
     now = datetime.now(timezone.utc)
+    silent_cut = now - SILENT_AFTER
+    late_cut = now - LATE_AFTER
 
     pending = func.count().filter(HostPackage.candidate_version.is_not(None))
     security = func.count().filter(
@@ -33,10 +35,9 @@ def fleet_summary(db: Session = Depends(get_db)) -> FleetSummary:
     )
     per_host = (
         select(
-            Host.id.label("host_id"),
-            Host.is_active,
-            Host.reboot_required,
-            Host.last_seen_at,
+            Host.is_active.label("is_active"),
+            Host.reboot_required.label("reboot_required"),
+            Host.last_seen_at.label("last_seen_at"),
             func.coalesce(pending, 0).label("pending"),
             func.coalesce(security, 0).label("security"),
         )
@@ -44,36 +45,38 @@ def fleet_summary(db: Session = Depends(get_db)) -> FleetSummary:
         .group_by(Host.id)
         .subquery()
     )
-    rows = db.execute(select(per_host)).all()
+    p = per_host.c
+    active = p.is_active.is_(True)
+    reported = p.last_seen_at.is_not(None)
+    # Same bucketing as the old Python loop: a never-reported active host counts
+    # only as silent; a silent-by-age host is still classified by its updates,
+    # so `silent` and `up_to_date` can both cover the same host.
+    is_silent = active & (p.last_seen_at.is_(None) | (p.last_seen_at <= silent_cut))
+    is_late = active & reported & (p.last_seen_at <= late_cut) & (p.last_seen_at > silent_cut)
 
-    total = len(rows)
-    active = [r for r in rows if r.is_active]
-    up_to_date = updates = security_hosts = reboot = late = silent = 0
-    total_pending = total_security = 0
-    oldest_age = None
-    for r in active:
-        total_pending += r.pending
-        total_security += r.security
-        if r.reboot_required:
-            reboot += 1
-        # A host that has never reported has no known status -- count it only
-        # as silent.
-        if r.last_seen_at is None:
-            silent += 1
-            continue
-        age = now - r.last_seen_at
-        if oldest_age is None or age > oldest_age:
-            oldest_age = age
-        if age >= SILENT_AFTER:
-            silent += 1
-        elif age >= LATE_AFTER:
-            late += 1
-        if r.security > 0:
-            security_hosts += 1
-        elif r.pending > 0:
-            updates += 1
-        else:
-            up_to_date += 1
+    row = db.execute(
+        select(
+            func.count().label("total"),
+            func.count().filter(active).label("active"),
+            func.count().filter(active & reported & (p.security > 0)).label("security_hosts"),
+            func.count()
+            .filter(active & reported & (p.security == 0) & (p.pending > 0))
+            .label("updates"),
+            func.count()
+            .filter(active & reported & (p.security == 0) & (p.pending == 0))
+            .label("up_to_date"),
+            func.count().filter(active & p.reboot_required.is_(True)).label("reboot"),
+            func.count().filter(is_silent).label("silent"),
+            func.count().filter(is_late).label("late"),
+            func.coalesce(func.sum(p.pending).filter(active), 0).label("total_pending"),
+            func.coalesce(func.sum(p.security).filter(active), 0).label("total_security"),
+            func.min(p.last_seen_at).filter(active & reported).label("oldest_seen"),
+        ).select_from(per_host)
+    ).one()
+
+    oldest_age = (
+        None if row.oldest_seen is None else int((now - row.oldest_seen).total_seconds())
+    )
 
     day_ago = now - timedelta(hours=24)
     running = db.scalar(select(func.count()).select_from(Job).where(Job.status == "running"))
@@ -89,18 +92,18 @@ def fleet_summary(db: Session = Depends(get_db)) -> FleetSummary:
     )
 
     return FleetSummary(
-        total_hosts=total,
-        active_hosts=len(active),
-        inactive_hosts=total - len(active),
-        up_to_date=up_to_date,
-        updates_available=updates,
-        security_updates_available=security_hosts,
-        reboot_required=reboot,
-        late=late,
-        silent=silent,
-        pending_updates=total_pending,
-        security_updates=total_security,
-        oldest_report_age_seconds=None if oldest_age is None else int(oldest_age.total_seconds()),
+        total_hosts=row.total,
+        active_hosts=row.active,
+        inactive_hosts=row.total - row.active,
+        up_to_date=row.up_to_date,
+        updates_available=row.updates,
+        security_updates_available=row.security_hosts,
+        reboot_required=row.reboot,
+        late=row.late,
+        silent=row.silent,
+        pending_updates=row.total_pending,
+        security_updates=row.total_security,
+        oldest_report_age_seconds=oldest_age,
         jobs_running=running or 0,
         jobs_succeeded_24h=succeeded_24h or 0,
         jobs_failed_24h=failed_24h or 0,
