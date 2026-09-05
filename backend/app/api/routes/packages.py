@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from app.advisories.match import advisories_for, codename_for, source_for
 from app.api.deps import get_db
 from app.models.models import Host, HostPackage, Package
 from app.schemas.schemas import PackageHostOut, PackageSummary
@@ -31,6 +32,7 @@ def list_packages(
             Package.architecture,
             Host.id.label("host_id"),
             Host.hostname,
+            Host.os_version,
             HostPackage.installed_version,
             HostPackage.candidate_version,
             HostPackage.is_security_update,
@@ -53,8 +55,29 @@ def list_packages(
             )
         )
 
+    all_rows = db.execute(stmt).all()
+
+    # Link each apt-flagged pending security update to the DSA/DLA(s) that fix
+    # it, keyed per (package, architecture, host). Purely additive.
+    adv_items = []
+    for r in all_rows:
+        if r.candidate_version is None or not r.is_security_update:
+            continue
+        codename = codename_for(r.os_version)
+        if codename is None:
+            continue
+        adv_items.append(
+            (
+                (r.name, r.architecture, r.host_id),
+                source_for(r.name),
+                codename,
+                r.candidate_version,
+            )
+        )
+    advisories_by_key = advisories_for(db, adv_items)
+
     grouped: dict[tuple[str, str], list] = {}
-    for row in db.execute(stmt).all():
+    for row in all_rows:
         grouped.setdefault((row.name, row.architecture), []).append(row)
 
     return [
@@ -70,6 +93,9 @@ def list_packages(
                     is_security_update=r.is_security_update,
                     update_origin=r.update_origin,
                     updated_at=r.updated_at,
+                    advisories=advisories_by_key.get(
+                        (r.name, r.architecture, r.host_id), []
+                    ),
                 )
                 for r in rows
             ],

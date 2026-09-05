@@ -15,6 +15,7 @@ from fastapi import status as http_status
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.advisories.match import advisories_for, codename_for, source_for
 from app.api.deps import get_db
 from app.api.pagination import after_keyset
 from app.core.staleness import LATE_AFTER
@@ -164,10 +165,30 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
         1 for r in pkg_rows if r.candidate_version is not None and r.is_security_update
     )
 
+    # Link each apt-flagged pending security update to the DSA/DLA(s) that fix
+    # it. Never affects the counts above -- purely additive metadata.
+    advisories_by_key: dict[tuple[str, str], list] = {}
+    codename = codename_for(host.os_version)
+    if codename:
+        advisories_by_key = advisories_for(
+            db,
+            (
+                ((r.name, r.architecture), source_for(r.name), codename, r.candidate_version)
+                for r in pkg_rows
+                if r.candidate_version is not None and r.is_security_update
+            ),
+        )
+
     return HostDetail(
         **_summary_fields(host),
         status=_status(updates_available, security_updates),
         updates_available_count=updates_available,
         security_updates_count=security_updates,
-        packages=[HostPackageOut(**r._mapping) for r in pkg_rows],
+        packages=[
+            HostPackageOut(
+                **r._mapping,
+                advisories=advisories_by_key.get((r.name, r.architecture), []),
+            )
+            for r in pkg_rows
+        ],
     )
