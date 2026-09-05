@@ -27,6 +27,14 @@ shows status and triggers upgrades or reboots per host. It runs as a
   [docs/decisions.md](docs/decisions.md#v1-scope) (package exclusions, reboot
   sequencing, notifications, multi-distro, RBAC) are deliberate. Don't
   implement them mid-task — leave a TODO and ask.
+- **No `Co-Authored-By` trailer on commits in this repo.** Every commit here
+  is mirrored to the public GitHub repo (see
+  [MAINTAINING.md](MAINTAINING.md)), which is meant to show zero AI-assistance
+  trace — no trailer, no mention of Claude/Anthropic anywhere. A leaked
+  trailer put an AI assistant in the public repo's Contributors list on
+  2026-09-05; fixed with a rebase + one-off `push --force` on the mirror only
+  (see MAINTAINING.md). Applies here in `~/cadence` too, not just at mirror
+  time — the source commit must never carry it.
 
 ## Layout
 

@@ -66,6 +66,12 @@ commit **on top** of what is already there. Never squash, rebase, amend, or
 rewritten under it. The two repos therefore share file *content* but not commit
 SHAs.
 
+The one exception: a deliberate, user-approved hygiene fix for something that
+should never have been public in the first place (e.g. the 2026-09-05
+`Co-Authored-By:` leak below) — verify forks/watchers/stars first (GitHub API),
+get explicit sign-off, then rewrite and force-push. That is not a sync step;
+it does not change how routine syncs work.
+
 ### One-time setup
 
 ```sh
@@ -96,21 +102,34 @@ git log --oneline "$(git rev-parse refs/mirror/private-head)"..private/main
 
 Replay that range **one private commit at a time, in order**. Each private
 commit becomes one public commit carrying a `Mirrored-from: <full private sha>`
-trailer:
+trailer.
+
+**Strip any `Co-Authored-By:` trailer before it lands on the public commit.**
+This is not optional. On 2026-09-05 a `Co-Authored-By: Claude Sonnet 5
+<noreply@anthropic.com>` trailer rode along from `~/cadence` straight into 3
+public commits (mirroring preserves the original message, and the source
+commits carried it), making an AI assistant show up in the public repo's
+Contributors list. Fixed with `git filter-branch --msg-filter` + a one-off
+`push --force` (repo had 0 forks/watchers/stars, verified via the GitHub API
+first) — see the git log around 2026-09-05 for the incident commits. The
+step below exists so it can't recur silently:
 
 - **Touches only shared files:**
   ```sh
   git cherry-pick <sha>
-  git commit --amend --no-edit --trailer "Mirrored-from: $(git rev-parse <sha>)"
+  msg=$(git log -1 --format=%B | grep -vxF "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
+  git commit --amend -m "$msg" --trailer "Mirrored-from: $(git rev-parse <sha>)"
   ```
 - **Also touches a private-only file** (`.gitlab-ci.yml`, `CLAUDE.md`,
   `MAINTAINING.md`) — apply the diff with those paths filtered out, keeping the
-  original message/author/date:
+  original message/author/date, then strip the trailer the same way:
   ```sh
   git -C ~/cadence show <sha> -- . \
     ':(exclude).gitlab-ci.yml' ':(exclude)CLAUDE.md' ':(exclude)MAINTAINING.md' \
     | git apply --index --3way
-  git commit -C <sha> --trailer "Mirrored-from: $(git rev-parse <sha>)"
+  git commit -C <sha>
+  msg=$(git log -1 --format=%B | grep -vxF "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
+  git commit --amend -m "$msg" --trailer "Mirrored-from: $(git rev-parse <sha>)"
   ```
 - **Touches only private-only files** (e.g. an edit to this file) — skip it,
   nothing to mirror.
