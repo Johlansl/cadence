@@ -17,6 +17,12 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
   version against apt's candidate; the `security` heuristic and all fleet
   counts are unchanged. Disable the feed with
   `CADENCE_ADVISORY_REFRESH_ENABLED=false`.
+- Advisory linkage now prefers the source package and release codename reported
+  by agent `0.7.0` (migration `0011` adds `host_packages.source_package` and
+  `hosts.os_codename`), so a library binary like `libssl3` links via its source
+  (`openssl`) without relying on the curated fallback map, and a release outside
+  the built-in `VERSION_ID` list still resolves. Pre-`0.7.0` agents keep working
+  through the fallbacks.
 
 ## 0.1.0
 

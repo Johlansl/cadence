@@ -27,9 +27,12 @@ job poll.
 host. There is no long-poll and no daemon:
 
 - `POST /api/v1/reports` — the agent sends installed packages + available apt
-  updates + OS info + reboot-required state. The response body may carry one
-  pending job for that host (*piggyback*), so a triggered upgrade can start on
-  the next report without any push channel.
+  updates + OS info + reboot-required state. Each package also carries its
+  Debian source package (`source_package`) and the report its release codename
+  (`os_codename`), both since agent `0.7.0` and both optional, used to link
+  security advisories precisely. The response body may carry one pending job
+  for that host (*piggyback*), so a triggered upgrade can start on the next
+  report without any push channel.
 - `POST /api/v1/agent/next-job` — a dedicated fast poll (~1 min) that claims a
   pending job without re-collecting package state, so a dashboard-triggered
   action starts within about a minute instead of waiting for the next report.
@@ -66,7 +69,8 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   roll-forward rotation.
 - `packages` — a shared `(name, architecture)` dimension, never deleted.
 - `host_packages` — the current per-host package state (installed version,
-  candidate version, security flag). Replaced wholesale on every report.
+  candidate version, security flag, and the Debian `source_package` when the
+  agent reports it). Replaced wholesale on every report.
 - `reports` — an append-only log of each report (counters + the raw payload).
 - `jobs` — queued/running/finished actions (`apt_upgrade`, `reboot`), with a
   jsonb `params` and a captured `log`.
