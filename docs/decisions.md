@@ -34,8 +34,11 @@ model.
   whose per-release `fixed_version` **equals** apt's candidate version (an
   exact string match — Cadence still does no version comparison of its own).
   It is deliberately *not* a full vulnerability scan: no unfixed / no-DSA CVEs,
-  no severity, and until agent `0.7.0` the binary→source-package mapping is
-  name-based with a small curated table for common libraries.
+  no severity. Agent `0.7.0`+ reports each binary's Debian source package
+  (`dpkg-query ${source:Package}`) and the release codename
+  (`/etc/os-release VERSION_CODENAME`), which the read-path uses directly; for
+  older agents it falls back to a name-based binary→source mapping with a small
+  curated table for common libraries and a `VERSION_ID`→codename table.
 - **The agent never reboots on its own** unless the host's `reboot_policy` is
   `auto` (or a job overrides it) *and* the kill-switch `CADENCE_ENABLE_REBOOT`
   is not `false`. It otherwise just reports `reboot_required`.
