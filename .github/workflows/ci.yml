@@ -118,7 +118,8 @@ jobs:
           mkdir -p dist   # caddy bind-mounts ./dist (gitignored, absent in CI)
       - run: docker compose up -d --build --wait --wait-timeout 240
       - run: docker compose ps
-      - run: docker compose run --rm backend alembic current | grep -qE '^0008 \(head\)$'
+      # assert the stack booted and ran its migrations to head (any revision)
+      - run: docker compose run --rm backend alembic current | grep -qE ' \(head\)$'
       - run: docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5); print('readyz ok')"
       - name: basic-auth gate (placeholder hash is bcrypt of "change-me")
         run: |
