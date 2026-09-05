@@ -114,6 +114,42 @@ class HostPackage(Base):
     )
 
 
+class Advisory(Base):
+    """One upstream security advisory (Debian DSA/DLA now, Ubuntu USN later).
+    Populated only by the scheduler's advisory-refresh task; see migration
+    0010. `cve_ids` is a JSON array of "CVE-YYYY-NNNN" strings."""
+
+    __tablename__ = "advisories"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    cve_ids: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AdvisoryPackage(Base):
+    """A (release, source package) that a given advisory fixes, with the
+    version the fix landed in. The read API joins a host's pending security
+    updates against `(package, release)` and keeps rows whose `fixed_version`
+    matches apt's candidate. See migration 0010."""
+
+    __tablename__ = "advisory_packages"
+
+    advisory_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("advisories.id", ondelete="CASCADE"), primary_key=True
+    )
+    release: Mapped[str] = mapped_column(Text, primary_key=True)
+    package: Mapped[str] = mapped_column(Text, primary_key=True)
+    fixed_version: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class Report(Base):
     __tablename__ = "reports"
 
