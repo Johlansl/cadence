@@ -66,6 +66,24 @@ export interface HostDetail extends HostSummary {
   packages: HostPackage[]
 }
 
+export type PackageStatusFilter = 'pending' | 'security' | 'all'
+
+export interface PackageHost {
+  host_id: string
+  hostname: string
+  installed_version: string
+  candidate_version: string | null
+  is_security_update: boolean
+  update_origin: string | null
+  updated_at: string
+}
+
+export interface PackageSummaryRow {
+  name: string
+  architecture: string
+  hosts: PackageHost[]
+}
+
 export type ScheduleKind = 'monthly' | 'weekly'
 
 export interface Schedule {
