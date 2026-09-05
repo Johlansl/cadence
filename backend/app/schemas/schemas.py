@@ -247,6 +247,24 @@ class HostDetail(HostSummary):
     packages: list[HostPackageOut]
 
 
+# --- cross-package view ---------------------------------------------------
+
+class PackageHostOut(BaseModel):
+    host_id: uuid.UUID
+    hostname: str
+    installed_version: str
+    candidate_version: str | None
+    is_security_update: bool
+    update_origin: str | None
+    updated_at: datetime
+
+
+class PackageSummary(BaseModel):
+    name: str
+    architecture: str
+    hosts: list[PackageHostOut]
+
+
 # --- jobs ----------------------------------------------------------------
 
 class JobCreate(BaseModel):

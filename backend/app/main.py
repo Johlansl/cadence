@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from sqlalchemy import text
 
 from app import __version__
-from app.api.routes import admin, fleet, hosts, jobs, reports, schedules
+from app.api.routes import admin, fleet, hosts, jobs, packages, reports, schedules
 from app.core.logging import configure_logging
 from app.core.throttle import client_ip
 from app.db.base import SessionLocal
@@ -63,6 +63,7 @@ app.include_router(admin.router)
 app.include_router(fleet.router)
 app.include_router(hosts.router)
 app.include_router(jobs.router)
+app.include_router(packages.router)
 app.include_router(reports.router)
 app.include_router(schedules.router)
 app.include_router(schedules.admin_router)
