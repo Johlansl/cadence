@@ -3,6 +3,8 @@ import type {
   HostDetail,
   HostSummary,
   Job,
+  PackageStatusFilter,
+  PackageSummaryRow,
   RebootPolicy,
   ReportSummary,
   Schedule,
@@ -60,6 +62,14 @@ export const api = {
   listHosts: () => getJSON<HostSummary[]>('/hosts'),
   getHost: (id: string) => getJSON<HostDetail>(`/hosts/${id}`),
   getFleetSummary: () => getJSON<FleetSummary>('/fleet/summary'),
+
+  listPackages: (opts: { name?: string; status?: PackageStatusFilter } = {}) => {
+    const p = new URLSearchParams()
+    if (opts.name) p.set('name', opts.name)
+    if (opts.status) p.set('status', opts.status)
+    const qs = p.toString()
+    return getJSON<PackageSummaryRow[]>(`/packages${qs ? `?${qs}` : ''}`)
+  },
 
   getHostJobs: (id: string, opts: { limit?: number; before?: string } = {}) => {
     const p = new URLSearchParams()

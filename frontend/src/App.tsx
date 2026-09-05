@@ -6,20 +6,23 @@ import { HostDetail } from './components/HostDetail'
 import { HostFilters } from './components/HostFilters'
 import { HostList } from './components/HostList'
 import { OverviewChips, SilentBanner } from './components/Overview'
+import { PackagesView } from './components/PackagesView'
 import { EMPTY_FILTERS, filterHosts, type HostFilters as Filters } from './lib/hostFilter'
 import { relativeTime } from './lib/time'
 import type { HostDetail as HostDetailData, HostSummary } from './types'
 
 const POLL_MS = 30_000
 
-// The selected host is mirrored in the URL hash (#host=<id>) so a reload keeps
-// the view and the link is shareable.
+// The current view is mirrored in the URL hash (#host=<id> or #packages) so a
+// reload keeps the view and the link is shareable.
 function readHashHostId(): string | null {
   const m = /(?:^|[#&])host=([^&]+)/.exec(window.location.hash)
   return m ? decodeURIComponent(m[1]) : null
 }
-function writeHashHostId(id: string | null): void {
-  const next = id ? `#host=${encodeURIComponent(id)}` : ''
+function readHashIsPackages(): boolean {
+  return window.location.hash === '#packages'
+}
+function writeHash(next: string): void {
   if (window.location.hash === next) return
   const url = next || window.location.pathname + window.location.search
   window.history.replaceState(null, '', url)
@@ -28,6 +31,7 @@ function writeHashHostId(id: string | null): void {
 export default function App() {
   const [hosts, setHosts] = useState<HostSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(readHashHostId)
+  const [showPackages, setShowPackages] = useState<boolean>(readHashIsPackages)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   // Two independent failures: the host-list poll drives the global sync
   // indicator; a host-detail poll failure is shown in the detail pane only,
@@ -100,7 +104,14 @@ export default function App() {
 
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
-    writeHashHostId(id)
+    setShowPackages(false)
+    writeHash(id ? `#host=${encodeURIComponent(id)}` : '')
+  }, [])
+
+  const selectPackages = useCallback(() => {
+    setSelectedId(null)
+    setShowPackages(true)
+    writeHash('#packages')
   }, [])
 
   // Called after a host mutation from the detail pane.
@@ -113,9 +124,12 @@ export default function App() {
     void refreshList()
   }, [refreshList, select])
 
-  // Follow back/forward navigation between hosts.
+  // Follow back/forward navigation between hosts and the packages view.
   useEffect(() => {
-    const onHashChange = () => setSelectedId(readHashHostId())
+    const onHashChange = () => {
+      setSelectedId(readHashHostId())
+      setShowPackages(readHashIsPackages())
+    }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
@@ -137,6 +151,15 @@ export default function App() {
             title="Back to the fleet overview"
           >
             Cadence
+          </button>
+          <button
+            type="button"
+            onClick={selectPackages}
+            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+              showPackages ? 'text-zinc-200' : 'text-zinc-500'
+            }`}
+          >
+            Packages
           </button>
           <OverviewChips hosts={hosts} />
         </div>
@@ -185,7 +208,9 @@ export default function App() {
           </nav>
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {detail ? (
+          {showPackages ? (
+            <PackagesView onSelectHost={select} />
+          ) : detail ? (
             <>
               {detailError && (
                 <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-6 py-1.5 text-xs text-amber-400">
