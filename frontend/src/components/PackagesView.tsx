@@ -127,6 +127,18 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
                         )}
                       </span>
                       {h.is_security_update && <span className={pill('danger')}>SEC</span>}
+                      {h.advisories.map((a) => (
+                        <a
+                          key={a.id}
+                          href={a.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={a.cves.join(', ')}
+                          className={`${pill('info')} hover:text-sky-300`}
+                        >
+                          {a.id}
+                        </a>
+                      ))}
                     </span>
                   </li>
                 ))}

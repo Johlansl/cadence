@@ -48,8 +48,11 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
     let out = packages.filter((p) => {
       if (onlyUpdates && !p.candidate_version) return false
       if (onlySecurity && !p.is_security_update) return false
-      if (needle && !`${p.name} ${p.update_origin ?? ''}`.toLowerCase().includes(needle))
-        return false
+      if (needle) {
+        const advisoryText = p.advisories.map((a) => `${a.id} ${a.cves.join(' ')}`).join(' ')
+        const haystack = `${p.name} ${p.update_origin ?? ''} ${advisoryText}`.toLowerCase()
+        if (!haystack.includes(needle)) return false
+      }
       return true
     })
     if (sortKey === 'smart') {
@@ -133,6 +136,18 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
                     SEC
                   </span>
                 )}
+                {p.advisories.map((a) => (
+                  <a
+                    key={a.id}
+                    href={a.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={a.cves.join(', ')}
+                    className="ml-1 rounded bg-sky-500/10 px-1 font-sans text-[10px] font-medium text-sky-400 ring-1 ring-sky-500/30 hover:text-sky-300"
+                  >
+                    {a.id}
+                  </a>
+                ))}
               </td>
               <td className="px-3 py-1.5 text-zinc-500">{p.installed_version}</td>
               <td className="px-3 py-1.5 text-zinc-300">{p.candidate_version ?? '—'}</td>
