@@ -72,6 +72,8 @@ SHAs.
 cd ~/cadence-public
 git remote add private ~/cadence                       # local path, never pushed
 git config remote.origin.pushurl git@github.com:Johlansl/cadence.git
+git fetch private                                      # needed before the next line: the
+                                                        # target commit isn't local yet otherwise
 git update-ref refs/mirror/private-head 1c08096        # private commit the seed matches
 ```
 
