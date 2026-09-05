@@ -233,6 +233,15 @@ class FleetSummary(BaseModel):
     jobs_failed_24h: int
 
 
+class AdvisoryRef(BaseModel):
+    """A security advisory linked to a pending security update. `id` is a
+    DSA/DLA identifier; `url` points at the security-tracker page."""
+
+    id: str
+    url: str
+    cves: list[str]
+
+
 class HostPackageOut(BaseModel):
     name: str
     architecture: str
@@ -241,6 +250,7 @@ class HostPackageOut(BaseModel):
     is_security_update: bool
     update_origin: str | None
     updated_at: datetime
+    advisories: list[AdvisoryRef] = []
 
 
 class HostDetail(HostSummary):
@@ -257,6 +267,7 @@ class PackageHostOut(BaseModel):
     is_security_update: bool
     update_origin: str | None
     updated_at: datetime
+    advisories: list[AdvisoryRef] = []
 
 
 class PackageSummary(BaseModel):
