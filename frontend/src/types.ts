@@ -52,6 +52,12 @@ export interface ReportSummary {
   reboot_required: boolean
 }
 
+export interface AdvisoryRef {
+  id: string
+  url: string
+  cves: string[]
+}
+
 export interface HostPackage {
   name: string
   architecture: string
@@ -60,6 +66,7 @@ export interface HostPackage {
   is_security_update: boolean
   update_origin: string | null
   updated_at: string
+  advisories: AdvisoryRef[]
 }
 
 export interface HostDetail extends HostSummary {
@@ -76,6 +83,7 @@ export interface PackageHost {
   is_security_update: boolean
   update_origin: string | null
   updated_at: string
+  advisories: AdvisoryRef[]
 }
 
 export interface PackageSummaryRow {

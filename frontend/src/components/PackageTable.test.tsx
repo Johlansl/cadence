@@ -13,6 +13,7 @@ function pkg(over: Partial<HostPackage> = {}): HostPackage {
     is_security_update: false,
     update_origin: null,
     updated_at: '2026-01-01T00:00:00Z',
+    advisories: [],
     ...over,
   }
 }
@@ -63,5 +64,30 @@ describe('PackageTable', () => {
   it('shows a friendly empty state when the pending filter hides everything', () => {
     render(<PackageTable packages={[pkg({ name: 'bash' })]} />)
     expect(screen.getByText('No pending updates.')).toBeInTheDocument()
+  })
+
+  it('links each advisory next to the SEC badge and filters on it', async () => {
+    const withAdvisory = pkg({
+      name: 'libssl3',
+      candidate_version: '3.0.14-1~deb12u2',
+      is_security_update: true,
+      advisories: [
+        {
+          id: 'DSA-5745-1',
+          url: 'https://security-tracker.debian.org/tracker/DSA-5745-1',
+          cves: ['CVE-2026-6119'],
+        },
+      ],
+    })
+    render(
+      <PackageTable packages={[withAdvisory, pkg({ name: 'acl', candidate_version: '2.3' })]} />,
+    )
+
+    const link = screen.getByRole('link', { name: 'DSA-5745-1' })
+    expect(link).toHaveAttribute('href', 'https://security-tracker.debian.org/tracker/DSA-5745-1')
+    expect(link).toHaveAttribute('title', 'CVE-2026-6119')
+
+    await userEvent.type(screen.getByLabelText(/filter packages/i), 'cve-2026-6119')
+    expect(rowNames()).toEqual(['libssl3'])
   })
 })

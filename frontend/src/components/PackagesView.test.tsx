@@ -20,6 +20,7 @@ function row(over: Partial<PackageSummaryRow> = {}): PackageSummaryRow {
         is_security_update: true,
         update_origin: 'Debian-Security:13/stable-security',
         updated_at: '2026-01-01T00:00:00Z',
+        advisories: [],
       },
     ],
     ...over,
@@ -77,5 +78,34 @@ describe('PackagesView', () => {
 
     await userEvent.click(await screen.findByText('vm-a'))
     expect(onSelectHost).toHaveBeenCalledWith('h1')
+  })
+
+  it('links a linked advisory next to the SEC pill', async () => {
+    const withAdvisory = row({
+      hosts: [
+        {
+          host_id: 'h1',
+          hostname: 'vm-a',
+          installed_version: '3.0.11',
+          candidate_version: '3.0.14-1~deb12u2',
+          is_security_update: true,
+          update_origin: 'Debian-Security:12/stable-security',
+          updated_at: '2026-01-01T00:00:00Z',
+          advisories: [
+            {
+              id: 'DSA-5745-1',
+              url: 'https://security-tracker.debian.org/tracker/DSA-5745-1',
+              cves: ['CVE-2026-6119'],
+            },
+          ],
+        },
+      ],
+    })
+    installFetchMock({ [PACKAGES_URL]: { body: [withAdvisory] } })
+    render(<PackagesView onSelectHost={() => {}} />)
+
+    const link = await screen.findByRole('link', { name: 'DSA-5745-1' })
+    expect(link).toHaveAttribute('href', 'https://security-tracker.debian.org/tracker/DSA-5745-1')
+    expect(link).toHaveAttribute('title', 'CVE-2026-6119')
   })
 })
