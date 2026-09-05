@@ -1,4 +1,9 @@
-"""Keyset pagination helper for the "newest first" history endpoints."""
+"""Keyset pagination helpers.
+
+``before_keyset`` walks a ``DESC`` scan (the "newest first" history
+endpoints); ``after_keyset`` walks an ``ASC`` scan (the host list, ordered by
+hostname).
+"""
 
 from __future__ import annotations
 
@@ -26,3 +31,19 @@ def before_keyset(
     if before_id is None:
         return ts_col < before
     return or_(ts_col < before, and_(ts_col == before, id_col < before_id))
+
+
+def after_keyset(
+    sort_col: Any, id_col: Any, after: Any | None, after_id: Any | None
+) -> ColumnElement[bool] | None:
+    """WHERE clause for the page after ``(after, after_id)`` on an
+    ``ORDER BY sort_col ASC, id_col ASC`` scan -- the mirror of
+    ``before_keyset``. The id tiebreaker keeps rows that share a
+    ``sort_col`` value from being split across a page boundary. Returns
+    ``None`` when there is no cursor.
+    """
+    if after is None:
+        return None
+    if after_id is None:
+        return sort_col > after
+    return or_(sort_col > after, and_(sort_col == after, id_col > after_id))
