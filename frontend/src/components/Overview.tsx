@@ -1,4 +1,5 @@
 import { staleness } from '../lib/time'
+import { useNow } from '../lib/useNow'
 import type { HostSummary } from '../types'
 
 interface Counts {
@@ -36,6 +37,7 @@ export function summarize(hosts: HostSummary[]): Counts {
 }
 
 export function OverviewChips({ hosts }: { hosts: HostSummary[] }) {
+  useNow()
   const c = summarize(hosts)
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-600">
@@ -59,6 +61,7 @@ export function SilentBanner({
   hosts: HostSummary[]
   onSelect: (id: string) => void
 }) {
+  useNow()
   const silent = hosts.filter((h) => h.is_active && staleness(h.last_seen_at) === 'stale')
   if (silent.length === 0) return null
 

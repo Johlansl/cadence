@@ -7,8 +7,8 @@ import { HostFilters } from './components/HostFilters'
 import { HostList } from './components/HostList'
 import { OverviewChips, SilentBanner } from './components/Overview'
 import { PackagesView } from './components/PackagesView'
+import { RelativeTime } from './components/RelativeTime'
 import { EMPTY_FILTERS, filterHosts, type HostFilters as Filters } from './lib/hostFilter'
-import { relativeTime } from './lib/time'
 import type { HostDetail as HostDetailData, HostSummary } from './types'
 
 const POLL_MS = 30_000
@@ -42,7 +42,6 @@ export default function App() {
   const [detailReload, setDetailReload] = useState(0)
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [, tick] = useState(0)
 
   const visibleHosts = useMemo(() => filterHosts(hosts, filters), [hosts, filters])
 
@@ -134,12 +133,6 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  // Keep relative timestamps moving between polls.
-  useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 15_000)
-    return () => clearInterval(t)
-  }, [])
-
   return (
     <div className="flex h-full flex-col bg-zinc-950">
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
@@ -167,7 +160,9 @@ export default function App() {
           {listError ? (
             <span className="text-red-400">sync error: {listError}</span>
           ) : lastSync ? (
-            <span>synced {relativeTime(lastSync.toISOString())}</span>
+            <span>
+              synced <RelativeTime iso={lastSync.toISOString()} />
+            </span>
           ) : (
             <span>loading…</span>
           )}

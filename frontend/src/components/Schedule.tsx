@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
-import { relativeTime } from '../lib/time'
 import type { Schedule as ScheduleData, ScheduleInput, ScheduleKind } from '../types'
 import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
+import { RelativeTime } from './RelativeTime'
 import { useToast } from './Toast'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -156,11 +156,15 @@ export function Schedule({ hostId }: { hostId: string }) {
         </h3>
         {loaded && (
           <span className="text-xs text-zinc-600">
-            {existing?.enabled && existing.next_run_at
-              ? `next run ${relativeTime(existing.next_run_at)}`
-              : existing
-                ? 'disabled'
-                : 'none'}
+            {existing?.enabled && existing.next_run_at ? (
+              <>
+                next run <RelativeTime iso={existing.next_run_at} />
+              </>
+            ) : existing ? (
+              'disabled'
+            ) : (
+              'none'
+            )}
           </span>
         )}
       </div>
