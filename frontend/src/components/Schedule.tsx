@@ -15,7 +15,6 @@ interface Form {
   weekday: number
   hour: number
   minute: number
-  timezone: string
   reboot: RebootChoice
   enabled: boolean
 }
@@ -26,7 +25,6 @@ const DEFAULT_FORM: Form = {
   weekday: 6,
   hour: 4,
   minute: 0,
-  timezone: 'UTC',
   reboot: 'inherit',
   enabled: true,
 }
@@ -39,7 +37,6 @@ function toForm(s: ScheduleData): Form {
     weekday: s.weekday ?? 6,
     hour: s.hour,
     minute: s.minute,
-    timezone: s.timezone,
     reboot: r === 'auto' || r === 'never' || r === 'prompt' ? r : 'inherit',
     enabled: s.enabled,
   }
@@ -53,7 +50,10 @@ function toInput(f: Form): ScheduleInput {
     weekday: f.kind === 'weekly' ? f.weekday : null,
     hour: f.hour,
     minute: f.minute,
-    timezone: f.timezone.trim() || 'UTC',
+    // UTC only for now -- the backend accepts any IANA zone but nothing in the
+    // UI surfaces a local wall-clock, so a free-text field was just a way to
+    // send an invalid value. Per-host local windows would be a separate feature.
+    timezone: 'UTC',
     params: f.reboot === 'inherit' ? {} : { reboot: f.reboot },
   }
 }
@@ -226,14 +226,9 @@ export function Schedule({ hostId }: { hostId: string }) {
           />
         </label>
 
-        <input
-          type="text"
-          value={form.timezone}
-          onChange={(e) => set('timezone', e.target.value)}
-          placeholder="UTC"
-          size={14}
-          className={field}
-        />
+        <span className="text-zinc-500" title="Maintenance windows are scheduled in UTC">
+          UTC
+        </span>
 
         <label className="flex items-center gap-1">
           reboot
