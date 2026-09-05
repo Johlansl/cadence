@@ -35,6 +35,13 @@ shows status and triggers upgrades or reboots per host. It runs as a
   2026-09-05; fixed with a rebase + one-off `push --force` on the mirror only
   (see MAINTAINING.md). Applies here in `~/cadence` too, not just at mirror
   time — the source commit must never carry it.
+- **Non-trivial change → plan first, get the maintainer's sign-off, then
+  code.** Small obvious fixes don't need it.
+- **Every `git push` (GitLab or GitHub) and every Alembic migration is shown
+  and confirmed with the maintainer before running.** Never force-push except
+  a maintainer-approved, documented one-off. The GitLab push is done via a
+  stored PAT (redact it in any shown output); the GitHub mirror push and tags
+  use the SSH key.
 
 ## Layout
 
