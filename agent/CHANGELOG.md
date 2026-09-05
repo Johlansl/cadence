@@ -3,6 +3,19 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.7.0
+
+Advisory linkage:
+
+- collector: each package now carries its Debian source package name
+  (`dpkg-query ${source:Package}`) and the report carries the OS release
+  codename (`/etc/os-release` `VERSION_CODENAME`). The server uses them to link
+  Debian security advisories precisely — a library binary such as `libssl3` is
+  matched via its source (`openssl`), and a release outside the server's
+  built-in `VERSION_ID` list still resolves. Both are additive JSON fields
+  (`source_package`, `os_codename`); an older server ignores them and keeps
+  accepting pre-`0.7.0` reports unchanged.
+
 ## 0.6.2
 
 Security:
