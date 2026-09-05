@@ -10,14 +10,11 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.core.staleness import LATE_AFTER, SILENT_AFTER
 from app.models.models import Host, HostPackage, Job, Report
 from app.schemas.schemas import FleetSummary
 
 router = APIRouter(prefix="/api/v1", tags=["fleet"])
-
-# Kept in sync with frontend/src/lib/time.ts staleness buckets.
-LATE_AFTER = timedelta(minutes=5)
-SILENT_AFTER = timedelta(minutes=15)
 
 
 @router.get("/fleet/summary", response_model=FleetSummary)
