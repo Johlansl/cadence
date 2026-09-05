@@ -7,17 +7,24 @@ behind the reverse proxy / on a trusted network (see SECURITY.md).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.pagination import after_keyset
+from app.core.staleness import LATE_AFTER
 from app.models.models import Host, HostPackage, Package
 from app.schemas.schemas import HostDetail, HostPackageOut, HostStatus, HostSummary
 
 router = APIRouter(prefix="/api/v1", tags=["hosts"])
+
+HostStatusFilter = Literal["all", "security", "updates", "uptodate"]
+FreshnessFilter = Literal["all", "silent"]
 
 
 def _status(updates_available: int, security_updates: int) -> HostStatus:
@@ -50,7 +57,25 @@ def _summary_fields(host: Host) -> dict:
 
 
 @router.get("/hosts", response_model=list[HostSummary])
-def list_hosts(db: Session = Depends(get_db)) -> list[HostSummary]:
+def list_hosts(
+    q: str | None = Query(None, description="substring match on hostname or description"),
+    status: HostStatusFilter = "all",
+    tag: str | None = Query(
+        None, description='"key" (key or value contains it) or "key=value" (exact pair)'
+    ),
+    include_inactive: bool = Query(
+        True, description="default returns retired hosts too; false hides them"
+    ),
+    freshness: FreshnessFilter = Query(
+        "all", description='"silent" keeps only hosts not seen in the last 5 minutes'
+    ),
+    limit: int | None = Query(None, ge=1, le=200, description="omit for the full list"),
+    after: str | None = Query(None, description="page cursor: hostname of the last row"),
+    after_id: uuid.UUID | None = Query(
+        None, description="page cursor: id of the last row (pass with `after`)"
+    ),
+    db: Session = Depends(get_db),
+) -> list[HostSummary]:
     pending = func.count().filter(HostPackage.candidate_version.is_not(None))
     security = func.count().filter(
         and_(
@@ -66,8 +91,41 @@ def list_hosts(db: Session = Depends(get_db)) -> list[HostSummary]:
         )
         .outerjoin(HostPackage, HostPackage.host_id == Host.id)
         .group_by(Host.id)
-        .order_by(Host.hostname, Host.created_at)
+        .order_by(Host.hostname, Host.id)
     )
+
+    if not include_inactive:
+        stmt = stmt.where(Host.is_active.is_(True))
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(or_(Host.hostname.ilike(like), Host.description.ilike(like)))
+    if freshness == "silent":
+        cutoff = datetime.now(timezone.utc) - LATE_AFTER
+        stmt = stmt.where(
+            or_(Host.last_seen_at.is_(None), Host.last_seen_at <= cutoff)
+        )
+    if tag:
+        t = tag.strip().lower()
+        kv = func.jsonb_each_text(Host.tags).table_valued("key", "value")
+        if "=" in t:
+            k, v = t.split("=", 1)
+            match = and_(func.lower(kv.c.key) == k, func.lower(kv.c.value) == v)
+        else:
+            like = f"%{t}%"
+            match = or_(func.lower(kv.c.key).like(like), func.lower(kv.c.value).like(like))
+        stmt = stmt.where(exists(select(1).select_from(kv).where(match)))
+    if status == "security":
+        stmt = stmt.having(security > 0)
+    elif status == "updates":
+        stmt = stmt.having(pending > 0)
+    elif status == "uptodate":
+        stmt = stmt.having(pending == 0)
+
+    keyset = after_keyset(Host.hostname, Host.id, after, after_id)
+    if keyset is not None:
+        stmt = stmt.where(keyset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
 
     return [
         HostSummary(
