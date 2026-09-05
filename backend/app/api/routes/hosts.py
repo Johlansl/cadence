@@ -154,6 +154,7 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
             HostPackage.is_security_update,
             HostPackage.update_origin,
             HostPackage.updated_at,
+            HostPackage.source_package,
         )
         .join(Package, Package.id == HostPackage.package_id)
         .where(HostPackage.host_id == host.id)
@@ -168,12 +169,17 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
     # Link each apt-flagged pending security update to the DSA/DLA(s) that fix
     # it. Never affects the counts above -- purely additive metadata.
     advisories_by_key: dict[tuple[str, str], list] = {}
-    codename = codename_for(host.os_version)
+    codename = host.os_codename or codename_for(host.os_version)
     if codename:
         advisories_by_key = advisories_for(
             db,
             (
-                ((r.name, r.architecture), source_for(r.name), codename, r.candidate_version)
+                (
+                    (r.name, r.architecture),
+                    r.source_package or source_for(r.name),
+                    codename,
+                    r.candidate_version,
+                )
                 for r in pkg_rows
                 if r.candidate_version is not None and r.is_security_update
             ),

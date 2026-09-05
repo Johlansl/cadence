@@ -34,11 +34,35 @@ def _seed_openssl_dsa(db):
     db.flush()
 
 
-def _report(client, token, packages, *, os_version="12"):
+def _seed_foo_dsa(db):
+    """An advisory for source package `foo` whose binary name (`libfoo1`) is not
+    in the curated COMMON_BINARY_SOURCE map."""
+    db.add(
+        Advisory(
+            id="DSA-9000-1",
+            source="debian-dsa",
+            url="https://security-tracker.debian.org/tracker/DSA-9000-1",
+            title="foo - security update",
+            cve_ids=["CVE-2026-9000"],
+            published_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+    )
+    db.add(
+        AdvisoryPackage(
+            advisory_id="DSA-9000-1", release="bookworm", package="foo", fixed_version="9.9"
+        )
+    )
+    db.flush()
+
+
+def _report(client, token, packages, *, os_version="12", os_codename=None):
+    extra = {"os_codename": os_codename} if os_codename is not None else {}
     r = client.post(
         "/api/v1/reports",
         headers=bearer(token),
-        json=report_payload(hostname="vm-a", os_version=os_version, packages=packages),
+        json=report_payload(
+            hostname="vm-a", os_version=os_version, packages=packages, **extra
+        ),
     )
     assert r.status_code == 200, r.text
 
@@ -100,6 +124,50 @@ def test_no_match_for_unknown_release(client, db_session):
 
     body = client.get(f"/api/v1/hosts/{host_id}").json()
     assert body["packages"][0]["advisories"] == []
+
+
+def test_reported_source_package_drives_the_match(client, db_session):
+    # libfoo1 is absent from COMMON_BINARY_SOURCE; only the agent-reported
+    # source_package="foo" lets it link DSA-9000-1.
+    host_id, token = create_host(client, hostname="vm-a")
+    _seed_foo_dsa(db_session)
+    _report(
+        client,
+        token,
+        [
+            pkg("libfoo1", candidate="9.9", security=True, source="foo"),
+            pkg("libbar1", candidate="9.9", security=True),  # no source, no map -> no link
+        ],
+    )
+
+    body = client.get(f"/api/v1/hosts/{host_id}").json()
+    by_name = {p["name"]: p for p in body["packages"]}
+    assert by_name["libfoo1"]["source_package"] == "foo"
+    assert by_name["libfoo1"]["advisories"] == [
+        {
+            "id": "DSA-9000-1",
+            "url": "https://security-tracker.debian.org/tracker/DSA-9000-1",
+            "cves": ["CVE-2026-9000"],
+        }
+    ]
+    assert by_name["libbar1"]["advisories"] == []
+    assert body["security_updates_count"] == 2
+
+
+def test_reported_codename_preferred_over_unknown_os_version(client, db_session):
+    host_id, token = create_host(client, hostname="vm-a")
+    _seed_foo_dsa(db_session)
+    _report(
+        client,
+        token,
+        [pkg("libfoo1", candidate="9.9", security=True, source="foo")],
+        os_version="99",  # not in DEBIAN_CODENAME
+        os_codename="bookworm",
+    )
+
+    body = client.get(f"/api/v1/hosts/{host_id}").json()
+    assert body["packages"][0]["advisories"][0]["id"] == "DSA-9000-1"
+    assert body["security_updates_count"] == 1
 
 
 def test_packages_view_links_advisory(client, db_session):

@@ -75,6 +75,7 @@ def create_report(
     host.os_family = report_in.os_family or host.os_family
     host.os_name = report_in.os_name or host.os_name
     host.os_version = report_in.os_version or host.os_version
+    host.os_codename = report_in.os_codename or host.os_codename
     host.package_manager = report_in.package_manager or host.package_manager
     host.agent_version = report_in.agent_version or host.agent_version
     host.reboot_required = report_in.reboot_required
@@ -98,6 +99,7 @@ def create_report(
                     "candidate_version": p.candidate_version,
                     "is_security_update": p.is_security_update,
                     "update_origin": p.update_origin,
+                    "source_package": p.source_package,
                     "updated_at": now,
                 }
                 for p in packages

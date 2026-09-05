@@ -42,6 +42,9 @@ class Host(Base):
     os_family: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'debian'"))
     os_name: Mapped[str | None] = mapped_column(Text)
     os_version: Mapped[str | None] = mapped_column(Text)
+    # Debian release codename ('bookworm'); agent 0.7.0+. Preferred over the
+    # os_version -> codename inference when set. See migration 0011.
+    os_codename: Mapped[str | None] = mapped_column(Text)
     package_manager: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'apt'"))
     agent_version: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
@@ -109,6 +112,9 @@ class HostPackage(Base):
         Boolean, nullable=False, server_default=text("false")
     )
     update_origin: Mapped[str | None] = mapped_column(Text)
+    # Debian source package name for this binary; agent 0.7.0+. Preferred over
+    # the curated binary->source map when set. See migration 0011.
+    source_package: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

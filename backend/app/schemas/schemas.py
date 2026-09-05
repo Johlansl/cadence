@@ -127,6 +127,8 @@ class ReportPackage(BaseModel):
     candidate_version: str | None = None
     is_security_update: bool = False
     update_origin: str | None = None
+    # Debian source package name (agent 0.7.0+); used to link advisories.
+    source_package: str | None = None
 
 
 class ReportIn(BaseModel):
@@ -138,6 +140,8 @@ class ReportIn(BaseModel):
     os_family: str | None = "debian"
     os_name: str | None = None
     os_version: str | None = None
+    # Debian release codename, e.g. "bookworm" (agent 0.7.0+).
+    os_codename: str | None = None
     package_manager: str | None = "apt"
     reboot_required: bool = False
     packages: list[ReportPackage] = Field(default_factory=list)
@@ -250,6 +254,7 @@ class HostPackageOut(BaseModel):
     is_security_update: bool
     update_origin: str | None
     updated_at: datetime
+    source_package: str | None = None
     advisories: list[AdvisoryRef] = []
 
 
@@ -267,6 +272,7 @@ class PackageHostOut(BaseModel):
     is_security_update: bool
     update_origin: str | None
     updated_at: datetime
+    source_package: str | None = None
     advisories: list[AdvisoryRef] = []
 
 
