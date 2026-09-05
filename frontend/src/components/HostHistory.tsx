@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
-import { relativeTime } from '../lib/time'
 import type { ReportSummary } from '../types'
+import { RelativeTime } from './RelativeTime'
 import { Sparkline } from './Sparkline'
 
 export function HostHistory({ hostId }: { hostId: string }) {
@@ -41,7 +41,12 @@ export function HostHistory({ hostId }: { hostId: string }) {
         {reports && (
           <span className="text-xs text-zinc-600">
             {reports.length} report{reports.length === 1 ? '' : 's'}
-            {chrono.length > 0 && ` · since ${relativeTime(chrono[0].received_at)}`}
+            {chrono.length > 0 && (
+              <>
+                {' · since '}
+                <RelativeTime iso={chrono[0].received_at} />
+              </>
+            )}
           </span>
         )}
       </div>

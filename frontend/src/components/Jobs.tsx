@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { pill, type Tone } from '../lib/pill'
-import { relativeTime } from '../lib/time'
 import type { Job, JobStatus, RebootPolicy } from '../types'
 import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
+import { RelativeTime } from './RelativeTime'
 import { useToast } from './Toast'
 
 const STATUS_TONE: Record<JobStatus, Tone> = {
@@ -201,7 +201,13 @@ export function Jobs({ hostId }: { hostId: string }) {
 
       {collapsed ? (
         <p className="mt-1 text-xs text-zinc-600">
-          {last ? `last ${last.status} ${relativeTime(last.created_at)}` : 'no jobs yet'}
+          {last ? (
+            <>
+              last {last.status} <RelativeTime iso={last.created_at} />
+            </>
+          ) : (
+            'no jobs yet'
+          )}
         </p>
       ) : (
         <>
@@ -220,7 +226,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-zinc-400">
                       <JobBadge status={j.status} />
                       <span className="font-mono text-zinc-300">{j.job_type}</span>
-                      <span>· {relativeTime(j.created_at)}</span>
+                      <span>
+                        · <RelativeTime iso={j.created_at} />
+                      </span>
                       {j.requested_by && <span>· by {j.requested_by}</span>}
                       {typeof j.params.reboot === 'string' && (
                         <span>· reboot {j.params.reboot}</span>

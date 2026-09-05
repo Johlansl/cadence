@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { TONE_TEXT } from '../lib/pill'
 import { relativeTime, staleness } from '../lib/time'
+import { useNow } from '../lib/useNow'
 import type { FleetSummary, HostSummary } from '../types'
 import { Freshness } from './Freshness'
 import { StatusBadge } from './StatusBadge'
@@ -44,6 +45,7 @@ export function FleetOverview({
   hosts: HostSummary[]
   onSelect: (id: string) => void
 }) {
+  useNow() // keep the staleness-ranked "needs attention" list moving between polls
   const [summary, setSummary] = useState<FleetSummary | null>(null)
 
   useEffect(() => {
