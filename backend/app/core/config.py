@@ -38,6 +38,15 @@ def _trusted_proxies(var: str) -> list[IPNetwork]:
     return nets
 
 
+def _bool_env(var: str, default: bool) -> bool:
+    """A boolean env var. Unset -> default; otherwise anything but a clear
+    falsey token (0/false/no/off) counts as true."""
+    raw = os.environ.get(var, "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")
+
+
 def _non_negative_int(var: str, default: int) -> int:
     """A non-negative integer env var. 0 has a per-setting meaning (keep
     forever / feature disabled). Read by the scheduler."""
@@ -97,6 +106,17 @@ class Settings:
         # How long the container prestart waits for Postgres to accept
         # connections before giving up. 0 = try once. Read by app.prestart.
         self.db_wait_seconds: int = _non_negative_int("CADENCE_DB_WAIT_SECONDS", 60)
+
+        # Security-advisory enrichment: the scheduler periodically pulls the
+        # Debian DSA/DLA feeds. Disable (CI, air-gapped installs) with
+        # CADENCE_ADVISORY_REFRESH_ENABLED=false. An empty URL list means "use
+        # the built-in Debian defaults" (app.advisories.debian.DEFAULT_FEED_URLS).
+        self.advisory_refresh_enabled: bool = _bool_env(
+            "CADENCE_ADVISORY_REFRESH_ENABLED", True
+        )
+        self.advisory_feed_urls: list[str] = (
+            os.environ.get("CADENCE_ADVISORY_FEED_URLS", "").replace(",", " ").split()
+        )
 
 
 settings = Settings()

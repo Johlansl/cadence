@@ -20,6 +20,8 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.advisories import debian
+from app.advisories.sync import refresh_advisories
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
@@ -37,6 +39,8 @@ TICK_SECONDS = 60
 RETENTION_EVERY = timedelta(hours=24)
 RETENTION_STATE_KEY = "last_retention_at"
 HEARTBEAT_STATE_KEY = "last_tick_at"
+ADVISORY_REFRESH_EVERY = timedelta(hours=6)
+ADVISORY_STATE_KEY = "last_advisory_refresh_at"
 _stop = False
 
 
@@ -250,6 +254,67 @@ def run_retention_if_due(now: datetime | None = None) -> None:
     )
 
 
+def _advisory_due(db: Session, now: datetime) -> bool:
+    """True when the advisory feed hasn't been refreshed within
+    ADVISORY_REFRESH_EVERY. Last-run time lives in scheduler_state so a
+    restart doesn't re-trigger a fetch."""
+    last = db.execute(
+        select(SchedulerState.value).where(SchedulerState.key == ADVISORY_STATE_KEY)
+    ).scalar_one_or_none()
+    if last is None:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return now - last_dt >= ADVISORY_REFRESH_EVERY
+
+
+def _mark_advisory_done(db: Session, now: datetime) -> None:
+    db.execute(
+        pg_insert(SchedulerState)
+        .values(key=ADVISORY_STATE_KEY, value=now.isoformat(), updated_at=now)
+        .on_conflict_do_update(
+            index_elements=["key"], set_={"value": now.isoformat(), "updated_at": now}
+        )
+    )
+    db.commit()
+
+
+def run_advisory_refresh_if_due(
+    now: datetime | None = None, db: Session | None = None
+) -> None:
+    """Pull the Debian DSA/DLA feeds into `advisories` / `advisory_packages`
+    at most once per ADVISORY_REFRESH_EVERY. A fetch or parse failure is
+    logged and swallowed -- the last good rows stay, and the next tick retries
+    because the state key is only advanced on success. Pass `db` to run inside
+    an existing session (tests)."""
+    now = now or datetime.now(timezone.utc)
+    if not settings.advisory_refresh_enabled:
+        return
+    urls = settings.advisory_feed_urls or list(debian.DEFAULT_FEED_URLS)
+    own_session = db is None
+    db = db or SessionLocal()
+    try:
+        if not _advisory_due(db, now):
+            return
+        try:
+            parsed: list[debian.ParsedAdvisory] = []
+            for url in urls:
+                parsed.extend(debian.parse_list(debian.fetch(url)))
+        except Exception:  # noqa: BLE001 -- keep last good data, retry next tick
+            log.warning(
+                "advisory refresh failed, keeping last good data", exc_info=True
+            )
+            return
+        counts = refresh_advisories(db, parsed, now)
+        _mark_advisory_done(db, now)
+    finally:
+        if own_session:
+            db.close()
+    log.info("advisory refresh done", extra=_f(**counts, feeds=len(urls)))
+
+
 def _mark_heartbeat(db: Session, now: datetime) -> None:
     db.execute(
         pg_insert(SchedulerState)
@@ -280,6 +345,7 @@ def main() -> None:
             reap_stuck_jobs()
             tick()
             run_retention_if_due()
+            run_advisory_refresh_if_due()
             record_heartbeat()
         except Exception:  # noqa: BLE001 -- keep the loop alive
             log.exception("scheduler tick failed")
