@@ -122,3 +122,13 @@ use the stricter `ProtectSystem` / capability-bounding directives.
 
 An authenticated agent (or a leaked token) can push an arbitrarily large report
 body, stored verbatim in `reports.raw_payload` on every cycle.
+
+### Advisory / CVE linkage is best-effort, not a vulnerability scan
+
+The DSA/DLA and CVE ids shown next to a security update are enrichment of apt's
+own security flag: the scheduler periodically fetches Debian's public advisory
+lists and links an update only when an advisory's fixed version exactly matches
+apt's candidate. It does not enumerate unfixed or no-DSA CVEs, carries no
+severity, and can lag or miss while the feed is stale or a package's
+binary→source name mapping is unknown. Absence of a linked advisory is not
+evidence that a host is unaffected.
