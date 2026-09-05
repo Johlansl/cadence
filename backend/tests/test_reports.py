@@ -134,6 +134,63 @@ def test_report_keeps_descriptive_fields_when_omitted(client, db_session):
     assert host.os_version == "13"
 
 
+def test_report_persists_source_package_and_codename(client, db_session):
+    host_id, token = create_host(client)
+
+    r = client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(
+            os_codename="bookworm",
+            packages=[pkg("libssl3", candidate="3.0.14", security=True, source="openssl")],
+        ),
+    )
+    assert r.status_code == 200, r.text
+
+    host = db_session.get(Host, host_id)
+    assert host.os_codename == "bookworm"
+    row = db_session.execute(
+        select(HostPackage).where(HostPackage.host_id == host_id)
+    ).scalar_one()
+    assert row.source_package == "openssl"
+
+
+def test_report_accepts_pre_070_payload_without_source_fields(client, db_session):
+    host_id, token = create_host(client)
+
+    # No os_codename, no per-package source_package (a 0.6.x agent).
+    r = client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(packages=[pkg("bash")]),
+    )
+    assert r.status_code == 200, r.text
+
+    host = db_session.get(Host, host_id)
+    assert host.os_codename is None
+    row = db_session.execute(
+        select(HostPackage).where(HostPackage.host_id == host_id)
+    ).scalar_one()
+    assert row.source_package is None
+
+
+def test_report_keeps_os_codename_when_omitted(client, db_session):
+    host_id, token = create_host(client)
+
+    client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(os_codename="bookworm", packages=[pkg("bash")]),
+    )
+    # A later report that omits os_codename must not blank the stored value.
+    partial = report_payload(packages=[pkg("bash")])
+    partial.pop("os_codename", None)
+    r = client.post("/api/v1/reports", headers=bearer(token), json=partial)
+    assert r.status_code == 200, r.text
+
+    assert db_session.get(Host, host_id).os_codename == "bookworm"
+
+
 def test_report_piggybacks_pending_job(client, db_session):
     host_id, token = create_host(client)
     jr = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})

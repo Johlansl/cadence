@@ -149,8 +149,14 @@ def report_payload(**overrides) -> dict:
     return payload
 
 
-def pkg(name: str, *, candidate: str | None = None, security: bool = False) -> dict:
-    return {
+def pkg(
+    name: str,
+    *,
+    candidate: str | None = None,
+    security: bool = False,
+    source: str | None = None,
+) -> dict:
+    row = {
         "name": name,
         "architecture": "amd64",
         "installed_version": "1.0",
@@ -158,3 +164,6 @@ def pkg(name: str, *, candidate: str | None = None, security: bool = False) -> d
         "is_security_update": security,
         "update_origin": "Debian-Security:13/stable-security" if security else "Debian:13/stable",
     }
+    if source is not None:
+        row["source_package"] = source
+    return row

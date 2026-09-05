@@ -66,6 +66,7 @@ export interface HostPackage {
   is_security_update: boolean
   update_origin: string | null
   updated_at: string
+  source_package?: string | null
   advisories: AdvisoryRef[]
 }
 
@@ -83,6 +84,7 @@ export interface PackageHost {
   is_security_update: boolean
   update_origin: string | null
   updated_at: string
+  source_package?: string | null
   advisories: AdvisoryRef[]
 }
 

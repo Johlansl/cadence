@@ -33,11 +33,13 @@ def list_packages(
             Host.id.label("host_id"),
             Host.hostname,
             Host.os_version,
+            Host.os_codename,
             HostPackage.installed_version,
             HostPackage.candidate_version,
             HostPackage.is_security_update,
             HostPackage.update_origin,
             HostPackage.updated_at,
+            HostPackage.source_package,
         )
         .join(HostPackage, HostPackage.package_id == Package.id)
         .join(Host, Host.id == HostPackage.host_id)
@@ -63,13 +65,13 @@ def list_packages(
     for r in all_rows:
         if r.candidate_version is None or not r.is_security_update:
             continue
-        codename = codename_for(r.os_version)
+        codename = r.os_codename or codename_for(r.os_version)
         if codename is None:
             continue
         adv_items.append(
             (
                 (r.name, r.architecture, r.host_id),
-                source_for(r.name),
+                r.source_package or source_for(r.name),
                 codename,
                 r.candidate_version,
             )
@@ -93,6 +95,7 @@ def list_packages(
                     is_security_update=r.is_security_update,
                     update_origin=r.update_origin,
                     updated_at=r.updated_at,
+                    source_package=r.source_package,
                     advisories=advisories_by_key.get(
                         (r.name, r.architecture, r.host_id), []
                     ),
