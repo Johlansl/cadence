@@ -2,8 +2,17 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.models import Job, Schedule, SchedulerState
-from app.scheduler import HEARTBEAT_STATE_KEY, _mark_heartbeat, tick
+from app.core.config import settings
+from app.models.models import Advisory, Job, Schedule, SchedulerState
+from app.scheduler import (
+    ADVISORY_REFRESH_EVERY,
+    HEARTBEAT_STATE_KEY,
+    _advisory_due,
+    _mark_advisory_done,
+    _mark_heartbeat,
+    run_advisory_refresh_if_due,
+    tick,
+)
 from tests.conftest import ADMIN_HEADERS, create_host
 
 
@@ -93,3 +102,71 @@ def test_heartbeat_is_upserted(db_session):
         select(SchedulerState.value).where(SchedulerState.key == HEARTBEAT_STATE_KEY)
     ).scalar_one()
     assert datetime.fromisoformat(stored) == later
+
+
+# --- advisory feed refresh -------------------------------------------------
+
+_FEED = (
+    "[15 Aug 2026] DSA-5745-1 openssl - security update\n"
+    "\t{CVE-2026-6119}\n"
+    "\t[bookworm] - openssl 3.0.14-1~deb12u2\n"
+)
+
+
+def test_advisory_due_persisted_across_restarts(db_session):
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    assert _advisory_due(db_session, now) is True
+    _mark_advisory_done(db_session, now)
+    assert _advisory_due(db_session, now + timedelta(hours=1)) is False
+    assert _advisory_due(db_session, now + ADVISORY_REFRESH_EVERY) is True
+
+
+def test_advisory_refresh_runs_when_due(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "advisory_refresh_enabled", True)
+    monkeypatch.setattr("app.advisories.debian.fetch", lambda url, **kw: _FEED)
+    now = datetime.now(timezone.utc)
+
+    run_advisory_refresh_if_due(now=now, db=db_session)
+
+    assert db_session.get(Advisory, "DSA-5745-1") is not None
+    assert _advisory_due(db_session, now) is False
+
+
+def test_advisory_refresh_skips_when_recent(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "advisory_refresh_enabled", True)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "app.advisories.debian.fetch", lambda url, **kw: calls.append(url) or _FEED
+    )
+    now = datetime.now(timezone.utc)
+    _mark_advisory_done(db_session, now)
+
+    run_advisory_refresh_if_due(now=now + timedelta(hours=1), db=db_session)
+
+    assert calls == []
+
+
+def test_advisory_refresh_keeps_state_key_on_fetch_failure(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "advisory_refresh_enabled", True)
+
+    def boom(url, **kw):
+        raise OSError("network down")
+
+    monkeypatch.setattr("app.advisories.debian.fetch", boom)
+    now = datetime.now(timezone.utc)
+
+    run_advisory_refresh_if_due(now=now, db=db_session)
+
+    assert _advisory_due(db_session, now) is True  # still due -> next tick retries
+    assert db_session.execute(select(Advisory)).scalars().all() == []
+
+
+def test_advisory_refresh_disabled_is_a_noop(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "advisory_refresh_enabled", False)
+
+    def boom(url, **kw):
+        raise AssertionError("must not fetch when the feature is disabled")
+
+    monkeypatch.setattr("app.advisories.debian.fetch", boom)
+
+    run_advisory_refresh_if_due(now=datetime.now(timezone.utc), db=db_session)
