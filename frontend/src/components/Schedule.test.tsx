@@ -52,8 +52,18 @@ describe('Schedule', () => {
       weekday: 6,
       hour: 4,
       enabled: true,
+      timezone: 'UTC',
       params: {},
     })
+  })
+
+  it('shows the timezone as a fixed UTC label, with no editable field', async () => {
+    installFetchMock({ [LIST_URL]: { body: [] } })
+    renderWithProviders(<Schedule hostId="h1" />)
+    await screen.findByText('none')
+
+    expect(screen.getByText('UTC')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).toBeNull()
   })
 
   it('populates the form from an existing schedule and deletes it after confirmation', async () => {
