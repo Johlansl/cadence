@@ -114,6 +114,7 @@ jobs:
           CADENCE_DASHBOARD_AUTH=on
           CADENCE_DASHBOARD_USER=cadence
           CADENCE_DASHBOARD_PASSWORD_HASH=$$2a$$14$$9RzS8dzkDp0vCxfkusQZR.1l95oLIGKbReMUMdZwJ77Dz9SNKXqra
+          CADENCE_ADVISORY_REFRESH_ENABLED=false
           EOF
           mkdir -p dist   # caddy bind-mounts ./dist (gitignored, absent in CI)
       - run: docker compose up -d --build --wait --wait-timeout 240
