@@ -13,7 +13,7 @@ The central server runs as a `docker compose` stack:
 |---|---|---|
 | `db` | `postgres:16` | fleet state, reports, jobs, schedules |
 | `backend` | built from `backend/` | FastAPI HTTP API (agent ingest + dashboard reads + admin writes) |
-| `scheduler` | same image as `backend`, `python -m app.scheduler` | turns due `schedules` into `jobs`, reaps stuck jobs, runs the daily retention sweep, records a heartbeat |
+| `scheduler` | same image as `backend`, `python -m app.scheduler` | turns due `schedules` into `jobs`, reaps stuck jobs, runs the daily retention sweep, refreshes the Debian security-advisory feed, records a heartbeat |
 | `frontend` | built from `frontend/` (`nginx:1.27-alpine` serving a Vite build) | the dashboard; nginx also proxies `/api/` to `backend` |
 | `caddy` | `caddy:2-alpine` | the single public entrypoint, TLS terminated with an internal CA; also serves the plain-HTTP agent bootstrap assets |
 
@@ -71,7 +71,11 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
 - `jobs` — queued/running/finished actions (`apt_upgrade`, `reboot`), with a
   jsonb `params` and a captured `log`.
 - `schedules` — one maintenance window per host (`weekly` / `monthly`).
-- `scheduler_state` — small key/value store (last retention sweep, heartbeat).
+- `advisories` / `advisory_packages` — Debian DSA/DLA advisories (id, CVE ids,
+  URL) and the per-release source-package fixed versions the read API joins
+  pending security updates against. Refreshed by the scheduler.
+- `scheduler_state` — small key/value store (last retention sweep, last
+  advisory refresh, heartbeat).
 - `audit_log` — append-only trail of successful admin writes, one row per
   mutating `X-Admin-Key` call, written in the mutation's own transaction.
 

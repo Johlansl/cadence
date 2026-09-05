@@ -25,8 +25,17 @@ model.
   available"; it never compares version strings itself.
 - **Security vs. normal is a heuristic**: the substring `security` in a
   package's apt origin string (e.g. `Debian-Security:13/stable-security`).
-  Documented as a heuristic, not ground truth. There is no CVE/advisory linkage
-  yet.
+  Documented as a heuristic, not ground truth. This is what sets
+  `host_packages.is_security_update` and drives every fleet security count.
+- **Advisory linkage sits on top of that heuristic, it does not replace it.**
+  The scheduler pulls Debian's `DSA/list` + `DLA/list` every 6 h into the
+  `advisories` / `advisory_packages` tables, and `GET /hosts/{id}` /
+  `GET /packages` link each apt-flagged pending security update to the DSA/DLA
+  whose per-release `fixed_version` **equals** apt's candidate version (an
+  exact string match — Cadence still does no version comparison of its own).
+  It is deliberately *not* a full vulnerability scan: no unfixed / no-DSA CVEs,
+  no severity, and until agent `0.7.0` the binary→source-package mapping is
+  name-based with a small curated table for common libraries.
 - **The agent never reboots on its own** unless the host's `reboot_policy` is
   `auto` (or a job overrides it) *and* the kill-switch `CADENCE_ENABLE_REBOOT`
   is not `false`. It otherwise just reports `reboot_required`.
