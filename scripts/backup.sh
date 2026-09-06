@@ -8,15 +8,19 @@
 #   scripts/backup.sh
 #
 # Writes a timestamped directory under CADENCE_BACKUP_DIR containing:
-#   db.dump           pg_dump custom format (restore with pg_restore)
-#   caddy_data.tgz    the Caddy /data volume (internal CA + certs)
-#   env               a copy of .env (secrets: admin key, DB password) -- 0600
-#   MANIFEST          timestamp, git commit, alembic revision, sha256 sums
+#   db.dump            pg_dump custom format (restore with pg_restore)
+#   caddy_data.tgz     the Caddy /data volume (internal CA + certs)
+#   env                a copy of .env (secrets: admin key, DB password) -- 0600
+#   minisign.key.enc   the agent signing key, passphrase-protected (only if
+#                      scripts/backup-signing-key.sh has been run)
+#   MANIFEST           timestamp, git commit, alembic revision, sha256 sums
 #
 # Environment:
 #   CADENCE_BACKUP_DIR    base directory for backups (default: <repo>/backups)
 #   CADENCE_BACKUP_KEEP   how many timestamped dirs to keep (default: 14)
 #   CADENCE_ENV_FILE      .env to read POSTGRES_* from (default: <repo>/.env)
+#   CADENCE_MINISIGN_KEY  live signing key (default: ~/.cadence/minisign.key);
+#                         its .enc sibling is what gets backed up
 
 set -eu
 
@@ -72,6 +76,21 @@ docker run --rm -v "$caddy_vol":/v:ro -v "$out":/out postgres:16 \
 cp "$env_file" "$out/env"
 chmod 0600 "$out/env"
 
+# 3b. Agent signing key, already passphrase-protected by
+#     scripts/backup-signing-key.sh. The live key is passwordless and is never
+#     copied; only its .enc sibling. Warn (don't fail) if signing is configured
+#     but the encrypted copy is missing.
+manifest_files="db.dump caddy_data.tgz env"
+minisign_key=${CADENCE_MINISIGN_KEY:-$HOME/.cadence/minisign.key}
+if [ -f "$minisign_key.enc" ]; then
+	cp "$minisign_key.enc" "$out/minisign.key.enc"
+	chmod 0600 "$out/minisign.key.enc"
+	manifest_files="$manifest_files minisign.key.enc"
+elif [ -f "$repo/agent/minisign.pub" ]; then
+	echo "backup.sh: WARNING agent signing is configured but $minisign_key.enc" \
+		"is missing -- run scripts/backup-signing-key.sh" >&2
+fi
+
 # 4. Manifest.
 alembic_rev=$(docker compose exec -T backend alembic current 2>/dev/null \
 	| awk '/^[0-9]/ {print $1}' | tail -n 1)
@@ -81,7 +100,8 @@ alembic_rev=$(docker compose exec -T backend alembic current 2>/dev/null \
 	echo "alembic_rev  ${alembic_rev:-unknown}"
 	echo "caddy_volume $caddy_vol"
 	echo
-	( cd "$out" && sha256sum db.dump caddy_data.tgz env )
+	# shellcheck disable=SC2086
+	( cd "$out" && sha256sum $manifest_files )
 } >"$out/MANIFEST"
 
 # 5. Prune old backups, keep the newest $keep.
