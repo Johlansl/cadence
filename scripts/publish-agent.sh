@@ -50,8 +50,14 @@ install -m 0755 "$repo/agent/bin/cadence-agent" "$dist/agent/cadence-agent"
 
 version=$("$dist/agent/cadence-agent" -version 2>/dev/null || echo '?')
 
-# Sign the binary if a minisign key is available; otherwise clear any stale
-# signature and carry on unsigned.
+# Sign the binary with minisign. If agent/minisign.pub is committed, signing is
+# expected and a missing key is a hard error (don't silently ship unsigned).
+# With no agent/minisign.pub in the repo, publish unsigned (sha256 only).
+#
+# Forking this repo to run your own Cadence? The committed agent/minisign.pub is
+# the upstream key and you cannot have its private half. Replace it with your
+# own (minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key), or
+# delete it to publish unsigned.
 minisign_key=${CADENCE_MINISIGN_KEY:-$HOME/.cadence/minisign.key}
 if command -v minisign >/dev/null 2>&1 && [ -f "$minisign_key" ]; then
 	minisign -S -s "$minisign_key" \
@@ -63,9 +69,14 @@ if command -v minisign >/dev/null 2>&1 && [ -f "$minisign_key" ]; then
 		echo "publish-agent.sh: hand this public key to every host OUT OF BAND:"
 		sed 's/^/    /' "$repo/agent/minisign.pub"
 	fi
+elif [ -f "$repo/agent/minisign.pub" ]; then
+	echo "publish-agent.sh: agent/minisign.pub is committed but there is no" \
+		"signing key at $minisign_key (or minisign is not installed) --" \
+		"refusing to publish an unsigned release" >&2
+	exit 1
 else
 	rm -f "$dist/agent/cadence-agent.minisig"
-	echo "publish-agent.sh: NOT signed (no minisign or no key at $minisign_key)" \
+	echo "publish-agent.sh: NOT signed (no agent/minisign.pub in the repo)" \
 		"-- hosts will use the sha256 check only"
 fi
 

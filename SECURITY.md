@@ -99,10 +99,12 @@ acceptable on a trusted LAN — the documented target — and risky anywhere els
 For a hostile network, transfer the CA and binary out of band and verify a
 fingerprint you obtained separately.
 
-The binary alone can be made tamper-evident: sign it with minisign (see
-[README](README.md#signed-agent-releases-optional)) and pass the public key —
-distributed out of band — to the installer as `CADENCE_MINISIGN_PUB`. A bad or
-missing signature then aborts the install. The CA certificate is still TOFU.
+The binary is tamper-evident: `scripts/publish-agent.sh` minisign-signs every
+release (see [README](README.md#signed-agent-releases)). Pass the public key —
+`agent/minisign.pub`, distributed **out of band**, not over the install channel
+— to the installer as `CADENCE_MINISIGN_PUB`, and a bad or missing signature
+aborts the install. Without it the installer uses the SHA-256 check only (the
+LAN-target default). The CA certificate is still TOFU either way.
 
 ### TLS uses an internal CA
 
