@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import delete, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -14,10 +14,26 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_host, get_db
 from app.api.pagination import before_keyset
 from app.api.routes.jobs import claim_pending_job
+from app.core.config import settings
 from app.models.models import Host, HostPackage, Package, Report
 from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn, ReportSummary
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
+
+
+def _reject_oversized_report(request: Request) -> None:
+    """Reject a report whose Content-Length exceeds CADENCE_MAX_REPORT_BYTES,
+    before the body is read. A chunked request with no Content-Length slips
+    past this; the per-report package cap in ReportIn is the backstop."""
+    cap = settings.max_report_bytes
+    if cap <= 0:
+        return
+    raw = request.headers.get("content-length")
+    if raw and raw.isdigit() and int(raw) > cap:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"report body exceeds the {cap}-byte limit",
+        )
 
 
 def _resolve_package_ids(
@@ -38,7 +54,11 @@ def _resolve_package_ids(
     return {(p.name, p.architecture): p.id for p in rows if (p.name, p.architecture) in keys}
 
 
-@router.post("/reports", response_model=ReportAccepted)
+@router.post(
+    "/reports",
+    response_model=ReportAccepted,
+    dependencies=[Depends(_reject_oversized_report)],
+)
 def create_report(
     report_in: ReportIn,
     host: Host = Depends(get_current_host),

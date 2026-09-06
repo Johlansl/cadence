@@ -103,6 +103,16 @@ class Settings:
             "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS", 7200
         )
 
+        # POST /api/v1/reports payload caps. A report body is stored verbatim
+        # in reports.raw_payload every cycle, so an unbounded one is a cheap
+        # way for a leaked token to fill the disk. 0 = no limit.
+        self.max_report_bytes: int = _non_negative_int(
+            "CADENCE_MAX_REPORT_BYTES", 5 * 1024 * 1024
+        )
+        self.max_report_packages: int = _non_negative_int(
+            "CADENCE_MAX_REPORT_PACKAGES", 10_000
+        )
+
         # How long the container prestart waits for Postgres to accept
         # connections before giving up. 0 = try once. Read by app.prestart.
         self.db_wait_seconds: int = _non_negative_int("CADENCE_DB_WAIT_SECONDS", 60)
