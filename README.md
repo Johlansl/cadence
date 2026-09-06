@@ -177,17 +177,19 @@ catches a truncated download but not tampering. `scripts/publish-agent.sh`
 (`cadence-agent.minisig` beside the binary); with `agent/minisign.pub`
 committed it refuses to publish unsigned.
 
-For tamper-evidence at install time, pass the public key — **out of band**, not
-over the install channel — to the installer:
+For tamper-evidence at install time, install `minisign` on the host first
+(`apt-get install -y minisign` on Debian/Ubuntu) and pass the public key —
+**out of band**, not over the install channel — to the installer:
 
 ```sh
 curl -fsSL http://cadence.lan/install.sh \
   | sudo CADENCE_TOKEN=<token> CADENCE_MINISIGN_PUB="$(cat agent/minisign.pub)" sh
 ```
 
-A missing or invalid signature then aborts the install. Without
+A missing or invalid signature then aborts the install; if `minisign` is not
+installed the installer stops and tells you to install it. Without
 `CADENCE_MINISIGN_PUB` the installer uses the SHA-256 check only — the default,
-sufficient for the trusted-LAN target.
+no `minisign` needed, sufficient for the trusted-LAN target.
 
 **Running your own Cadence?** Replace `agent/minisign.pub` with your own key
 (`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`, keep the
