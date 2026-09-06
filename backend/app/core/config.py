@@ -134,5 +134,12 @@ class Settings:
             os.environ.get("CADENCE_ADVISORY_FEED_URLS", "").replace(",", " ").split()
         )
 
+        # The shared `packages` dimension is get-or-created on every report and
+        # never shrinks. A weekly scheduler sweep deletes rows no host_packages
+        # references (every read path inner-joins from host_packages, so an
+        # orphan is invisible anyway). Disable with
+        # CADENCE_PACKAGES_GC_ENABLED=false.
+        self.packages_gc_enabled: bool = _bool_env("CADENCE_PACKAGES_GC_ENABLED", True)
+
 
 settings = Settings()

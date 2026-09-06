@@ -40,18 +40,40 @@ def _resolve_package_ids(
     db: Session, keys: set[tuple[str, str]]
 ) -> dict[tuple[str, str], int]:
     """Get-or-create rows in the shared `packages` dimension, return a
-    (name, architecture) -> id map for the requested keys."""
+    (name, architecture) -> id map for the requested keys.
+
+    The weekly packages GC can delete a row between the insert-on-conflict and
+    the select-back; one retry for the missing keys closes that window, and a
+    still-missing key becomes a 503 (retry the report) rather than a 500.
+    """
     if not keys:
         return {}
 
-    db.execute(
-        pg_insert(Package)
-        .values([{"name": name, "architecture": arch} for name, arch in keys])
-        .on_conflict_do_nothing(index_elements=["name", "architecture"])
-    )
-    names = {name for name, _ in keys}
-    rows = db.execute(select(Package).where(Package.name.in_(names))).scalars().all()
-    return {(p.name, p.architecture): p.id for p in rows if (p.name, p.architecture) in keys}
+    def _insert_and_select(want: set[tuple[str, str]]) -> dict[tuple[str, str], int]:
+        db.execute(
+            pg_insert(Package)
+            .values([{"name": name, "architecture": arch} for name, arch in want])
+            .on_conflict_do_nothing(index_elements=["name", "architecture"])
+        )
+        names = {name for name, _ in want}
+        rows = db.execute(select(Package).where(Package.name.in_(names))).scalars().all()
+        return {
+            (p.name, p.architecture): p.id
+            for p in rows
+            if (p.name, p.architecture) in want
+        }
+
+    resolved = _insert_and_select(keys)
+    missing = keys - resolved.keys()
+    if missing:
+        resolved.update(_insert_and_select(missing))
+        missing = keys - resolved.keys()
+    if missing:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "package dimension contention, retry the report",
+        )
+    return resolved
 
 
 @router.post(
