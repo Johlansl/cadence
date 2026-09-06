@@ -16,7 +16,7 @@ import signal
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -29,7 +29,9 @@ from app.db.base import SessionLocal
 from app.models.models import (
     AgentToken,
     AuditLog,
+    HostPackage,
     Job,
+    Package,
     Report,
     Schedule,
     SchedulerState,
@@ -48,6 +50,8 @@ RETENTION_STATE_KEY = "last_retention_at"
 HEARTBEAT_STATE_KEY = "last_tick_at"
 ADVISORY_REFRESH_EVERY = timedelta(hours=6)
 ADVISORY_STATE_KEY = "last_advisory_refresh_at"
+PACKAGES_GC_EVERY = timedelta(days=7)
+PACKAGES_GC_STATE_KEY = "last_packages_gc_at"
 _stop = False
 
 
@@ -344,6 +348,70 @@ def run_advisory_refresh_if_due(
     log.info("advisory refresh done", extra=_f(**counts, feeds=len(urls)))
 
 
+def _packages_gc_due(db: Session, now: datetime) -> bool:
+    """True when the packages GC hasn't run within PACKAGES_GC_EVERY. Last-run
+    time lives in scheduler_state so a restart doesn't re-trigger it."""
+    last = db.execute(
+        select(SchedulerState.value).where(SchedulerState.key == PACKAGES_GC_STATE_KEY)
+    ).scalar_one_or_none()
+    if last is None:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return now - last_dt >= PACKAGES_GC_EVERY
+
+
+def _mark_packages_gc_done(db: Session, now: datetime) -> None:
+    db.execute(
+        pg_insert(SchedulerState)
+        .values(key=PACKAGES_GC_STATE_KEY, value=now.isoformat(), updated_at=now)
+        .on_conflict_do_update(
+            index_elements=["key"], set_={"value": now.isoformat(), "updated_at": now}
+        )
+    )
+    db.commit()
+
+
+def gc_orphan_packages(db: Session) -> int:
+    """Delete `packages` dimension rows that no `host_packages` references.
+    Every read path inner-joins `packages` from `host_packages`, so an orphan
+    row is already invisible; this just stops the table growing forever."""
+    deleted = db.execute(
+        delete(Package).where(
+            ~exists(
+                select(HostPackage.package_id).where(
+                    HostPackage.package_id == Package.id
+                )
+            )
+        )
+    ).rowcount
+    db.commit()
+    return deleted
+
+
+def run_packages_gc_if_due(
+    now: datetime | None = None, db: Session | None = None
+) -> None:
+    """Sweep orphaned `packages` rows at most once per PACKAGES_GC_EVERY. Pass
+    `db` to run inside an existing session (tests)."""
+    now = now or datetime.now(timezone.utc)
+    if not settings.packages_gc_enabled:
+        return
+    own_session = db is None
+    db = db or SessionLocal()
+    try:
+        if not _packages_gc_due(db, now):
+            return
+        deleted = gc_orphan_packages(db)
+        _mark_packages_gc_done(db, now)
+    finally:
+        if own_session:
+            db.close()
+    log.info("packages GC done", extra=_f(packages_deleted=deleted))
+
+
 def _mark_heartbeat(db: Session, now: datetime) -> None:
     db.execute(
         pg_insert(SchedulerState)
@@ -375,6 +443,7 @@ def main() -> None:
             tick()
             run_retention_if_due()
             run_advisory_refresh_if_due()
+            run_packages_gc_if_due()
             record_heartbeat()
         except Exception:  # noqa: BLE001 -- keep the loop alive
             log.exception("scheduler tick failed")
