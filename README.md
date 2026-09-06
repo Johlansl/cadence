@@ -337,9 +337,15 @@ down -v` first — destructive, back up immediately before.
 
 ### Upgrading the agent fleet
 
-After an agent release, on the server: `scripts/publish-agent.sh`. Then on each
-host, re-run the one-liner (it preserves the token) or the manual build, and
-`systemctl restart cadence-agent.service`. See `agent/CHANGELOG.md`.
+Tag the release first so the built binary reports the right version:
+`git tag -a agent-v0.7.0 -m 'agent 0.7.0'` on the commit matching the newest
+`agent/CHANGELOG.md` heading, and push the tag. `scripts/publish-agent.sh`
+stamps that tag into the binary (`git describe`, via `-ldflags`); an untagged
+build falls back to the `agentVersion` literal in `agent/cmd/agent/main.go`.
+
+Then, on the server: `scripts/publish-agent.sh`. On each host, re-run the
+one-liner (it preserves the token) or the manual build, and `systemctl restart
+cadence-agent.service`. See `agent/CHANGELOG.md`.
 
 ### Rotating a host's agent token
 

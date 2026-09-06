@@ -25,9 +25,11 @@ import (
 	"cadence/agent/internal/report"
 )
 
-// agentVersion is sent to the server and bumped by hand per release.
-// See agent/CHANGELOG.md.
-const agentVersion = "0.7.0"
+// agentVersion is the fallback version for dev / untagged builds. Release
+// builds override it with the git tag via
+// -ldflags "-X main.agentVersion=<version>" (see scripts/publish-agent.sh).
+// Keep this literal in step with the newest agent/CHANGELOG.md heading.
+var agentVersion = "0.7.0"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
