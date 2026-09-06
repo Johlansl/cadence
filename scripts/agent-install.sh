@@ -109,7 +109,8 @@ if [ -n "$pub" ]; then
 	fi
 	rm -f "$tmp_sig"
 else
-	echo "install.sh: sha256 OK (set CADENCE_MINISIGN_PUB to also check the signature)"
+	echo "install.sh: sha256 OK -- pass CADENCE_MINISIGN_PUB (the key from" \
+		"agent/minisign.pub, distributed out of band) to also verify the signature"
 fi
 
 install -m 0755 "$tmp_bin" /usr/local/bin/cadence-agent

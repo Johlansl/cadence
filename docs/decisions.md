@@ -114,6 +114,42 @@ hand-set string (`backend/app/__init__.py`).
 The two version lines do not need to match; the server's API stays backward
 compatible within a minor line.
 
+## Agent distribution / signing
+
+The agent binary, its SHA-256, the systemd units and the internal CA are staged
+into `dist/` by `scripts/publish-agent.sh` and served by Caddy over **plain
+HTTP** at `/install.sh` and `/agent/*`, so a host can fetch them before it
+trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
+
+- **Releases are minisign-signed.** `scripts/publish-agent.sh` signs the binary
+  when a private key is present, and — once `agent/minisign.pub` is committed —
+  *refuses to publish unsigned* rather than silently dropping the signature.
+  The signing key is passwordless, kept at `~/.cadence/minisign.key` (outside
+  the repo, gitignored). CI builds a SHA-256-only artifact on purpose: no
+  signing key is exposed to CI.
+- **The signature only helps out of band.** `agent/minisign.pub` is committed
+  for convenience, but the installer fetches everything over the same
+  unauthenticated HTTP channel, so verification adds tamper-resistance *only*
+  when the operator passes the key to the installer as `CADENCE_MINISIGN_PUB`
+  from a copy obtained separately (the repo, a password manager, …). This is
+  the documented path for anything past a trusted LAN; on the LAN target the
+  SHA-256 (a truncation guard) is what actually runs by default.
+- **The CA is still trust-on-first-use.** minisign covers the *binary* only;
+  the CA certificate is fetched and trusted over plain HTTP with no
+  fingerprint check. Unchanged, and out of scope here.
+- **Forking Cadence.** A third party who redeploys this repo inherits the
+  upstream `agent/minisign.pub` and cannot hold its private half, so their
+  `scripts/publish-agent.sh` fails the "unsigned release" guard by
+  construction. They must replace `agent/minisign.pub` with their own key
+  (`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`) or delete
+  it to publish unsigned. Called out in `publish-agent.sh` at the guard.
+- **Key rotation / backup is not tooled.** The signing key has no backup
+  procedure and no rotation flow. Acceptable while Cadence is a
+  single-operator deployment; if `CADENCE_MINISIGN_PUB` becomes something
+  external installs pin, losing the key breaks verification for everyone with
+  no replacement path. Known gap, to be addressed only if external adoption
+  becomes real.
+
 ## V1 scope
 
 Deliberately **out of the initial version** (the data model stays extensible
