@@ -72,4 +72,7 @@ docker run --rm -v "$PWD/frontend":/app -w /app node:22-alpine \
 # whole stack, from clean
 docker compose up -d --build         # first run must build; Alembic creates the schema on boot
 docker compose run --rm backend alembic current   # -> head
+
+# redeploy on the server (rebuild + migrate + restage the served agent binary)
+scripts/deploy.sh
 ```
