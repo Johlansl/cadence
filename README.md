@@ -216,7 +216,7 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_ADMIN_KEY` | — | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
 | `CADENCE_DASHBOARD_AUTH` | `on` | basic-auth gate at Caddy on the dashboard + read/admin API (agent endpoints exempt). `off` disables it |
 | `CADENCE_DASHBOARD_USER` | `cadence` | basic-auth username |
-| `CADENCE_DASHBOARD_PASSWORD_HASH` | — | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash) |
+| `CADENCE_DASHBOARD_PASSWORD_HASH` | — | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash, and logs a warning at boot if the bcrypt cost is below 12 — the generators use 14) |
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
 | `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |
