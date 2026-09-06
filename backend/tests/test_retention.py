@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.models import AuditLog, Job, Report
+from app.models.models import AgentToken, AuditLog, Job, Report
 from app.scheduler import (
     RETENTION_EVERY,
     _mark_retention_done,
@@ -38,6 +38,21 @@ def _job(db, host_id, *, status, completed_age_days=None, created_age_days=0):
     )
 
 
+def _token(db, host_id, *, token_hash, revoked_age_days=None, expires_age_days=None):
+    db.add(
+        AgentToken(
+            host_id=host_id,
+            token_hash=token_hash,
+            revoked_at=None
+            if revoked_age_days is None
+            else NOW - timedelta(days=revoked_age_days),
+            expires_at=None
+            if expires_age_days is None
+            else NOW - timedelta(days=expires_age_days),
+        )
+    )
+
+
 def test_sweep_deletes_old_reports_only(client, db_session):
     host_id, _ = create_host(client)
     _report(db_session, host_id, age_days=200)
@@ -45,10 +60,10 @@ def test_sweep_deletes_old_reports_only(client, db_session):
     _report(db_session, host_id, age_days=10)
     db_session.flush()
 
-    reports, jobs, audit = retention_sweep(
-        db_session, NOW, reports_days=90, jobs_days=90, audit_days=0
+    reports, jobs, audit, tokens = retention_sweep(
+        db_session, NOW, reports_days=90, jobs_days=90, audit_days=0, tokens_days=0
     )
-    assert (reports, jobs, audit) == (2, 0, 0)
+    assert (reports, jobs, audit, tokens) == (2, 0, 0, 0)
 
     left = db_session.execute(
         select(Report).where(Report.host_id == host_id)
@@ -65,8 +80,8 @@ def test_sweep_keeps_pending_and_recent_jobs(client, db_session):
     _job(db_session, host_id, status="running", created_age_days=300)
     db_session.flush()
 
-    _, jobs, _ = retention_sweep(
-        db_session, NOW, reports_days=0, jobs_days=90, audit_days=0
+    _, jobs, _, _ = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=90, audit_days=0, tokens_days=0
     )
     assert jobs == 2  # the two old terminal jobs
 
@@ -86,8 +101,8 @@ def test_sweep_disabled_with_zero(client, db_session):
     db_session.flush()
 
     assert retention_sweep(
-        db_session, NOW, reports_days=0, jobs_days=0, audit_days=0
-    ) == (0, 0, 0)
+        db_session, NOW, reports_days=0, jobs_days=0, audit_days=0, tokens_days=0
+    ) == (0, 0, 0, 0)
 
 
 def test_sweep_deletes_old_audit_rows_only(db_session):
@@ -95,13 +110,55 @@ def test_sweep_deletes_old_audit_rows_only(db_session):
     db_session.add(AuditLog(at=NOW - timedelta(days=200), action="host.delete"))
     db_session.flush()
 
-    reports, jobs, audit = retention_sweep(
-        db_session, NOW, reports_days=0, jobs_days=0, audit_days=365
+    reports, jobs, audit, tokens = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=0, audit_days=365, tokens_days=0
     )
-    assert (reports, jobs, audit) == (0, 0, 1)
+    assert (reports, jobs, audit, tokens) == (0, 0, 1, 0)
 
     left = db_session.execute(select(AuditLog.action)).scalars().all()
     assert left == ["host.delete"]
+
+
+def _token_hashes(db, host_id):
+    return {
+        t.token_hash
+        for t in db.execute(
+            select(AgentToken).where(AgentToken.host_id == host_id)
+        ).scalars()
+    }
+
+
+def test_sweep_deletes_stale_agent_tokens_only(client, db_session):
+    # create_host already issued one (active) token for this host.
+    host_id, _ = create_host(client)
+    _token(db_session, host_id, token_hash="rt-revoked-old", revoked_age_days=200)
+    _token(db_session, host_id, token_hash="rt-expired-old", expires_age_days=200)
+    _token(db_session, host_id, token_hash="rt-revoked-recent", revoked_age_days=5)
+    _token(db_session, host_id, token_hash="rt-active")  # no revoke, no expiry
+    db_session.flush()
+    before = _token_hashes(db_session, host_id)
+
+    reports, jobs, audit, tokens = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=0, audit_days=0, tokens_days=90
+    )
+    assert (reports, jobs, audit, tokens) == (0, 0, 0, 2)
+
+    after = _token_hashes(db_session, host_id)
+    assert {"rt-revoked-old", "rt-expired-old"}.isdisjoint(after)
+    assert {"rt-revoked-recent", "rt-active"} <= after
+    assert after == before - {"rt-revoked-old", "rt-expired-old"}
+
+
+def test_sweep_keeps_all_tokens_when_disabled(client, db_session):
+    host_id, _ = create_host(client)
+    _token(db_session, host_id, token_hash="rt-revoked-ancient", revoked_age_days=999)
+    db_session.flush()
+
+    _, _, _, tokens = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=0, audit_days=0, tokens_days=0
+    )
+    assert tokens == 0
+    assert "rt-revoked-ancient" in _token_hashes(db_session, host_id)
 
 
 def test_retention_due_is_persisted_across_restarts(client, db_session):
