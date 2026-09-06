@@ -191,6 +191,12 @@ installed the installer stops and tells you to install it. Without
 `CADENCE_MINISIGN_PUB` the installer uses the SHA-256 check only — the default,
 no `minisign` needed, sufficient for the trusted-LAN target.
 
+Back up the (passwordless) signing key with `scripts/backup-signing-key.sh` — it
+writes a passphrase-protected copy that `scripts/backup.sh` then includes in
+every backup; `scripts/restore-signing-key.sh` restores it. Key rotation is
+written up in
+[docs/decisions.md](docs/decisions.md#agent-distribution--signing).
+
 **Running your own Cadence?** Replace `agent/minisign.pub` with your own key
 (`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`, keep the
 secret key off the repo) or delete it to publish unsigned. See
@@ -311,13 +317,18 @@ until re-provisioned).
 
 ```sh
 scripts/backup.sh
-# -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, env, MANIFEST}
+# -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, env, minisign.key.enc, MANIFEST}
 ```
+
+`minisign.key.enc` (the agent signing key, passphrase-protected) is included
+only once `scripts/backup-signing-key.sh` has been run — see [Signed agent
+releases](#signed-agent-releases).
 
 `CADENCE_BACKUP_DIR` / `CADENCE_BACKUP_KEEP` (default 14) tune it. Run it
 nightly from cron. `scripts/restore-check.sh [dir]` restores the newest (or
-given) backup into throwaway containers, asserts it loads and the CA still
-validates, and tears them down without touching the live stack.
+given) backup into throwaway containers, asserts it loads, the CA still
+validates and the signing-key backup is encrypted, and tears them down without
+touching the live stack.
 
 To restore for real, from a checkout at the commit in `MANIFEST`:
 

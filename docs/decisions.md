@@ -143,12 +143,34 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
   construction. They must replace `agent/minisign.pub` with their own key
   (`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`) or delete
   it to publish unsigned. Called out in `publish-agent.sh` at the guard.
-- **Key rotation / backup is not tooled.** The signing key has no backup
-  procedure and no rotation flow. Acceptable while Cadence is a
-  single-operator deployment; if `CADENCE_MINISIGN_PUB` becomes something
-  external installs pin, losing the key breaks verification for everyone with
-  no replacement path. Known gap, to be addressed only if external adoption
-  becomes real.
+- **Key backup.** `scripts/backup-signing-key.sh` writes a passphrase-protected
+  copy of the key to `~/.cadence/minisign.key.enc` (`minisign -C`, scrypt) and
+  `scripts/backup.sh` folds that already-encrypted copy into every nightly
+  backup dir. The live key stays passwordless (`publish-agent.sh` needs it); a
+  plaintext copy is never written anywhere. The passphrase is typed into
+  `minisign`'s own prompt and kept by the operator (password manager) — never
+  on the box, in the repo, or in a command. It is a *stronger* bar than
+  `backups/<ts>/env` on purpose: `env`'s secrets only attack this one server,
+  the signing key forges releases for the whole fleet from anywhere.
+- **Key restore.** `scripts/restore-signing-key.sh` takes a backup (or a
+  `minisign.key.enc`), prompts for the passphrase, installs the passwordless
+  key, and refuses to install it unless a fresh signature verifies against the
+  committed `agent/minisign.pub`. `restore-check.sh` check 5 asserts the backup
+  is present and encrypted.
+- **Key rotation** (written down so it is not improvised; not yet executed):
+  1. `minisign -G -W -p /tmp/new.pub -s ~/.cadence/minisign.key.new`.
+  2. Replace `~/.cadence/minisign.key` with the new secret key; copy the new
+     public key over `agent/minisign.pub`.
+  3. Commit + push `agent/minisign.pub` to both remotes.
+  4. `scripts/backup-signing-key.sh --force` with a fresh passphrase.
+  5. `scripts/deploy.sh` — re-signs `dist/agent/` with the new key.
+  6. Re-roll every host with the new `CADENCE_MINISIGN_PUB`.
+  There is no transition window to manage: a host keeps running its installed
+  agent until step 6 re-rolls it, and is never "stuck" because the operator
+  re-runs the installer on each. A zero-touch multi-key rotation (installer
+  accepting several keys) is only needed if hosts self-update without the
+  operator — they do not — so it stays with the deferred release-automation
+  work.
 
 ## V1 scope
 
