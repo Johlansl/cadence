@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.config import settings
+
 # What the agent does after an upgrade that leaves a reboot pending.
 #   auto   -- reboot immediately
 #   never  -- leave it, operator handles reboots out of band
@@ -145,6 +147,14 @@ class ReportIn(BaseModel):
     package_manager: str | None = "apt"
     reboot_required: bool = False
     packages: list[ReportPackage] = Field(default_factory=list)
+
+    @field_validator("packages")
+    @classmethod
+    def _cap_packages(cls, v: list[ReportPackage]) -> list[ReportPackage]:
+        cap = settings.max_report_packages
+        if cap and len(v) > cap:
+            raise ValueError(f"at most {cap} packages per report")
+        return v
 
 
 class JobHandoff(BaseModel):

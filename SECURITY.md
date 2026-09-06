@@ -120,10 +120,15 @@ Required for `apt-get` / `dpkg`. The `systemd` units apply light sandboxing;
 they do not (and mostly cannot, given apt writes to `/usr`, `/boot`, `/etc`)
 use the stricter `ProtectSystem` / capability-bounding directives.
 
-### `POST /api/v1/reports` has no payload size limit
+### `POST /api/v1/reports` payload limits
 
-An authenticated agent (or a leaked token) can push an arbitrarily large report
-body, stored verbatim in `reports.raw_payload` on every cycle.
+The report body is stored verbatim in `reports.raw_payload` on every cycle, so
+it is capped: a `Content-Length` over `CADENCE_MAX_REPORT_BYTES` (default 5 MiB)
+is rejected with 413 before the body is read, and more than
+`CADENCE_MAX_REPORT_PACKAGES` (default 10000) entries is a 422. Set either to
+`0` to disable that check. A chunked request with no `Content-Length` slips past
+the byte check but still hits the package cap; a reverse proxy (Caddy) can
+enforce an absolute request-body ceiling.
 
 ### Advisory / CVE linkage is best-effort, not a vulnerability scan
 

@@ -1,5 +1,6 @@
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.models.models import Host, HostPackage, Job, Report
 from tests.conftest import (
     ADMIN_HEADERS,
@@ -189,6 +190,36 @@ def test_report_keeps_os_codename_when_omitted(client, db_session):
     assert r.status_code == 200, r.text
 
     assert db_session.get(Host, host_id).os_codename == "bookworm"
+
+
+def test_report_rejects_oversized_body(client, monkeypatch):
+    _, token = create_host(client)
+    monkeypatch.setattr(settings, "max_report_bytes", 100)
+    r = client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(packages=[pkg("bash"), pkg("coreutils")]),
+    )
+    assert r.status_code == 413, r.text
+
+
+def test_report_rejects_too_many_packages(client, monkeypatch):
+    _, token = create_host(client)
+    monkeypatch.setattr(settings, "max_report_packages", 3)
+    r = client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(packages=[pkg(f"p{i}") for i in range(4)]),
+    )
+    assert r.status_code == 422, r.text
+
+    # At the cap is fine.
+    r = client.post(
+        "/api/v1/reports",
+        headers=bearer(token),
+        json=report_payload(packages=[pkg(f"p{i}") for i in range(3)]),
+    )
+    assert r.status_code == 200, r.text
 
 
 def test_report_piggybacks_pending_job(client, db_session):
