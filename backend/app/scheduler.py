@@ -16,7 +16,7 @@ import signal
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -26,7 +26,14 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
 from app.db.base import SessionLocal
-from app.models.models import AuditLog, Job, Report, Schedule, SchedulerState
+from app.models.models import (
+    AgentToken,
+    AuditLog,
+    Job,
+    Report,
+    Schedule,
+    SchedulerState,
+)
 
 log = logging.getLogger("cadence.scheduler")
 
@@ -165,14 +172,22 @@ def reap_stuck_jobs(
 
 
 def retention_sweep(
-    db: Session, now: datetime, *, reports_days: int, jobs_days: int, audit_days: int
-) -> tuple[int, int, int]:
+    db: Session,
+    now: datetime,
+    *,
+    reports_days: int,
+    jobs_days: int,
+    audit_days: int,
+    tokens_days: int,
+) -> tuple[int, int, int, int]:
     """Delete old append-only rows. 0 days = keep forever. Terminal jobs only
-    (pending/running are never removed here). Returns (reports, jobs, audit)
-    deleted."""
+    (pending/running are never removed here); agent tokens only once they have
+    been revoked or expired for `tokens_days`. Returns
+    (reports, jobs, audit, tokens) deleted."""
     reports_deleted = 0
     jobs_deleted = 0
     audit_deleted = 0
+    tokens_deleted = 0
     if reports_days > 0:
         cutoff = now - timedelta(days=reports_days)
         reports_deleted = db.execute(
@@ -192,8 +207,18 @@ def retention_sweep(
         audit_deleted = db.execute(
             delete(AuditLog).where(AuditLog.at < cutoff)
         ).rowcount
+    if tokens_days > 0:
+        cutoff = now - timedelta(days=tokens_days)
+        tokens_deleted = db.execute(
+            delete(AgentToken).where(
+                or_(
+                    (AgentToken.revoked_at.is_not(None)) & (AgentToken.revoked_at < cutoff),
+                    (AgentToken.expires_at.is_not(None)) & (AgentToken.expires_at < cutoff),
+                )
+            )
+        ).rowcount
     db.commit()
-    return reports_deleted, jobs_deleted, audit_deleted
+    return reports_deleted, jobs_deleted, audit_deleted, tokens_deleted
 
 
 def _retention_due(db: Session, now: datetime) -> bool:
@@ -228,17 +253,19 @@ def run_retention_if_due(now: datetime | None = None) -> None:
         settings.reports_retention_days == 0
         and settings.jobs_retention_days == 0
         and settings.audit_retention_days == 0
+        and settings.token_retention_days == 0
     ):
         return
     with SessionLocal() as db:
         if not _retention_due(db, now):
             return
-        reports, jobs, audit = retention_sweep(
+        reports, jobs, audit, tokens = retention_sweep(
             db,
             now,
             reports_days=settings.reports_retention_days,
             jobs_days=settings.jobs_retention_days,
             audit_days=settings.audit_retention_days,
+            tokens_days=settings.token_retention_days,
         )
         _mark_retention_done(db, now)
     log.info(
@@ -247,9 +274,11 @@ def run_retention_if_due(now: datetime | None = None) -> None:
             reports_deleted=reports,
             jobs_deleted=jobs,
             audit_deleted=audit,
+            tokens_deleted=tokens,
             keep_reports_days=settings.reports_retention_days,
             keep_jobs_days=settings.jobs_retention_days,
             keep_audit_days=settings.audit_retention_days,
+            keep_tokens_days=settings.token_retention_days,
         ),
     )
 

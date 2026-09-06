@@ -95,6 +95,12 @@ class Settings:
         self.audit_retention_days: int = _non_negative_int(
             "CADENCE_AUDIT_RETENTION_DAYS", 365
         )
+        # Revoked/expired agent tokens are dead weight once no one needs the
+        # "when was this last used" history. Days since revocation/expiry
+        # before a token row is deleted. 0 = keep forever.
+        self.token_retention_days: int = _non_negative_int(
+            "CADENCE_TOKEN_RETENTION_DAYS", 90
+        )
 
         # A job left 'running' longer than this is failed by the scheduler's
         # reaper -- a dead agent would otherwise block every future job for
