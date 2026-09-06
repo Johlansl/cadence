@@ -4,6 +4,18 @@ Why Cadence is built the way it is. See [architecture.md](architecture.md) for
 the shape of the system and [../SECURITY.md](../SECURITY.md) for the threat
 model.
 
+## Open-source posture
+
+Cadence is an **actively open-source project now**, not a codebase that might be
+opened later. It is meant for third parties to deploy on their own
+infrastructure, and that audience is assumed *today* — so technical decisions
+(security model, agent distribution, packaging, CI, release artefacts) are made
+for an unknown external deployer, not only for this one installation.
+Concretely: the trust model must survive an untrusted network, the agent must be
+installable without a checkout of this repo, and release engineering (signed
+multi-arch binaries, container images, `.deb` / `.rpm`) is real near-term work
+rather than something to defer until someone asks.
+
 ## Communication
 
 - **Outbound-only, no daemon.** The agent is a one-shot binary run by `systemd`
@@ -111,6 +123,14 @@ that tag (`## 0.7.0` ↔ `agent-v0.7.0`). The `agentVersion` literal in
 tag is the source of truth for anything published. The server version stays a
 hand-set string (`backend/app/__init__.py`).
 
+A published `agent-v*` tag is **never moved.** Between agent releases,
+`git describe` reports `0.7.0-<n>-g<sha>` for a build made `n` commits past the
+tag — that is accurate (the published binary is not at the tagged commit) and
+the tag anchors the versioning *mechanism*, not the dashboard string. If the
+long form is unwanted for a real re-roll, cut a fresh `agent-v0.7.x` tag (a new
+anchor, even with no code change) rather than rewriting a tag that is already on
+both remotes.
+
 The two version lines do not need to match; the server's API stays backward
 compatible within a minor line.
 
@@ -171,6 +191,16 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
   accepting several keys) is only needed if hosts self-update without the
   operator — they do not — so it stays with the deferred release-automation
   work.
+
+## Monitoring the control plane
+
+The host that runs the Cadence stack is **monitored like any other host but
+never auto-patched by Cadence.** Give it (and the hypervisor it runs on) a
+`reboot_policy` of `never`, point no schedule at it, and apply its own updates
+out of band. Rationale: the box running the control plane must not restart
+itself mid-job, or apply an upgrade on Cadence's own say-so and take the
+scheduler / API down with it. Cadence still reports its pending updates so they
+are visible — the operator acts on them manually.
 
 ## V1 scope
 
