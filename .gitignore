@@ -6,6 +6,8 @@
 # minisign signing key -- never commit (agent/minisign.pub is fine to commit)
 minisign.key
 *.minisign.key
+# passphrase-protected signing-key backup (scripts/backup-signing-key.sh)
+*.key.enc
 
 # python
 __pycache__/
