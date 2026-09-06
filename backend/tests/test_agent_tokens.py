@@ -44,18 +44,41 @@ def test_create_host_makes_one_active_token(client, db_session):
     assert r.status_code == 200
 
 
+def _last_used(db, host_id):
+    db.expire_all()
+    return db.execute(
+        select(AgentToken.last_used_at).where(AgentToken.host_id == host_id)
+    ).scalar_one()
+
+
 def test_auth_updates_last_used_at(client, db_session):
     host_id, token = create_host(client)
-    assert db_session.execute(
-        select(AgentToken.last_used_at).where(AgentToken.host_id == host_id)
-    ).scalar_one() is None
+    assert _last_used(db_session, host_id) is None
 
     client.post("/api/v1/agent/next-job", headers=bearer(token))
 
-    db_session.expire_all()
-    assert db_session.execute(
-        select(AgentToken.last_used_at).where(AgentToken.host_id == host_id)
-    ).scalar_one() is not None
+    assert _last_used(db_session, host_id) is not None
+
+
+def test_last_used_at_is_not_rewritten_every_request(client, db_session):
+    host_id, token = create_host(client)
+    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    first = _last_used(db_session, host_id)
+    assert first is not None
+
+    # A second call within the resolution window must not touch the row.
+    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    assert _last_used(db_session, host_id) == first
+
+
+def test_last_used_at_advances_once_the_interval_passes(client, db_session, monkeypatch):
+    monkeypatch.setattr("app.api.deps._LAST_USED_MIN_INTERVAL", timedelta(0))
+    host_id, token = create_host(client)
+    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    first = _last_used(db_session, host_id)
+
+    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    assert _last_used(db_session, host_id) > first
 
 
 def test_revoked_token_is_rejected(client, db_session):
