@@ -288,9 +288,13 @@ Alembic owns the schema and runs on container start — **a normal deploy has
 nothing to run**:
 
 ```sh
-git pull && docker compose up -d --build
-docker compose run --rm backend alembic current    # sanity
+git pull && scripts/deploy.sh
 ```
+
+`scripts/deploy.sh` rebuilds and restarts the stack (`docker compose up -d
+--build --wait`), prints the migration head, and re-stages the agent bootstrap
+assets so the served binary matches the checkout. `docker compose up -d --build`
+on its own still works for a stack-only change but skips the agent restage.
 
 A fresh database is built from revision `0001`. `backend/app/db/init.sql` is
 kept only as a reference copy of that baseline. If you are adopting a database
@@ -343,9 +347,10 @@ Tag the release first so the built binary reports the right version:
 stamps that tag into the binary (`git describe`, via `-ldflags`); an untagged
 build falls back to the `agentVersion` literal in `agent/cmd/agent/main.go`.
 
-Then, on the server: `scripts/publish-agent.sh`. On each host, re-run the
-one-liner (it preserves the token) or the manual build, and `systemctl restart
-cadence-agent.service`. See `agent/CHANGELOG.md`.
+Then redeploy the server with `scripts/deploy.sh` (or run
+`scripts/publish-agent.sh` alone if the stack is otherwise untouched). On each
+host, re-run the one-liner (it preserves the token) or the manual build, and
+`systemctl restart cadence-agent.service`. See `agent/CHANGELOG.md`.
 
 ### Rotating a host's agent token
 
