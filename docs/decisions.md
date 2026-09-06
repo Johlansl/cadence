@@ -96,14 +96,23 @@ Two version lines on purpose:
   one unit under a single version (`backend/app/__init__.py` `__version__`,
   `frontend/package.json`; `0.1.0` at first public release). They are always
   deployed together, so one number is enough.
-- **The agent** carries its own (`agent/cmd/agent/main.go` `agentVersion`,
-  `agent/CHANGELOG.md`; `0.6.x`). It is distributed and upgraded separately,
-  runs against a range of server versions, and had a release history before the
-  repo went public — forcing it back to `0.1.0` would erase that. It reports
-  its version on every report so the dashboard shows what each host runs.
+- **The agent** carries its own (`agent/CHANGELOG.md`; `0.6.x`, `0.7.x`). It is
+  distributed and upgraded separately, runs against a range of server versions,
+  and had a release history before the repo went public — forcing it back to
+  `0.1.0` would erase that. It reports its version on every report so the
+  dashboard shows what each host runs.
 
-The two do not need to match; the server's API stays backward compatible within
-a minor line.
+A release build stamps the agent version from the newest `agent-v*` git tag
+reachable from `HEAD` (`git describe`, `agent-v` prefix stripped), injected at
+link time by `scripts/publish-agent.sh` via
+`-ldflags "-X main.agentVersion=<version>"`. `agent/CHANGELOG.md` headings track
+that tag (`## 0.7.0` ↔ `agent-v0.7.0`). The `agentVersion` literal in
+`agent/cmd/agent/main.go` is only the fallback for dev / untagged builds; the
+tag is the source of truth for anything published. The server version stays a
+hand-set string (`backend/app/__init__.py`).
+
+The two version lines do not need to match; the server's API stays backward
+compatible within a minor line.
 
 ## V1 scope
 

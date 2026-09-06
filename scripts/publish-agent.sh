@@ -30,9 +30,20 @@ cd "$repo"
 dist="$repo/dist"
 mkdir -p "$dist/agent/systemd"
 
-echo "publish-agent.sh: building the agent (linux/amd64, static)"
-docker run --rm -v "$repo/agent":/s -w /s golang:1.23 sh -c \
-	'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/cadence-agent ./cmd/agent'
+# Version = the newest `agent-v*` tag reachable from HEAD (git describe), with
+# the `agent-v` prefix stripped; empty when there is no such tag. Computed on
+# the host -- the build container only mounts agent/, not .git.
+agent_version=$(git -C "$repo" describe --tags --match 'agent-v*' --dirty 2>/dev/null \
+	| sed 's/^agent-v//' || true)
+
+echo "publish-agent.sh: building the agent (linux/amd64, static)${agent_version:+, version $agent_version}"
+docker run --rm -e "AGENT_VERSION=$agent_version" -v "$repo/agent":/s -w /s golang:1.23 sh -c '
+	set -e
+	ldflags=""
+	[ -n "$AGENT_VERSION" ] && ldflags="-X main.agentVersion=$AGENT_VERSION"
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+		${ldflags:+-ldflags "$ldflags"} -o bin/cadence-agent ./cmd/agent
+'
 
 install -m 0755 "$repo/agent/bin/cadence-agent" "$dist/agent/cadence-agent"
 ( cd "$dist/agent" && sha256sum cadence-agent >cadence-agent.sha256 )
