@@ -17,6 +17,8 @@
 #      same hostnames as the live database
 #   4. the restored Caddy CA + issued cert form a valid chain, and a Caddy
 #      started on the restored volume serves TLS that verifies against it
+#   5. minisign.key.enc, if present, is a password-protected key (a plaintext
+#      signing key in the backup is a finding, not a pass)
 
 set -eu
 
@@ -91,8 +93,8 @@ echo
 # shellcheck disable=SC2015
 docker exec -i "$db" pg_restore -U "$pg_user" -d "$pg_db" --clean --if-exists \
 	<"$src/db.dump" >/tmp/rt_pg_restore.log 2>&1 \
-	&& echo "  [ok] 1/4  pg_restore loaded the dump" \
-	|| { echo "  [FAIL] 1/4  pg_restore errored:"; cat /tmp/rt_pg_restore.log; fail=1; }
+	&& echo "  [ok] 1/5  pg_restore loaded the dump" \
+	|| { echo "  [FAIL] 1/5  pg_restore errored:"; cat /tmp/rt_pg_restore.log; fail=1; }
 
 url="postgresql+psycopg2://$pg_user:$pg_pass@$db:5432/$pg_db"
 
@@ -101,9 +103,9 @@ have_rev=$(docker run --rm --network "$net" \
 	-e CADENCE_DATABASE_URL="$url" -e CADENCE_ADMIN_KEY=restore-check \
 	cadence-backend alembic current 2>/dev/null | awk '/^[0-9]/ {print $1}' | tail -n 1)
 if [ -n "$want_rev" ] && [ "$have_rev" = "$want_rev" ]; then
-	echo "  [ok] 2/4  alembic current = $have_rev (matches MANIFEST)"
+	echo "  [ok] 2/5  alembic current = $have_rev (matches MANIFEST)"
 else
-	echo "  [FAIL] 2/4  alembic current = '${have_rev:-<none>}', expected '$want_rev'"; fail=1
+	echo "  [FAIL] 2/5  alembic current = '${have_rev:-<none>}', expected '$want_rev'"; fail=1
 fi
 
 # --- check 3: GET /hosts matches the live DB --------------------------
@@ -119,9 +121,9 @@ restored_hosts=$(curl -s http://127.0.0.1:18000/api/v1/hosts \
 live_hosts=$(docker compose exec -T db psql -U "$pg_user" -d "$pg_db" -At \
 	-c 'SELECT hostname FROM hosts ORDER BY hostname' 2>/dev/null | sort)
 if [ -n "$restored_hosts" ] && [ "$restored_hosts" = "$live_hosts" ]; then
-	echo "  [ok] 3/4  GET /hosts matches live ($(echo "$restored_hosts" | wc -l | tr -d ' ') host(s))"
+	echo "  [ok] 3/5  GET /hosts matches live ($(echo "$restored_hosts" | wc -l | tr -d ' ') host(s))"
 else
-	echo "  [FAIL] 3/4  restored hosts differ from live"
+	echo "  [FAIL] 3/5  restored hosts differ from live"
 	echo "    restored: $(echo "$restored_hosts" | tr '\n' ' ')"
 	echo "    live:     $(echo "$live_hosts" | tr '\n' ' ')"; fail=1
 fi
@@ -145,10 +147,26 @@ verify_res=$(curl -s -o /dev/null \
 	--cacert /tmp/rt_root.crt --resolve cadence.lan:18443:127.0.0.1 \
 	-w '%{ssl_verify_result}' "https://cadence.lan:18443/" 2>/dev/null || true)
 if [ "$chain_ok" = 1 ] && [ "$verify_res" = "0" ]; then
-	echo "  [ok] 4/4  restored CA verifies its cert; Caddy TLS trusts the restored root"
+	echo "  [ok] 4/5  restored CA verifies its cert; Caddy TLS trusts the restored root"
 else
-	echo "  [FAIL] 4/4  chain_ok=$chain_ok ssl_verify_result='$verify_res'"
+	echo "  [FAIL] 4/5  chain_ok=$chain_ok ssl_verify_result='$verify_res'"
 	cat /tmp/rt_openssl.log; fail=1
+fi
+
+# --- check 5: signing-key backup present and encrypted --------------
+if [ ! -f "$src/minisign.key.enc" ]; then
+	echo "  [skip] 5/5  no minisign.key.enc in this backup"
+elif ! command -v minisign >/dev/null 2>&1; then
+	echo "  [skip] 5/5  minisign not installed, cannot check the signing-key backup"
+else
+	cp "$src/minisign.key.enc" /tmp/rt_key.enc
+	# Removing the password with an empty one succeeds only on a plaintext key.
+	if printf '\n' | minisign -C -W -s /tmp/rt_key.enc 2>&1 | grep -q 'Password removed'; then
+		echo "  [FAIL] 5/5  minisign.key.enc is NOT encrypted (plaintext signing key in backup)"; fail=1
+	else
+		echo "  [ok] 5/5  minisign.key.enc is present and password-protected"
+	fi
+	rm -f /tmp/rt_key.enc
 fi
 
 echo
