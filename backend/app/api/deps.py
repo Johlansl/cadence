@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterator, NoReturn
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -16,6 +16,11 @@ from app.core.config import settings
 from app.core.throttle import client_ip, throttle
 from app.db.base import SessionLocal
 from app.models.models import AgentToken, Host
+
+# How stale `agent_tokens.last_used_at` is allowed to get before a successful
+# auth rewrites it. Every agent request would otherwise UPDATE the row (~1/min
+# per host) purely to advance a timestamp only the admin token list reads.
+_LAST_USED_MIN_INTERVAL = timedelta(minutes=5)
 
 
 def get_db() -> Iterator[Session]:
@@ -86,5 +91,8 @@ async def get_current_host(
         await _reject_401(ip, "bearer", "invalid token")
 
     throttle.record_success(ip)  # clear any backoff earned by earlier failures
-    tok.last_used_at = now  # opportunistic; rides the request's own commit
+    # Opportunistic, rides the request's own commit -- but only when it has
+    # drifted past the resolution we care about, to keep this off the hot path.
+    if tok.last_used_at is None or now - tok.last_used_at >= _LAST_USED_MIN_INTERVAL:
+        tok.last_used_at = now
     return host
