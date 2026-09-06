@@ -41,7 +41,18 @@ shows status and triggers upgrades or reboots per host. It runs as a
   and confirmed with the maintainer before running.** Never force-push except
   a maintainer-approved, documented one-off. The GitLab push is done via a
   stored PAT (redact it in any shown output); the GitHub mirror push and tags
-  use the SSH key.
+  use the SSH key. A published `agent-v*` tag is never moved.
+- **`vm-cadence` and its Proxmox host are monitor-only — never auto-patched by
+  Cadence.** `reboot_policy` stays `never`, no schedule targets them, their
+  upgrades are operator-run out of band. See
+  [docs/decisions.md](docs/decisions.md#monitoring-the-control-plane).
+- **Open-source posture (2026-09-06):** build for an unknown external deployer,
+  now — see [docs/decisions.md](docs/decisions.md#open-source-posture). Two
+  earlier policies sit *under* that framing and are **candidates to re-examine
+  when the maintainer chooses** (do not change them unprompted): (1) zero
+  AI-assistance trace in the public mirror; (2) the private GitLab repo as the
+  one source of truth, one-way replay to GitHub per MAINTAINING.md. Both remain
+  in force.
 
 ## Layout
 
@@ -49,7 +60,7 @@ shows status and triggers upgrades or reboots per host. It runs as a
 agent/      Go agent: cmd/agent, internal/{config,collector,client,report,executor,rebootcheck,reboot,apterr,logging}, systemd/
 backend/    FastAPI app (app/), Alembic migrations (alembic/), tests (tests/)
 frontend/   React + Vite + Tailwind (src/)
-scripts/    backup / restore-check / provision-host / publish-agent / gen-secrets / agent-install
+scripts/    deploy / backup(+signing-key) / restore-check(+restore-signing-key) / provision-host / publish-agent / gen-secrets / rotate-dashboard-password / agent-install
 docs/       architecture, decisions
 docker-compose.yml   Caddyfile
 ```
