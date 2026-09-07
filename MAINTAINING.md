@@ -198,6 +198,37 @@ Poll GitHub Actions:
 curl -s "https://api.github.com/repos/Johlansl/cadence/actions/runs?per_page=3"
 ```
 
+## Cutting a release
+
+`.github/workflows/release.yml` runs on **GitHub** when a tag is pushed there.
+So a release tag comes *after* the normal mirror sync, and is created on
+`~/cadence-public` (like `v0.1.0` was), not on GitLab:
+
+```sh
+# after `main` is synced and both CIs are green:
+git -C ~/cadence-public tag -a <tag> -m '<message>'
+git -C ~/cadence-public push origin <tag>
+# watch the run:
+curl -s "https://api.github.com/repos/Johlansl/cadence/actions/runs?event=push&per_page=3"
+```
+
+- **`agent-v<x.y.z>`** — builds the agent (amd64+arm64) + Release. Prereq: an
+  `## <x.y.z>` heading already exists in `agent/CHANGELOG.md` (the workflow
+  fails if the notes section is missing). This is also the tag
+  `scripts/publish-agent.sh` reads via `git describe`, so mirror it back to
+  GitLab too (`git push …gitlab… <tag>`) to keep the private tree's
+  `git describe` honest.
+- **`v<x.y.z>`** — builds+pushes the GHCR images + Release. Prereq, in a normal
+  commit merged and synced first: bump `backend/app/__init__.py` `__version__`
+  and `frontend/package.json` `version` to `<x.y.z>`, and rename `CHANGELOG.md`
+  `## Unreleased` → `## <x.y.z>`. The workflow asserts the tag matches those two
+  files. Server tags stay public-only.
+- The two are independent — never a combined tag. Push whichever the change
+  warrants; push both (two runs) to cut both at once.
+- First-ever `v*` run: after it succeeds, flip the new
+  `ghcr.io/johlansl/cadence-{backend,frontend}` packages from private to public
+  once (GitHub → your packages → Package settings → Change visibility).
+
 ## Release tarballs (separate concern)
 
 `git archive` honours the `export-ignore` attributes in `.gitattributes`
