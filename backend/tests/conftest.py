@@ -17,6 +17,7 @@ import os
 import pathlib
 
 import pytest
+from cryptography.fernet import Fernet
 
 # --- configuration, applied before the app package is imported ---------------
 
@@ -25,6 +26,9 @@ os.environ["CADENCE_ADMIN_KEY"] = ADMIN_KEY
 # The auth-failure throttle sleeps a worker thread; disable it so the negative
 # auth tests stay fast. Covered directly in test_auth_throttle.py.
 os.environ["CADENCE_DISABLE_AUTH_THROTTLE"] = "1"
+# Fresh per test run; nothing needs it to persist across runs -- every test
+# token is issued and used within the one run that generated it.
+os.environ["CADENCE_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 
 
 def _test_database_url() -> str:

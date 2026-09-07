@@ -96,6 +96,7 @@ stack:
       POSTGRES_PASSWORD=cadence-ci
       POSTGRES_DB=cadence
       CADENCE_ADMIN_KEY=ci-admin-key-0123456789abcdef
+      CADENCE_TOKEN_ENCRYPTION_KEY=9-_VPVQlom8pTYO4akOJgl62acDbmu83HjzWCZTsAmU=
       CADENCE_SITE_ADDRESS=cadence.ci.local
       CADENCE_DASHBOARD_AUTH=on
       CADENCE_DASHBOARD_USER=cadence

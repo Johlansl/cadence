@@ -6,6 +6,8 @@ import ipaddress
 import os
 from urllib.parse import quote
 
+from cryptography.fernet import Fernet
+
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
@@ -47,6 +49,24 @@ def _bool_env(var: str, default: bool) -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _positive_int(var: str, default: int) -> int:
+    """A strictly positive integer env var -- unlike _non_negative_int, 0 has
+    no "disabled" meaning here and is rejected. Used for settings where 0
+    would silently defeat the point of the setting (a default expiry of "0
+    days" is not a safer default, it is the no-expiry gap this exists to
+    close)."""
+    raw = os.environ.get(var, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{var} must be an integer, got {raw!r}") from exc
+    if value <= 0:
+        raise RuntimeError(f"{var} must be > 0")
+    return value
+
+
 def _non_negative_int(var: str, default: int) -> int:
     """A non-negative integer env var. 0 has a per-setting meaning (keep
     forever / feature disabled). Read by the scheduler."""
@@ -78,6 +98,52 @@ class Settings:
         # can be rotated without a flag day: set the new key, move the old one
         # here, update clients, then drop it.
         self.admin_key_previous: str = os.environ.get("CADENCE_ADMIN_KEY_PREVIOUS", "")
+
+        # Fernet key encrypting agent_tokens.secret_encrypted at rest, so a
+        # signed request can be verified (needs the real secret, not a
+        # one-way hash). Same class of secret as CADENCE_ADMIN_KEY -- a
+        # plaintext credential in .env -- and rotated the same way: put the
+        # new key here, move the old one to _PREVIOUS, update nothing else,
+        # drop _PREVIOUS once every row using it has been re-encrypted.
+        # Generate with:
+        #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+        self.token_encryption_key: str = os.environ.get("CADENCE_TOKEN_ENCRYPTION_KEY", "")
+        if not self.token_encryption_key:
+            raise RuntimeError("CADENCE_TOKEN_ENCRYPTION_KEY is required")
+        try:
+            Fernet(self.token_encryption_key.encode())
+        except Exception as exc:
+            raise RuntimeError(
+                "CADENCE_TOKEN_ENCRYPTION_KEY is not a valid Fernet key (generate one with "
+                '`python3 -c "from cryptography.fernet import Fernet; '
+                'print(Fernet.generate_key().decode())"`)'
+            ) from exc
+        self.token_encryption_key_previous: str = os.environ.get(
+            "CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS", ""
+        )
+        if self.token_encryption_key_previous:
+            try:
+                Fernet(self.token_encryption_key_previous.encode())
+            except Exception as exc:
+                raise RuntimeError(
+                    "CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS is not a valid Fernet key"
+                ) from exc
+
+        # New tokens expire this many days after issue unless the caller
+        # passes an explicit expires_at. 0 is rejected (see _positive_int):
+        # a default of "no expiry" is the gap this setting exists to close.
+        self.token_default_expiry_days: int = _positive_int(
+            "CADENCE_TOKEN_DEFAULT_EXPIRY_DAYS", 365
+        )
+
+        # How far a signed request's X-Cadence-Timestamp may drift from the
+        # server's clock, either direction, before it is rejected. Bounds
+        # clock-skew tolerance and how long a captured request stays
+        # replayable; unrelated to how often the agent talks (~1 min poll,
+        # ~30 min report) -- see docs/decisions.md "Authentication".
+        self.signature_window_seconds: int = _positive_int(
+            "CADENCE_SIGNATURE_WINDOW_SECONDS", 300
+        )
 
         # Networks whose X-Forwarded-For header is trusted (the reverse
         # proxies in front of the backend). Empty -> the direct connection IP

@@ -80,6 +80,10 @@ class AgentToken(Base):
         Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # Fernet-encrypted copy of the plaintext, so a signed request can be
+    # verified (needs the real secret, not a one-way hash). NULL for tokens
+    # issued before this existed -- see migration 0012.
+    secret_encrypted: Mapped[str | None] = mapped_column(Text)
     label: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
