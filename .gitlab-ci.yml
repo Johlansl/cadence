@@ -8,6 +8,14 @@ agent:
   image: golang:1.23
   script:
     - cd agent
+    # golangci-lint: pinned release, verified against its published checksum
+    - |
+      GLCI_VER=2.13.2
+      GLCI_SHA=2277d43b98ec0054280f2ac26b53268bae97682444678a59a657dd565da021d6
+      curl -sSfL -o /tmp/glci.tgz "https://github.com/golangci/golangci-lint/releases/download/v${GLCI_VER}/golangci-lint-${GLCI_VER}-linux-amd64.tar.gz"
+      echo "${GLCI_SHA}  /tmp/glci.tgz" | sha256sum -c -
+      tar -xzf /tmp/glci.tgz -C /tmp
+      /tmp/golangci-lint-${GLCI_VER}-linux-amd64/golangci-lint run ./...
     - go vet ./...
     - go test ./...
     - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/cadence-agent ./cmd/agent

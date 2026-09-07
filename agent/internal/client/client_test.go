@@ -21,7 +21,7 @@ func TestSendReportParsesJob(t *testing.T) {
 			t.Errorf("Authorization = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"host_id":"h","job":{"id":"job-1","job_type":"apt_upgrade","params":{}}}`)
+		_, _ = io.WriteString(w, `{"host_id":"h","job":{"id":"job-1","job_type":"apt_upgrade","params":{}}}`)
 	}))
 	defer srv.Close()
 
@@ -36,7 +36,7 @@ func TestSendReportParsesJob(t *testing.T) {
 
 func TestSendReportNoJob(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		io.WriteString(w, `{"host_id":"h","job":null}`)
+		_, _ = io.WriteString(w, `{"host_id":"h","job":null}`)
 	}))
 	defer srv.Close()
 
@@ -52,7 +52,7 @@ func TestSendReportNoJob(t *testing.T) {
 func TestSendReportServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		io.WriteString(w, `{"detail":"invalid token"}`)
+		_, _ = io.WriteString(w, `{"detail":"invalid token"}`)
 	}))
 	defer srv.Close()
 
@@ -66,7 +66,7 @@ func TestClaimNextJob(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/agent/next-job" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		io.WriteString(w, `{"job":{"id":"job-9","job_type":"apt_upgrade","params":{}}}`)
+		_, _ = io.WriteString(w, `{"job":{"id":"job-9","job_type":"apt_upgrade","params":{}}}`)
 	}))
 	defer srv.Close()
 
@@ -81,7 +81,7 @@ func TestClaimNextJob(t *testing.T) {
 
 func TestClaimNextJobEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		io.WriteString(w, `{"job":null}`)
+		_, _ = io.WriteString(w, `{"job":null}`)
 	}))
 	defer srv.Close()
 
@@ -101,7 +101,7 @@ func TestSubmitJobResult(t *testing.T) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		io.WriteString(w, `{}`)
+		_, _ = io.WriteString(w, `{}`)
 	}))
 	defer srv.Close()
 
@@ -134,7 +134,7 @@ func TestDoRetriesOn5xxThenSucceeds(t *testing.T) {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
-		io.WriteString(w, `{"job":null}`)
+		_, _ = io.WriteString(w, `{"job":null}`)
 	}))
 	defer srv.Close()
 
@@ -155,7 +155,7 @@ func TestDoDoesNotRetry4xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusConflict)
-		io.WriteString(w, `{"detail":"not running"}`)
+		_, _ = io.WriteString(w, `{"detail":"not running"}`)
 	}))
 	defer srv.Close()
 
