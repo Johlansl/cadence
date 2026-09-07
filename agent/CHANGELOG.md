@@ -1,11 +1,11 @@
-# Cadence agent — changelog
+# Cadence agent: changelog
 
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
 ## 0.7.1
 
-No runtime change — the binary is byte-for-byte `0.7.0` behaviour. This tag is
+No runtime change, the binary is byte-for-byte `0.7.0` behaviour. This tag is
 the first release cut through `.github/workflows/release.yml`: `linux/arm64`
 binaries alongside `linux/amd64`, each with its SHA-256 and a Sigstore
 build-provenance attestation, published to a GitHub Release.
@@ -17,7 +17,7 @@ Advisory linkage:
 - collector: each package now carries its Debian source package name
   (`dpkg-query ${source:Package}`) and the report carries the OS release
   codename (`/etc/os-release` `VERSION_CODENAME`). The server uses them to link
-  Debian security advisories precisely — a library binary such as `libssl3` is
+  Debian security advisories precisely, a library binary such as `libssl3` is
   matched via its source (`openssl`), and a release outside the server's
   built-in `VERSION_ID` list still resolves. Both are additive JSON fields
   (`source_package`, `os_codename`); an older server ignores them and keeps
@@ -28,7 +28,7 @@ Advisory linkage:
 Security:
 
 - The `CADENCE_*` variables (`CADENCE_TOKEN` among them) are stripped from the
-  environment of every command the agent runs — `apt-get`, `dpkg-query`,
+  environment of every command the agent runs, `apt-get`, `dpkg-query`,
   `dpkg`, `systemctl`, `shutdown`. They were inherited by those children,
   exposing the host token via `/proc/<pid>/environ`, apt hooks and dpkg
   maintainer scripts. New `internal/procenv` helper; no behaviour change for a

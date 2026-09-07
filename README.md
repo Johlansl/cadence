@@ -18,18 +18,18 @@ DNS) and tools that only show you the problem without fixing it. It gives you
 
 ## What it does
 
-- **Inventory** — installed packages and available `apt` updates per host, with
+- **Inventory**: installed packages and available `apt` updates per host, with
   a best-effort security-vs-normal split.
-- **Fleet view** — every host with a status badge, update counts, a last-seen
+- **Fleet view**: every host with a status badge, update counts, a last-seen
   freshness indicator (spots a stopped agent), tags and filters, and a fleet
   summary.
-- **Remediation** — trigger `apt-get dist-upgrade` on a host from the dashboard;
+- **Remediation**: trigger `apt-get dist-upgrade` on a host from the dashboard;
   the agent runs it within ~1 minute and posts the log back.
-- **Reboots** — per-host policy (`never` / `auto` / `prompt`), overridable per
+- **Reboots**: per-host policy (`never` / `auto` / `prompt`), overridable per
   job; the agent reboots only when the upgrade actually left one pending.
-- **Maintenance windows** — one recurring weekly/monthly window per host,
+- **Maintenance windows**: one recurring weekly/monthly window per host,
   turned into jobs by a scheduler service.
-- **History & retention** — append-only report and job logs, pruned on a
+- **History & retention**: append-only report and job logs, pruned on a
   configurable schedule.
 
 Not in v1 (see [docs/decisions.md](docs/decisions.md#v1-scope)): package
@@ -66,7 +66,7 @@ by the dedicated ~1 min poll. Details: [docs/architecture.md](docs/architecture.
      ![Host detail](docs/img/host.png)
 -->
 
-## Quick start — central server
+## Quick start: central server
 
 Requires Docker with the Compose plugin. On the server:
 
@@ -79,9 +79,9 @@ $EDITOR .env                    # set CADENCE_SITE_ADDRESS; set CADENCE_HTTP_BIN
 docker compose up -d --build    # first run must build; Alembic creates the schema on boot
 ```
 
-Save the dashboard user/password `gen-secrets.sh` printed — only the bcrypt hash
+Save the dashboard user/password `gen-secrets.sh` printed, only the bcrypt hash
 is kept in `.env`. To change it later, run `scripts/rotate-dashboard-password.sh`
-then `docker compose up -d caddy` (don't hand-edit the hash — every `$` in it
+then `docker compose up -d caddy` (don't hand-edit the hash, every `$` in it
 must be doubled for `docker compose`, and Caddy now refuses to start if it
 isn't).
 
@@ -95,7 +95,7 @@ docker compose run --rm backend alembic current    # <latest revision> (head)
 Open the dashboard at `https://<CADENCE_SITE_ADDRESS>/` and log in with those
 credentials. Caddy terminates TLS on 80/443 (80 redirects to 443) using its own
 internal CA, and gates everything except the agent endpoints with basic auth.
-By default Caddy binds to **`127.0.0.1`** (reachable only from the server) — set
+By default Caddy binds to **`127.0.0.1`** (reachable only from the server), set
 `CADENCE_HTTP_BIND=0.0.0.0` in `.env` to serve the LAN. The `backend` (8000) and
 plain-HTTP `frontend` (8080) ports always stay on loopback. `restart:
 unless-stopped` brings everything back after a reboot.
@@ -150,7 +150,7 @@ curl -s -X POST https://<site>/api/v1/admin/hosts \
 scripts/publish-agent.sh          # builds the agent into ./dist, served by Caddy over HTTP
 ```
 
-**3. Install on the host**, as root — `provision-host.sh` prints this line:
+**3. Install on the host**, as root, `provision-host.sh` prints this line:
 
 ```sh
 curl -fsSL http://<site>/install.sh | sudo CADENCE_TOKEN=<token> sh
@@ -160,7 +160,7 @@ The installer trusts the internal CA, installs a reboot-required helper if one
 is available, drops the binary and `systemd` units, writes
 `/etc/cadence/agent.env` (mode 0600), and enables both timers. The installer and
 binary are fetched over plain HTTP (the host doesn't trust the CA yet) and the
-binary is checksum-verified — see [SECURITY.md](SECURITY.md) for the trust
+binary is checksum-verified, see [SECURITY.md](SECURITY.md) for the trust
 model. The existing token in `agent.env` is preserved on re-run, so the same
 command upgrades an already-installed agent.
 
@@ -181,7 +181,7 @@ curl -s https://<site>/api/v1/hosts                  # the host appears, last_se
 ### Install from a `.deb`
 
 Each `agent-v*` release also ships a `.deb` (`amd64` + `arm64`) as a Release
-asset — an `apt`-native alternative to `curl | sh` for hosts you manage with a
+asset, an `apt`-native alternative to `curl | sh` for hosts you manage with a
 configuration tool. It installs the binary and the `systemd` units but
 **deliberately does not** trust a CA or write the per-host token, so you still
 do those two steps yourself:
@@ -202,7 +202,7 @@ sudo apt install "./cadence-agent_${VER}-1_${ARCH}.deb"
 ```
 
 `apt upgrade` then moves the agent forward on the next release. It is not served
-from an apt repository — download the `.deb` from the Release.
+from an apt repository, download the `.deb` from the Release.
 
 ### Trust Caddy's internal CA on a host
 
@@ -218,15 +218,15 @@ The one-liner installer does this for you.
 
 ### Signed agent releases
 
-The installer fetches the agent over plain HTTP and checks a SHA-256 sum — that
+The installer fetches the agent over plain HTTP and checks a SHA-256 sum, that
 catches a truncated download but not tampering. `scripts/publish-agent.sh`
 [minisign](https://jedisct1.github.io/minisign/)-signs every release
 (`cadence-agent.minisig` beside the binary); with `agent/minisign.pub`
 committed it refuses to publish unsigned.
 
 For tamper-evidence at install time, install `minisign` on the host first
-(`apt-get install -y minisign` on Debian/Ubuntu) and pass the public key —
-**out of band**, not over the install channel — to the installer:
+(`apt-get install -y minisign` on Debian/Ubuntu) and pass the public key,
+**out of band**, not over the install channel, to the installer:
 
 ```sh
 curl -fsSL http://cadence.lan/install.sh \
@@ -235,17 +235,17 @@ curl -fsSL http://cadence.lan/install.sh \
 
 A missing or invalid signature then aborts the install; if `minisign` is not
 installed the installer stops and tells you to install it. Without
-`CADENCE_MINISIGN_PUB` the installer uses the SHA-256 check only — the default,
+`CADENCE_MINISIGN_PUB` the installer uses the SHA-256 check only, the default,
 no `minisign` needed, sufficient for the trusted-LAN target.
 
-Back up the (passwordless) signing key with `scripts/backup-signing-key.sh` — it
+Back up the (passwordless) signing key with `scripts/backup-signing-key.sh`, it
 writes a passphrase-protected copy that `scripts/backup.sh` then includes in
 every backup; `scripts/restore-signing-key.sh` restores it. Key rotation is
 written up in
 [docs/decisions.md](docs/decisions.md#agent-distribution--signing).
 
 The pre-built binaries attached to each GitHub **Release** (`agent-v*` tag) are
-a separate channel — not minisign-signed (the fleet key never touches CI), but
+a separate channel, not minisign-signed (the fleet key never touches CI), but
 each carries a Sigstore build-provenance attestation:
 
 ```sh
@@ -269,15 +269,15 @@ All configuration is environment variables. Server variables live in `.env`
 | Variable | Default | Meaning |
 |---|---|---|
 | `POSTGRES_USER` / `POSTGRES_DB` | `cadence` / `cadence` | database role and name |
-| `POSTGRES_PASSWORD` | — | **read only on first boot** of the `pgdata` volume; changing it later needs `down -v` or an `ALTER ROLE` |
-| `CADENCE_ADMIN_KEY` | — | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
+| `POSTGRES_PASSWORD` | - | **read only on first boot** of the `pgdata` volume; changing it later needs `down -v` or an `ALTER ROLE` |
+| `CADENCE_ADMIN_KEY` | - | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
 | `CADENCE_DASHBOARD_AUTH` | `on` | basic-auth gate at Caddy on the dashboard + read/admin API (agent endpoints exempt). `off` disables it |
 | `CADENCE_DASHBOARD_USER` | `cadence` | basic-auth username |
-| `CADENCE_DASHBOARD_PASSWORD_HASH` | — | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash, and logs a warning at boot if the bcrypt cost is below 12 — the generators use 14) |
+| `CADENCE_DASHBOARD_PASSWORD_HASH` | - | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash, and logs a warning at boot if the bcrypt cost is below 12, the generators use 14) |
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
 | `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |
-| `CADENCE_TRUSTED_PROXIES` | — (empty) | reverse-proxy networks (CIDRs) whose `X-Forwarded-For` is trusted for the auth throttle and audit `client`; empty = use the direct peer IP. Set to the compose network subnet — see [Recording the real client IP](#recording-the-real-client-ip) |
+| `CADENCE_TRUSTED_PROXIES` | - (empty) | reverse-proxy networks (CIDRs) whose `X-Forwarded-For` is trusted for the auth throttle and audit `client`; empty = use the direct peer IP. Set to the compose network subnet, see [Recording the real client IP](#recording-the-real-client-ip) |
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
 | `CADENCE_AUDIT_RETENTION_DAYS` | `365` | daily prune of the admin audit trail (`audit_log`); `0` = keep forever |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
@@ -289,8 +289,8 @@ All configuration is environment variables. Server variables live in `.env`
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `CADENCE_SERVER_URL` | yes | — | backend base URL, e.g. `https://cadence.lan` |
-| `CADENCE_TOKEN` | yes | — | a per-host token (from registration, or issued via `/api/v1/admin/hosts/{id}/tokens`) |
+| `CADENCE_SERVER_URL` | yes | - | backend base URL, e.g. `https://cadence.lan` |
+| `CADENCE_TOKEN` | yes | - | a per-host token (from registration, or issued via `/api/v1/admin/hosts/{id}/tokens`) |
 | `CADENCE_RUN_APT_UPDATE` | no | `true` (installer) | run `apt-get update` before collecting; failure is non-fatal |
 | `CADENCE_ENABLE_UPGRADES` | no | `true` | kill-switch: if `false`, a triggered job is reported `failed` |
 | `CADENCE_ENABLE_REBOOT` | no | `true` | kill-switch: if `false`, never reboot even under an `auto` policy |
@@ -314,7 +314,7 @@ cadence-agent.service` on the host runs a report (and any pending job) now.
 
 ### Reboots
 
-Each host has a `reboot_policy`: `never` (default — the agent only reports
+Each host has a `reboot_policy`: `never` (default, the agent only reports
 `reboot_required`), `auto` (reboot when an upgrade left one pending), or
 `prompt` (a `reboot` job is queued for you to run from the dashboard). Set it in
 the host detail pane or `PATCH /api/v1/admin/hosts/{id}` with
@@ -348,7 +348,7 @@ is skipped (no catch-up).
 
 ### Database migrations
 
-Alembic owns the schema and runs on container start — **a normal deploy has
+Alembic owns the schema and runs on container start, **a normal deploy has
 nothing to run**:
 
 ```sh
@@ -369,7 +369,7 @@ Full detail: [docs/architecture.md](docs/architecture.md#deployment-notes).
 ### Backup & restore
 
 Two things are irreplaceable on the server: the Postgres database and **Caddy's
-data volume** (it holds the internal CA — lose it and every agent fails TLS
+data volume** (it holds the internal CA, lose it and every agent fails TLS
 until re-provisioned).
 
 ```sh
@@ -378,7 +378,7 @@ scripts/backup.sh
 ```
 
 `minisign.key.enc` (the agent signing key, passphrase-protected) is included
-only once `scripts/backup-signing-key.sh` has been run — see [Signed agent
+only once `scripts/backup-signing-key.sh` has been run, see [Signed agent
 releases](#signed-agent-releases).
 
 `CADENCE_BACKUP_DIR` / `CADENCE_BACKUP_KEEP` (default 14) tune it. Run it
@@ -406,7 +406,7 @@ docker compose run --rm backend alembic current    # matches MANIFEST
 
 Volume names are `<project>_pgdata` / `<project>_caddy_data` (`project` = the
 repo directory name). Restoring onto a stack with data needs `docker compose
-down -v` first — destructive, back up immediately before.
+down -v` first, destructive, back up immediately before.
 
 ### Upgrading the agent fleet
 
@@ -440,7 +440,7 @@ curl -s -X DELETE https://<site>/api/v1/admin/hosts/<id>/tokens/<old_token_id> \
 ```
 
 The list shows `created_at`, `last_used_at` and a `state` of
-`active` / `expired` / `revoked` for each token. Revoking is auth-plane only —
+`active` / `expired` / `revoked` for each token. Revoking is auth-plane only,
 it does not cancel a job already queued or running (deactivate the host for
 that).
 
@@ -462,13 +462,13 @@ curl -s https://<site>/api/v1/admin/audit -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
 ```
 
 Callers may set `X-Actor: alice` on their writes to stamp the `actor` column
-(it defaults to `admin` — the shared key proves no identity on its own).
+(it defaults to `admin`, the shared key proves no identity on its own).
 
 ### Recording the real client IP
 
 The auth-failure throttle and the audit `client` column use the caller's IP.
 The backend sits behind Caddy + nginx, so out of the box that IP is always the
-nginx container's — `X-Forwarded-For` is **not** trusted by default (a client
+nginx container's, `X-Forwarded-For` is **not** trusted by default (a client
 could forge it). To record the real client, set `CADENCE_TRUSTED_PROXIES` to
 the compose network subnet:
 

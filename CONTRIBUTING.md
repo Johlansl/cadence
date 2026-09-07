@@ -13,7 +13,7 @@ discuss an approach before a large PR usually saves everyone time.
   `backend/alembic/versions/` (no autogenerate). Describe the change and why in
   the PR.
 - **Code and comments in English.**
-- Some capabilities are intentionally out of scope for now — see
+- Some capabilities are intentionally out of scope for now, see
   [docs/decisions.md](docs/decisions.md#v1-scope). Please open an issue before
   building one of those.
 

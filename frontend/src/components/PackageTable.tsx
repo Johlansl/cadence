@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { HostPackage } from '../types'
 
-// security update first, then any update, then the rest — name as tie-breaker.
+// security update first, then any update, then the rest, name as tie-breaker.
 function smartRank(p: HostPackage): number {
   if (p.candidate_version && p.is_security_update) return 0
   if (p.candidate_version) return 1
@@ -150,8 +150,8 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
                 ))}
               </td>
               <td className="px-3 py-1.5 text-zinc-500">{p.installed_version}</td>
-              <td className="px-3 py-1.5 text-zinc-300">{p.candidate_version ?? '—'}</td>
-              <td className="px-3 py-1.5 text-zinc-600">{p.update_origin ?? '—'}</td>
+              <td className="px-3 py-1.5 text-zinc-300">{p.candidate_version ?? '-'}</td>
+              <td className="px-3 py-1.5 text-zinc-600">{p.update_origin ?? '-'}</td>
             </tr>
           ))}
           {rows.length === 0 && (

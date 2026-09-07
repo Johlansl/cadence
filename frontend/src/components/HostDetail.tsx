@@ -371,9 +371,9 @@ export function HostDetail({
           <Meta label="OS">
             {(host.os_name ?? host.os_family) + (host.os_version ? ` ${host.os_version}` : '')}
           </Meta>
-          <Meta label="Agent">{host.agent_version ?? '—'}</Meta>
+          <Meta label="Agent">{host.agent_version ?? '-'}</Meta>
           <Meta label="Manager">{host.package_manager}</Meta>
-          <Meta label="FQDN">{host.fqdn ?? '—'}</Meta>
+          <Meta label="FQDN">{host.fqdn ?? '-'}</Meta>
           <Meta label="Last report">
             <Freshness iso={host.last_seen_at} />
           </Meta>
