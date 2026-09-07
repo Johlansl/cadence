@@ -1,0 +1,23 @@
+# Conservative baseline. golangci-lint is a CI-only tool; it does not change
+# the agent's "standard library only" rule for its own imports.
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # `defer x.Close()` on a value we only read from -- the close error is
+      # not actionable and wrapping every one in a closure is pure noise.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
