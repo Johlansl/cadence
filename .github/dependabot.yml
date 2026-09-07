@@ -1,0 +1,62 @@
+# Dependabot configuration.
+#
+# `open-pull-requests-limit: 0` disables *version-update* pull requests for
+# every ecosystem below. This is deliberate for the upstream repository, which
+# is a one-way mirror of a private GitLab repo and is never committed to
+# directly (see the project's maintenance docs). Keeping the ecosystems
+# declared still gives us the dependency graph and Dependabot *security*
+# alerts/updates, which are not subject to this limit.
+#
+# If you have forked Cadence and this GitHub repo is your source of truth,
+# raise or remove `open-pull-requests-limit` to let Dependabot open routine
+# version-bump PRs.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+
+  - package-ecosystem: gomod
+    directory: /agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
