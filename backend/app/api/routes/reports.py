@@ -31,7 +31,7 @@ def _reject_oversized_report(request: Request) -> None:
     raw = request.headers.get("content-length")
     if raw and raw.isdigit() and int(raw) > cap:
         raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status.HTTP_413_CONTENT_TOO_LARGE,
             f"report body exceeds the {cap}-byte limit",
         )
 
@@ -102,7 +102,7 @@ def create_report(
         ).first()
         if has_inventory is not None:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "report contains no packages but the host has an existing "
                 "inventory; refusing to replace it with an empty state",
             )
