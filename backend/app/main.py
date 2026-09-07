@@ -52,6 +52,11 @@ async def log_requests(request: Request, call_next):
                 "status": response.status_code,
                 "duration_ms": duration_ms,
                 "client": client_ip(request),
+                # Set by app.api.deps.get_current_host on a successful agent
+                # auth ("bearer" or "signed"); absent for every other request.
+                # Lets an operator grep for zero legacy-path hits before
+                # retiring bearer support (docs/decisions.md "Authentication").
+                "auth_scheme": getattr(request.state, "auth_scheme", None),
             }
         },
     )

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from app.core.crypto import decrypt_token_secret
 from app.models.models import AgentToken, AuditLog, Host
 from tests.conftest import ADMIN_HEADERS, bearer, create_host, report_payload
 
@@ -37,8 +38,12 @@ def test_create_host_makes_one_active_token(client, db_session):
     assert len(rows) == 1
     tok = rows[0]
     assert tok.label == "initial"
-    assert tok.revoked_at is None and tok.expires_at is None
+    assert tok.revoked_at is None
+    # Default expiry, not NULL (docs/decisions.md "Authentication").
+    assert tok.expires_at is not None
+    assert tok.expires_at > datetime.now(timezone.utc) + timedelta(days=364)
     assert tok.token_hash == hashlib.sha256(token.encode()).hexdigest()
+    assert decrypt_token_secret(tok.secret_encrypted) == token
 
     r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
     assert r.status_code == 200

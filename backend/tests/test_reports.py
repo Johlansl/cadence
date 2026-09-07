@@ -12,8 +12,11 @@ from tests.conftest import (
 
 
 def test_report_requires_bearer_token(client):
+    # get_current_host now accepts two credential shapes (bearer or signed),
+    # so sending neither is an auth failure like any other, not a malformed
+    # request -- 401, not the old required-header 422.
     r = client.post("/api/v1/reports", json=report_payload())
-    assert r.status_code == 422
+    assert r.status_code == 401
 
     r = client.post(
         "/api/v1/reports", headers={"Authorization": "Bearer nope"}, json=report_payload()
