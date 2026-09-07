@@ -212,12 +212,15 @@ git -C ~/cadence-public push origin <tag>
 curl -s "https://api.github.com/repos/Johlansl/cadence/actions/runs?event=push&per_page=3"
 ```
 
-- **`agent-v<x.y.z>`** — builds the agent (amd64+arm64) + Release. Prereq: an
-  `## <x.y.z>` heading already exists in `agent/CHANGELOG.md` (the workflow
-  fails if the notes section is missing). This is also the tag
-  `scripts/publish-agent.sh` reads via `git describe`, so mirror it back to
-  GitLab too (`git push …gitlab… <tag>`) to keep the private tree's
-  `git describe` honest.
+- **`agent-v<x.y.z>`** — builds the agent (amd64+arm64) **binaries and `.deb`s**
+  + Release. Prereq: an `## <x.y.z>` heading already exists in
+  `agent/CHANGELOG.md` (the workflow fails if the notes section is missing).
+  This is also the tag `scripts/publish-agent.sh` reads via `git describe`, so
+  mirror it back to GitLab too (`git push …gitlab… <tag>`) to keep the private
+  tree's `git describe` honest. Nothing extra to do for the `.deb` — it is
+  built from `packaging/nfpm.yaml` and the (sed-rewritten) `agent/systemd/`
+  units automatically. Plain `x.y.z` tags only; a `-rc*` suffix is not handled
+  yet (see the backlog).
 - **`v<x.y.z>`** — builds+pushes the GHCR images + Release. Prereq, in a normal
   commit merged and synced first: bump `backend/app/__init__.py` `__version__`
   and `frontend/package.json` `version` to `<x.y.z>`, and rename `CHANGELOG.md`
