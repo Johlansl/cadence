@@ -78,8 +78,9 @@ def run_migrations() -> None:
     otherwise `upgrade` would start from base and fail on a duplicate
     `CREATE TABLE`. Fresh deploys skip this and build everything from 0001.
     """
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     lock_engine = create_engine(settings.database_url, poolclass=pool.NullPool, future=True)
     try:

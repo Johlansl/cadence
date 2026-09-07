@@ -5,7 +5,6 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
-
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 

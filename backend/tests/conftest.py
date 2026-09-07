@@ -48,9 +48,10 @@ BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 @pytest.fixture(scope="session", autouse=True)
 def _prepare_database():
     """Drop + recreate the test database, then run all migrations."""
-    from alembic import command
     from alembic.config import Config
     from sqlalchemy import create_engine, text
+
+    from alembic import command
 
     base, _, dbname = TEST_DATABASE_URL.rpartition("/")
     admin_engine = create_engine(f"{base}/postgres", isolation_level="AUTOCOMMIT", future=True)

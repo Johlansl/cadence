@@ -13,7 +13,7 @@ from app.scheduler import (
     run_advisory_refresh_if_due,
     tick,
 )
-from tests.conftest import ADMIN_HEADERS, create_host
+from tests.conftest import create_host
 
 
 def _due_schedule(db, host_id, *, params=None):
