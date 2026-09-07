@@ -57,14 +57,98 @@ rather than something to defer until someone asks.
 
 ## Authentication
 
-- **Bearer tokens per host** (`agent_tokens` table), SHA-256-hashed at rest,
-  transmitted once at issue time. One is created at provisioning; more can be
-  issued so a token is rotated roll-forward (new one issued, agent moved onto
-  it, old one revoked) with no reporting gap. Each token has an optional
-  `expires_at` and a `revoked_at`; state is *derived* from those two, there is
-  no separate flag. Revocation is auth-plane only, it never touches queued or
-  running jobs (deactivate the host for that). Simple, and enough for a
-  single-operator tool. Remaining limitation: tokens default to no expiry.
+- **Tokens per host** (`agent_tokens` table), transmitted once at issue time.
+  One is created at provisioning; more can be issued so a token is rotated
+  roll-forward (new one issued, agent moved onto it, old one revoked) with no
+  reporting gap. Each token has an optional `expires_at` and a `revoked_at`;
+  state is *derived* from those two, there is no separate flag. Revocation is
+  auth-plane only, it never touches queued or running jobs (deactivate the
+  host for that). Simple, and enough for a single-operator tool. `expires_at`
+  defaults to `CADENCE_TOKEN_DEFAULT_EXPIRY_DAYS` (365) when the caller does
+  not pass one -- closes what used to be listed here as a remaining
+  limitation ("tokens default to no expiry"); there is no supported way left
+  to ask for one that never expires short of passing a far-future explicit
+  date.
+- **Signed requests, phase 1 of hardening agent<->server auth.** The token
+  itself used to be sent as `Authorization: Bearer <token>` on every request.
+  Agent `0.8.0`+ instead sends `X-Cadence-Token-Hash` (the SHA-256 already
+  stored as `token_hash`, a non-secret lookup value the agent derives itself),
+  `X-Cadence-Timestamp`, and `X-Cadence-Signature` (an HMAC-SHA256 over
+  `timestamp\nMETHOD\npath\nsha256(body)`, keyed with the real token,
+  compared with `hmac.compare_digest`). The raw token no longer crosses the
+  wire per call, which mainly matters for exposure through anything that logs
+  or captures headers along the way, not the TLS-protected transport itself.
+  Both request shapes are accepted on every request; a partial set of the
+  signed headers is rejected outright rather than silently treated as
+  bearer, so stripping one can never quietly downgrade a request.
+  - **Verifying an HMAC needs the real secret, not a hash**, so
+    `agent_tokens.secret_encrypted` holds a Fernet-encrypted copy
+    (`CADENCE_TOKEN_ENCRYPTION_KEY` / `_PREVIOUS`, same rotation shape as
+    `CADENCE_ADMIN_KEY`). This changes what a database compromise exposes: a
+    stolen DB used to reveal nothing usable (a one-way hash only); now a row
+    issued under this scheme also yields the plaintext to anyone who also
+    holds the encryption key. Accepted for the same reason
+    `CADENCE_ADMIN_KEY` already sits in `.env` as a plaintext credential:
+    there is no alternative to holding the real secret if the server is
+    ever going to verify a signature with it, and a compromised server was
+    already fleet-fatal before this (it hands out root-level jobs to every
+    host with no client-side confirmation). This is a same-server secret,
+    not the minisign key's class of risk (that one forges releases
+    fleet-wide independent of ever touching this server).
+  - **A token issued before this shipped has no encrypted copy** and can
+    only ever authenticate via the bearer form until it is rotated -- its
+    plaintext was never stored anywhere to begin with, so there is nothing
+    to retrofit. Rotating a token (the existing roll-forward flow above) is
+    now also the only way an existing token gains signed-request capability.
+  - **Timestamp window: `CADENCE_SIGNATURE_WINDOW_SECONDS`, 300.** Not sized
+    against how often the agent talks (~1 min job poll, ~30 min report) --
+    that bounds request frequency, not signature freshness, and 300s sits
+    well clear of both either way. Sized instead against clock skew
+    (monitored hosts run NTP/systemd-timesyncd; skew is normally seconds,
+    but a stalled sync should not fail every request the moment it drifts
+    past a minute) and against bounding the one residual risk this scheme
+    does not remove: a request captured inside its own window (not a leaked
+    secret -- TLS already protects transit; this is about a compromised
+    intermediate hop or a log capture) stays replayable, verbatim, once,
+    until it expires. 300s matches Stripe's default webhook tolerance and
+    sits under AWS SigV4's 15-minute upper bound. No nonce/replay tracking
+    this phase -- real added infrastructure, overlapping the separately
+    scoped rate-limiting work more than this auth phase.
+  - **Transition, agent `0.7.0` (bearer-only) to `0.8.0`+ (signed), no
+    flag day:**
+    1. Server ships dual-mode first (this work). No fleet agent speaks the
+       new protocol yet; every request keeps using the bearer path,
+       unaffected.
+    2. Agent `0.8.0` ships. It always signs, never sends a bearer header --
+       no fallback mode in the binary (see step 3, doing 3.1-3.3 before 3.4
+       makes a fallback unnecessary).
+    3. Per host, in this order (reversing it breaks the host until fixed):
+       1. Issue a fresh token for that host (`POST .../tokens`) -- it gets
+          both `token_hash` *and* `secret_encrypted`.
+       2. Roll the new secret into `/etc/cadence/agent.env`
+          (`CADENCE_TOKEN=...`). The still-running `0.7.0` binary keeps
+          working, unaware anything changed -- it just sends the new secret
+          as a bearer value, still accepted.
+       3. Revoke the old token.
+       4. Upgrade the agent binary to `>=0.8.0`. It reads the same
+          `CADENCE_TOKEN` and starts signing -- no config change at this
+          step.
+       5. Confirm the host is still reporting before moving on.
+    4. While both forms are live, every successful auth's scheme
+       (`bearer`/`signed`) rides the existing structured request log
+       (`request.state.auth_scheme`) -- lets an operator grep for zero
+       legacy-path hits fleet-wide, rather than trusting a self-reported
+       `agent_version` alone.
+    5. Retiring bearer support for good is its own later, separate, reviewed
+       commit that deletes the legacy branch from `get_current_host`, once
+       step 4's logs confirm no legacy-path hits across a full report+poll
+       cycle on every active host. Not a runtime flag: a real code change,
+       the same shape as how the pre-`0.7.0` advisories fallback above is a
+       fallback removed by a future deliberate commit, not a toggle.
+  - No server-side version gating anywhere in this: which path a request
+    takes is decided purely by which headers it carries, never by parsing or
+    comparing `hosts.agent_version` -- keeps the "no home-grown version
+    comparison" rule intact.
 - **A single shared `X-Admin-Key`** guards every admin write. Changing a system
   warrants more than an anonymous GET. It can be rotated live via
   `CADENCE_ADMIN_KEY_PREVIOUS`. Known limitation: total blast radius, a leaked
