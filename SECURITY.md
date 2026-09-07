@@ -106,6 +106,13 @@ release (see [README](README.md#signed-agent-releases)). Pass the public key —
 aborts the install. Without it the installer uses the SHA-256 check only (the
 LAN-target default). The CA certificate is still TOFU either way.
 
+The pre-built binaries and container images attached to each GitHub Release
+(`agent-v*` / `v*` tags) are a separate channel and are **not** minisign-signed
+— the fleet key never touches CI (see
+[docs/decisions.md](docs/decisions.md#release-automation)). They instead carry a
+Sigstore build-provenance attestation: `gh attestation verify <file-or-oci-ref>
+--repo Johlansl/cadence`.
+
 ### TLS uses an internal CA
 
 Caddy issues certificates from its own CA. That CA root must be installed in

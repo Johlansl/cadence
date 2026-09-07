@@ -23,6 +23,11 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
   (`openssl`) without relying on the curated fallback map, and a release outside
   the built-in `VERSION_ID` list still resolves. Pre-`0.7.0` agents keep working
   through the fallbacks.
+- Release automation. A `v*` tag on GitHub builds and pushes
+  `ghcr.io/johlansl/cadence-{backend,frontend}` and cuts a GitHub Release;
+  `docker-compose.release.yml` is a new overlay that runs those images instead
+  of building from source. Images and the `agent-v*` binaries carry a Sigstore
+  build-provenance attestation. See `docs/decisions.md` "Release automation".
 
 ## 0.1.0
 
