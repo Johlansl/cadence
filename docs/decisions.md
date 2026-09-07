@@ -199,8 +199,10 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
 A `git` tag pushed to the **public** GitHub repo triggers
 `.github/workflows/release.yml` (GitHub Actions only; the private GitLab CI
 stays test-only). An `agent-v*` tag builds the agent for `linux/amd64` and
-`linux/arm64` (`CGO_ENABLED=0`, version from the tag) and attaches the binaries
-+ `.sha256` to a GitHub Release; a `v*` tag builds and pushes
+`linux/arm64` (`CGO_ENABLED=0`, version from the tag), packages each into a
+`.deb` with `nfpm` (`packaging/nfpm.yaml`, run from a digest-pinned image), and
+attaches the binaries + `.deb`s + a `.sha256` for each to a GitHub Release; a
+`v*` tag builds and pushes
 `ghcr.io/johlansl/cadence-{backend,frontend}` (`linux/amd64`) after asserting
 the tag matches `backend/app/__init__.py` and `frontend/package.json`, then cuts
 a Release. Notes come from the matching `## <version>` section of the relevant
@@ -225,6 +227,18 @@ changelog.
   agent is built for `arm64` too. `docker-compose.release.yml` is the overlay
   that runs the published images; the central server keeps building from source
   via `scripts/deploy.sh`.
+- **The agent `.deb` is unsigned (no GPG) and is not served from an apt
+  repository.** GPG package signing would be another long-lived key in CI, and
+  a loose `.deb` signature is barely checked anyway (apt verifies a *repo*, not
+  a file). Provenance is the same Sigstore attestation as the raw binary
+  (`gh attestation verify cadence-agent_<ver>-1_<arch>.deb --repo
+  Johlansl/cadence`). It is a Release asset for a local `apt install ./…deb`,
+  not a `sources.list` entry — a real repository needs its own repo-signing key
+  managed out of CI (like minisign) and is out of scope. `.rpm` waits for the
+  agent to speak `dnf` (see "V1 scope"); the package is deliberately
+  Debian/Ubuntu-shaped (it wires up the systemd units and recommends the
+  reboot-required helper) but does **not** trust a site CA or write the
+  per-host token — the operator still does that, exactly as with `install.sh`.
 
 ## Monitoring the control plane
 
