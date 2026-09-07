@@ -3,6 +3,13 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.7.1
+
+No runtime change — the binary is byte-for-byte `0.7.0` behaviour. This tag is
+the first release cut through `.github/workflows/release.yml`: `linux/arm64`
+binaries alongside `linux/amd64`, each with its SHA-256 and a Sigstore
+build-provenance attestation, published to a GitHub Release.
+
 ## 0.7.0
 
 Advisory linkage:
