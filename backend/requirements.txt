@@ -1,4 +1,8 @@
-fastapi==0.115.6
+fastapi==0.141.1
+# starlette is normally transitive via fastapi; pinned so the security floor
+# (CVE-2026-48710 Host validation, CVE-2025-62727 Range DoS) is explicit and
+# pip-audit stays deterministic.
+starlette==1.6.0
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.36
 alembic==1.14.0

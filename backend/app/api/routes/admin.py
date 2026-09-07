@@ -75,7 +75,7 @@ def update_host(
 
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "no fields to update")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "no fields to update")
     for field, value in changes.items():
         setattr(host, field, value)
     host.updated_at = datetime.now(timezone.utc)

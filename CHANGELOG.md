@@ -6,6 +6,18 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
+## Unreleased
+
+- Bumped FastAPI (`0.115.6` → `0.141.1`) and Starlette (`0.41.3`, transitive →
+  `1.6.0`, now pinned) to clear the security advisories accumulated on the old
+  Starlette, including CVE-2026-48710 (unvalidated `Host` header used to rebuild
+  `request.url`) and CVE-2025-62727 (quadratic `Range` header parse in
+  `FileResponse`). No wire, behaviour or schema change; three deprecated
+  `status.HTTP_413_REQUEST_ENTITY_TOO_LARGE` / `HTTP_422_UNPROCESSABLE_ENTITY`
+  constants were renamed to their `*_CONTENT_TOO_LARGE` / `*_UNPROCESSABLE_CONTENT`
+  equivalents (same status codes). `pytest` also moved `8.3.4` → `9.1.1`
+  (dev-only, clears PYSEC-2026-1845).
+
 ## 0.2.0
 
 - Security-advisory enrichment. The `scheduler` service refreshes Debian's
