@@ -1,0 +1,23 @@
+# Overlay: run Cadence from the published GHCR images instead of building
+# locally. The central server uses scripts/deploy.sh (build from source) and
+# does NOT use this file.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.release.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
+#
+# Pin a version with CADENCE_VERSION in .env (default: latest). Images are
+# published by .github/workflows/release.yml on a `v*` tag and carry a
+# Sigstore build-provenance attestation:
+#   gh attestation verify oci://ghcr.io/johlansl/cadence-backend:<ver> --repo Johlansl/cadence
+
+services:
+  backend:
+    build: !reset null
+    image: ghcr.io/johlansl/cadence-backend:${CADENCE_VERSION:-latest}
+
+  scheduler:
+    image: ghcr.io/johlansl/cadence-backend:${CADENCE_VERSION:-latest}
+
+  frontend:
+    build: !reset null
+    image: ghcr.io/johlansl/cadence-frontend:${CADENCE_VERSION:-latest}

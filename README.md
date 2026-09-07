@@ -105,6 +105,27 @@ from every monitored host and browser (LAN DNS, or `/etc/hosts` entries). For a
 public domain with Let's Encrypt instead of the internal CA, edit the
 `Caddyfile` (drop `tls internal`, add an ACME email).
 
+### Run from published images
+
+Instead of `--build`, pull the images published to GHCR on each `v*` release
+(backend + frontend; `db` and `caddy` already come from upstream). Add the
+overlay and set `CADENCE_VERSION` in `.env` (omit it for `:latest`):
+
+```sh
+echo 'CADENCE_VERSION=0.2.0' >> .env
+docker compose -f docker-compose.yml -f docker-compose.release.yml pull
+docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
+```
+
+Each image carries a Sigstore build-provenance attestation:
+
+```sh
+gh attestation verify oci://ghcr.io/johlansl/cadence-backend:0.2.0 --repo Johlansl/cadence
+```
+
+`scripts/deploy.sh` on the central server always builds from source and ignores
+this overlay.
+
 ## Add a monitored host
 
 **1. Register it** (on the server, reads `CADENCE_ADMIN_KEY` from `.env`):
@@ -196,6 +217,16 @@ writes a passphrase-protected copy that `scripts/backup.sh` then includes in
 every backup; `scripts/restore-signing-key.sh` restores it. Key rotation is
 written up in
 [docs/decisions.md](docs/decisions.md#agent-distribution--signing).
+
+The pre-built binaries attached to each GitHub **Release** (`agent-v*` tag) are
+a separate channel — not minisign-signed (the fleet key never touches CI), but
+each carries a Sigstore build-provenance attestation:
+
+```sh
+gh release download agent-v0.7.1 --repo Johlansl/cadence -p 'cadence-agent-linux-amd64*'
+sha256sum -c cadence-agent-linux-amd64.sha256
+gh attestation verify cadence-agent-linux-amd64 --repo Johlansl/cadence
+```
 
 **Running your own Cadence?** Replace `agent/minisign.pub` with your own key
 (`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`, keep the
