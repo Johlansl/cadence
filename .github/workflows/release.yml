@@ -51,10 +51,35 @@ jobs:
           done
           ./cadence-agent-linux-amd64 -version
 
+      - name: build agent .deb (amd64, arm64)
+        run: |
+          set -eu
+          mkdir -p dist/stage dist/units
+          # The committed units target /usr/local (the curl|sh flow); a package
+          # uses the FHS /usr paths.
+          for u in cadence-agent.service cadence-agent.timer \
+                   cadence-agent-poll.service cadence-agent-poll.timer; do
+            sed -e 's#/usr/local/bin#/usr/bin#g' \
+                -e 's#/usr/local/share/doc#/usr/share/doc#g' \
+                "agent/systemd/$u" > "dist/units/$u"
+          done
+          for a in amd64 arm64; do
+            cp "dist/cadence-agent-linux-$a" dist/stage/cadence-agent
+            docker run --rm -e ARCH="$a" -e VER="$VER" -v "$PWD":/w -w /w \
+              ghcr.io/goreleaser/nfpm:v2.47.0@sha256:a662cb167d7b6d3a83920c83d76b12d02b8ac5dd2c13e5c62c15270b23f6df0c \
+              package -p deb -f packaging/nfpm.yaml \
+              -t "dist/cadence-agent_${VER}-1_${a}.deb"
+            ( cd dist && sha256sum "cadence-agent_${VER}-1_${a}.deb" \
+                > "cadence-agent_${VER}-1_${a}.deb.sha256" )
+          done
+          ls -l dist/*.deb
+
       - name: provenance attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: "dist/cadence-agent-linux-*"
+          subject-path: |
+            dist/cadence-agent-linux-*
+            dist/cadence-agent_*.deb
 
       - name: extract release notes
         run: |
@@ -80,7 +105,11 @@ jobs:
             dist/cadence-agent-linux-amd64 \
             dist/cadence-agent-linux-amd64.sha256 \
             dist/cadence-agent-linux-arm64 \
-            dist/cadence-agent-linux-arm64.sha256
+            dist/cadence-agent-linux-arm64.sha256 \
+            "dist/cadence-agent_${VER}-1_amd64.deb" \
+            "dist/cadence-agent_${VER}-1_amd64.deb.sha256" \
+            "dist/cadence-agent_${VER}-1_arm64.deb" \
+            "dist/cadence-agent_${VER}-1_arm64.deb.sha256"
 
   server-images:
     if: startsWith(github.ref_name, 'v')
