@@ -3,6 +3,25 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.8.0
+
+Signed requests, replacing the raw bearer token on every call:
+
+- `internal/client` now signs each POST instead of sending
+  `Authorization: Bearer <token>`. Three headers carry the SHA-256 of the
+  token (a non-secret lookup key, the same value the server already stores
+  as `token_hash`, not the raw secret), a Unix timestamp, and an
+  HMAC-SHA256 over `timestamp\nMETHOD\npath\nsha256(body)` keyed with the
+  token. Re-signed fresh on every retry attempt, not just once per call.
+  `CADENCE_TOKEN` is unchanged, still the one secret used both ways.
+- Needs a server that understands the new headers (this server-side work
+  shipped ahead of this tag) *and* a token issued or rotated after that
+  server-side change -- a token from before then has no way to verify a
+  signature and this binary cannot fall back to the old bearer form. Rotate
+  the host's token before upgrading it to `0.8.0`, not after: see
+  `docs/decisions.md` "Authentication" for the exact per-host order.
+- No other runtime change.
+
 ## 0.7.1
 
 No runtime change, the binary is byte-for-byte `0.7.0` behaviour. This tag is
