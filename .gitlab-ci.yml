@@ -70,6 +70,8 @@ backend:
     - cd backend
     - ruff check .
     - pytest -q
+    - pip install pip-audit==2.10.1
+    - pip-audit -r requirements-dev.txt || true   # non-blocking: report, never gate
 
 stack:
   # Smoke-test the whole docker-compose stack from a clean state: build the
@@ -148,3 +150,4 @@ frontend:
     - npm run lint
     - npm test
     - npm run build
+    - npm audit --audit-level=high || true   # non-blocking: report, never gate
