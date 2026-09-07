@@ -6,7 +6,7 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
-## Unreleased
+## 0.2.0
 
 - Security-advisory enrichment. The `scheduler` service refreshes Debian's
   `DSA/list` + `DLA/list` every 6 h into new `advisories` / `advisory_packages`
