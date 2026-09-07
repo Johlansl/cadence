@@ -1,0 +1,18 @@
+# Tooling config for the backend. Packaging still lives in requirements*.txt;
+# this file only carries linter settings for now.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Conservative baseline: pyflakes (F), a subset of pycodestyle (E), import
+# sorting (I) and bugbear (B). Widen deliberately later.
+#   - `UP` (pyupgrade) is left out on purpose: enabling it at the real py312
+#     target rewrites `timezone.utc` -> `UTC` across ~30 files. That belongs in
+#     its own reviewed pass, like the `ruff format` line-length pass.
+select = ["E", "F", "I", "B"]
+ignore = [
+  "E501",  # line-too-long: leave to a dedicated `ruff format` pass, not this gate
+  "B008",  # function call in default arg: the FastAPI Depends()/Query()/Path() idiom
+]

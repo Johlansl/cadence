@@ -59,7 +59,9 @@ backend:
     PIP_NO_CACHE_DIR: "1"
   script:
     - pip install -r backend/requirements-dev.txt
-    - cd backend && pytest -q
+    - cd backend
+    - ruff check .
+    - pytest -q
 
 stack:
   # Smoke-test the whole docker-compose stack from a clean state: build the

@@ -78,6 +78,8 @@ jobs:
           python-version: "3.12"
       - run: pip install -r backend/requirements-dev.txt
       - working-directory: backend
+        run: ruff check .
+      - working-directory: backend
         run: pytest -q
 
   frontend:
