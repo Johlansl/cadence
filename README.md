@@ -178,6 +178,32 @@ journalctl -u cadence-agent -n 20 --no-pager        # "report sent to ..."
 curl -s https://<site>/api/v1/hosts                  # the host appears, last_seen_at fresh
 ```
 
+### Install from a `.deb`
+
+Each `agent-v*` release also ships a `.deb` (`amd64` + `arm64`) as a Release
+asset — an `apt`-native alternative to `curl | sh` for hosts you manage with a
+configuration tool. It installs the binary and the `systemd` units but
+**deliberately does not** trust a CA or write the per-host token, so you still
+do those two steps yourself:
+
+```sh
+VER=0.7.2; ARCH=amd64
+curl -fsSLO "https://github.com/Johlansl/cadence/releases/download/agent-v$VER/cadence-agent_${VER}-1_${ARCH}.deb"
+curl -fsSLO "https://github.com/Johlansl/cadence/releases/download/agent-v$VER/cadence-agent_${VER}-1_${ARCH}.deb.sha256"
+sha256sum -c "cadence-agent_${VER}-1_${ARCH}.deb.sha256"
+gh attestation verify "cadence-agent_${VER}-1_${ARCH}.deb" --repo Johlansl/cadence   # optional
+
+sudo apt install "./cadence-agent_${VER}-1_${ARCH}.deb"
+# then, as the post-install message says:
+#   1. trust the server CA (see below)
+#   2. sudo install -D -m 0600 /usr/share/doc/cadence-agent/agent.env.example /etc/cadence/agent.env
+#      and set CADENCE_SERVER_URL + CADENCE_TOKEN (from scripts/provision-host.sh)
+#   3. sudo systemctl start cadence-agent.timer cadence-agent-poll.timer
+```
+
+`apt upgrade` then moves the agent forward on the next release. It is not served
+from an apt repository — download the `.deb` from the Release.
+
 ### Trust Caddy's internal CA on a host
 
 ```sh

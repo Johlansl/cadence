@@ -106,12 +106,13 @@ release (see [README](README.md#signed-agent-releases)). Pass the public key —
 aborts the install. Without it the installer uses the SHA-256 check only (the
 LAN-target default). The CA certificate is still TOFU either way.
 
-The pre-built binaries and container images attached to each GitHub Release
-(`agent-v*` / `v*` tags) are a separate channel and are **not** minisign-signed
-— the fleet key never touches CI (see
+The pre-built binaries, the `.deb` packages and the container images attached to
+each GitHub Release (`agent-v*` / `v*` tags) are a separate channel and are
+**not** minisign- or GPG-signed — no long-lived signing key touches CI (see
 [docs/decisions.md](docs/decisions.md#release-automation)). They instead carry a
 Sigstore build-provenance attestation: `gh attestation verify <file-or-oci-ref>
---repo Johlansl/cadence`.
+--repo Johlansl/cadence`. The `.deb` is for a local `apt install ./…deb`, not an
+apt repository.
 
 ### TLS uses an internal CA
 
