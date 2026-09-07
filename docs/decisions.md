@@ -132,7 +132,10 @@ anchor, even with no code change) rather than rewriting a tag that is already on
 both remotes.
 
 The two version lines do not need to match; the server's API stays backward
-compatible within a minor line.
+compatible within a minor line. They also have **separate release triggers**
+(see "Release automation"): an `agent-v*` tag builds the agent, a `v*` tag
+builds the server images. There is no combined tag — coupling them would force a
+server release on every agent bump and vice versa.
 
 ## Agent distribution / signing
 
@@ -189,8 +192,39 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
   agent until step 6 re-rolls it, and is never "stuck" because the operator
   re-runs the installer on each. A zero-touch multi-key rotation (installer
   accepting several keys) is only needed if hosts self-update without the
-  operator — they do not — so it stays with the deferred release-automation
-  work.
+  operator — they do not.
+
+## Release automation
+
+A `git` tag pushed to the **public** GitHub repo triggers
+`.github/workflows/release.yml` (GitHub Actions only; the private GitLab CI
+stays test-only). An `agent-v*` tag builds the agent for `linux/amd64` and
+`linux/arm64` (`CGO_ENABLED=0`, version from the tag) and attaches the binaries
++ `.sha256` to a GitHub Release; a `v*` tag builds and pushes
+`ghcr.io/johlansl/cadence-{backend,frontend}` (`linux/amd64`) after asserting
+the tag matches `backend/app/__init__.py` and `frontend/package.json`, then cuts
+a Release. Notes come from the matching `## <version>` section of the relevant
+changelog.
+
+- **No signing key is exposed to CI — deliberately, and this is not the old
+  "CI is a build-only artifact" wording softening.** The minisign key signs
+  releases *for the whole fleet*; putting it in a third-party CI on a personal
+  account would make a compromised workflow dependency, a stolen repo-admin
+  session, or GitHub itself enough to forge a fleet-wide agent. minisign stays
+  a central-server concern (`scripts/publish-agent.sh`), covering the
+  `install.sh` channel the fleet actually uses — which does **not** go through
+  GitHub.
+- **CI artifacts carry a Sigstore build-provenance attestation instead**
+  (`actions/attest-build-provenance`, keyless via OIDC). It proves "built by
+  this workflow, from this repo, at this commit" — verifiable with
+  `gh attestation verify <file-or-oci-ref> --repo Johlansl/cadence` — with no
+  long-lived key anywhere. This is the tamper-evidence for anything pulled from
+  GitHub / GHCR; minisign remains the tamper-evidence for the LAN `install.sh`
+  path.
+- **GHCR images are `amd64` only** for now (the server target is amd64). The
+  agent is built for `arm64` too. `docker-compose.release.yml` is the overlay
+  that runs the published images; the central server keeps building from source
+  via `scripts/deploy.sh`.
 
 ## Monitoring the control plane
 
