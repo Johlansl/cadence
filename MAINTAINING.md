@@ -1,4 +1,4 @@
-# Maintaining Cadence — private ↔ public mirror
+# Maintaining Cadence: private ↔ public mirror
 
 Cadence is developed in a **private GitLab repo** and mirrored to a **public
 GitHub repo**. This file documents that workflow. It is intentionally **kept out
@@ -10,16 +10,16 @@ only concerns this project's dual-repo setup.
 | Repo | Path on `vm-cadence` | Remote | Role |
 |------|----------------------|--------|------|
 | Private | `~/cadence` | `https://gitlab.com/Johlansl/cadence.git` (project `85865420`) | Working repo. Every change lands here first. Fast-forward only on `main`. |
-| Public | `~/cadence-public` | `git@github.com:Johlansl/cadence.git` | Mirror. Never edited directly — only re-seeded from the private tree. |
+| Public | `~/cadence-public` | `git@github.com:Johlansl/cadence.git` | Mirror. Never edited directly, only re-seeded from the private tree. |
 
 ### Intended divergence
 
 The public tree is byte-for-byte the private tree **except** these files, which
 live only in the private repo:
 
-- `.gitlab-ci.yml` — the public repo uses `.github/workflows/ci.yml` instead
-- `CLAUDE.md` — Claude Code working notes
-- `MAINTAINING.md` — this file
+- `.gitlab-ci.yml`: the public repo uses `.github/workflows/ci.yml` instead
+- `CLAUDE.md`: Claude Code working notes
+- `MAINTAINING.md`: this file
 
 Anything else that differs is a mistake.
 
@@ -36,8 +36,8 @@ git switch main && git merge --ff-only <branch>
 ### Pushing to GitLab
 
 The stored PAT is short-lived and is usually already revoked. Mint a fresh one
-(GitLab → Settings → Access Tokens, `write_repository` scope) and pass it inline
-— do **not** persist it in the remote URL or `.git/config`:
+(GitLab → Settings → Access Tokens, `write_repository` scope) and pass it
+inline. Do **not** persist it in the remote URL or `.git/config`:
 
 ```sh
 git push https://oauth2:<PAT>@gitlab.com/Johlansl/cadence.git main:main
@@ -62,13 +62,13 @@ test matrix changes, update both in the same change.
 squashed away the pre-launch dev history **once** and is now a permanent base.
 From here on, every private change reaches the public repo as an ordinary new
 commit **on top** of what is already there. Never squash, rebase, amend, or
-`push --force` the public `main` — a fork or clone must never have its history
+`push --force` the public `main`, a fork or clone must never have its history
 rewritten under it. The two repos therefore share file *content* but not commit
 SHAs.
 
 The one exception: a deliberate, user-approved hygiene fix for something that
 should never have been public in the first place (e.g. the 2026-09-05
-`Co-Authored-By:` leak below) — verify forks/watchers/stars first (GitHub API),
+`Co-Authored-By:` leak below), verify forks/watchers/stars first (GitHub API),
 get explicit sign-off, then rewrite and force-push. That is not a sync step;
 it does not change how routine syncs work.
 
@@ -85,7 +85,7 @@ git update-ref refs/mirror/private-head 1c08096        # private commit the seed
 
 `refs/mirror/private-head` only records how far the mirror has got. It is a
 local convenience: it is not pushed and a fresh clone will not have it. It is
-**not** at risk from `git gc` — every ref under `refs/` (not just `refs/heads`
+**not** at risk from `git gc`, every ref under `refs/` (not just `refs/heads`
 and `refs/tags`) is a reachability root, `gc` never deletes refs, and
 `git pack-refs` just moves it into `.git/packed-refs` (verified with
 `gc --prune=now --aggressive`). It can still be lost to a manual `.git` edit or
@@ -111,7 +111,7 @@ public commits (mirroring preserves the original message, and the source
 commits carried it), making an AI assistant show up in the public repo's
 Contributors list. Fixed with `git filter-branch --msg-filter` + a one-off
 `push --force` (repo had 0 forks/watchers/stars, verified via the GitHub API
-first) — see the git log around 2026-09-05 for the incident commits. The
+first), see the git log around 2026-09-05 for the incident commits. The
 step below exists so it can't recur silently:
 
 - **Touches only shared files:**
@@ -121,7 +121,7 @@ step below exists so it can't recur silently:
   git commit --amend -m "$msg" --trailer "Mirrored-from: $(git rev-parse <sha>)"
   ```
 - **Also touches a private-only file** (`.gitlab-ci.yml`, `CLAUDE.md`,
-  `MAINTAINING.md`) — apply the diff with those paths filtered out, keeping the
+  `MAINTAINING.md`), apply the diff with those paths filtered out, keeping the
   original message/author/date, then strip the trailer the same way:
   ```sh
   git -C ~/cadence show <sha> -- . \
@@ -131,7 +131,7 @@ step below exists so it can't recur silently:
   msg=$(git log -1 --format=%B | grep -vxF "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
   git commit --amend -m "$msg" --trailer "Mirrored-from: $(git rev-parse <sha>)"
   ```
-- **Touches only private-only files** (e.g. an edit to this file) — skip it,
+- **Touches only private-only files** (e.g. an edit to this file), skip it,
   nothing to mirror.
 
 Then move the bookmark and push, fast-forward only:
@@ -141,7 +141,7 @@ git -C ~/cadence-public update-ref refs/mirror/private-head private/main
 git -C ~/cadence-public push origin main:main          # SSH key ~/.ssh/id_ed25519
 ```
 
-If `git push` reports a non-fast-forward, **stop and investigate** — something
+If `git push` reports a non-fast-forward, **stop and investigate**, something
 rewrote the public `main`. Do not `--force`.
 
 ### If the bookmark is lost
@@ -157,7 +157,7 @@ git update-ref refs/mirror/private-head "$last"
 ```
 
 If public `main` predates the trailer convention, find the match by tree
-instead — the private commit whose content (minus the three private-only
+instead, the private commit whose content (minus the three private-only
 files) equals public `main`:
 
 ```sh
@@ -183,13 +183,13 @@ cd ~/cadence && diff \
 **If that diff is ever non-empty on a path outside the three private-only
 files: stop.** Do not edit either repo to make it match. Print the diff, run
 `git log` for the offending path on both sides to find which commit introduced
-the drift, and work out the cause — a sync step skipped, a commit replayed
+the drift, and work out the cause, a sync step skipped, a commit replayed
 twice, or a manual edit made straight in `~/cadence-public`. Fix that cause,
 not the symptom. There is no automated reconciliation, by design.
 
 `rsync` is not installed on the host, hence the git-native replay above rather
 than a tree copy. The `grep` exclude list here is the single source of truth
-for the intended divergence — keep it equal to the "Intended divergence"
+for the intended divergence, keep it equal to the "Intended divergence"
 section.
 
 Poll GitHub Actions:
@@ -212,21 +212,21 @@ git -C ~/cadence-public push origin <tag>
 curl -s "https://api.github.com/repos/Johlansl/cadence/actions/runs?event=push&per_page=3"
 ```
 
-- **`agent-v<x.y.z>`** — builds the agent (amd64+arm64) **binaries and `.deb`s**
+- **`agent-v<x.y.z>`**: builds the agent (amd64+arm64) **binaries and `.deb`s**
   + Release. Prereq: an `## <x.y.z>` heading already exists in
   `agent/CHANGELOG.md` (the workflow fails if the notes section is missing).
   This is also the tag `scripts/publish-agent.sh` reads via `git describe`, so
   mirror it back to GitLab too (`git push …gitlab… <tag>`) to keep the private
-  tree's `git describe` honest. Nothing extra to do for the `.deb` — it is
+  tree's `git describe` honest. Nothing extra to do for the `.deb`, it is
   built from `packaging/nfpm.yaml` and the (sed-rewritten) `agent/systemd/`
   units automatically. Plain `x.y.z` tags only; a `-rc*` suffix is not handled
   yet (see the backlog).
-- **`v<x.y.z>`** — builds+pushes the GHCR images + Release. Prereq, in a normal
+- **`v<x.y.z>`**: builds+pushes the GHCR images + Release. Prereq, in a normal
   commit merged and synced first: bump `backend/app/__init__.py` `__version__`
   and `frontend/package.json` `version` to `<x.y.z>`, and rename `CHANGELOG.md`
   `## Unreleased` → `## <x.y.z>`. The workflow asserts the tag matches those two
   files. Server tags stay public-only.
-- The two are independent — never a combined tag. Push whichever the change
+- The two are independent, never a combined tag. Push whichever the change
   warrants; push both (two runs) to cut both at once.
 - First-ever `v*` run: after it succeeds, flip the new
   `ghcr.io/johlansl/cadence-{backend,frontend}` packages from private to public

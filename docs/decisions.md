@@ -8,7 +8,7 @@ model.
 
 Cadence is an **actively open-source project now**, not a codebase that might be
 opened later. It is meant for third parties to deploy on their own
-infrastructure, and that audience is assumed *today* — so technical decisions
+infrastructure, and that audience is assumed *today*, so technical decisions
 (security model, agent distribution, packaging, CI, release artefacts) are made
 for an unknown external deployer, not only for this one installation.
 Concretely: the trust model must survive an untrusted network, the agent must be
@@ -44,7 +44,7 @@ rather than something to defer until someone asks.
   `advisories` / `advisory_packages` tables, and `GET /hosts/{id}` /
   `GET /packages` link each apt-flagged pending security update to the DSA/DLA
   whose per-release `fixed_version` **equals** apt's candidate version (an
-  exact string match — Cadence still does no version comparison of its own).
+  exact string match, Cadence still does no version comparison of its own).
   It is deliberately *not* a full vulnerability scan: no unfixed / no-DSA CVEs,
   no severity. Agent `0.7.0`+ reports each binary's Debian source package
   (`dpkg-query ${source:Package}`) and the release codename
@@ -62,12 +62,12 @@ rather than something to defer until someone asks.
   issued so a token is rotated roll-forward (new one issued, agent moved onto
   it, old one revoked) with no reporting gap. Each token has an optional
   `expires_at` and a `revoked_at`; state is *derived* from those two, there is
-  no separate flag. Revocation is auth-plane only — it never touches queued or
+  no separate flag. Revocation is auth-plane only, it never touches queued or
   running jobs (deactivate the host for that). Simple, and enough for a
   single-operator tool. Remaining limitation: tokens default to no expiry.
 - **A single shared `X-Admin-Key`** guards every admin write. Changing a system
   warrants more than an anonymous GET. It can be rotated live via
-  `CADENCE_ADMIN_KEY_PREVIOUS`. Known limitation: total blast radius — a leaked
+  `CADENCE_ADMIN_KEY_PREVIOUS`. Known limitation: total blast radius, a leaked
   key can queue an upgrade or reboot on the whole fleet. Successful writes are
   appended to `audit_log` in the same transaction as the mutation, but the
   shared key means the recorded actor is only what the caller put in an
@@ -82,7 +82,7 @@ rather than something to defer until someone asks.
 
 - **`packages` is a shared dimension table**, never garbage-collected;
   `host_packages` is replaced wholesale on each report. `host_packages` holds
-  only current state — history lives in the append-only `reports` payloads.
+  only current state, history lives in the append-only `reports` payloads.
 - **The agent's self-reported hostname wins** over the name entered at host
   creation: the agent is authoritative about its own identity.
 - **Alembic owns the schema.** `init.sql` was the V1 first-boot bootstrap; it
@@ -92,7 +92,7 @@ rather than something to defer until someone asks.
 ## Stack
 
 - **Backend: ordinary dependencies** (FastAPI, SQLAlchemy sync, psycopg2,
-  Pydantic, Alembic). **Agent: standard library only** — no config framework,
+  Pydantic, Alembic). **Agent: standard library only**, no config framework,
   no YAML, config via environment variables, one static `CGO_ENABLED=0`
   binary. The point is to stay light and trivially cross-compilable.
 - **Frontend: React + Vite + Tailwind, no router.** One master/detail view,
@@ -104,13 +104,13 @@ rather than something to defer until someone asks.
 
 Two version lines on purpose:
 
-- **The server** — backend, frontend and the `docker compose` stack — ships as
+- **The server**: backend, frontend and the `docker compose` stack, ships as
   one unit under a single version (`backend/app/__init__.py` `__version__`,
   `frontend/package.json`; `0.1.0` at first public release). They are always
   deployed together, so one number is enough.
 - **The agent** carries its own (`agent/CHANGELOG.md`; `0.6.x`, `0.7.x`). It is
   distributed and upgraded separately, runs against a range of server versions,
-  and had a release history before the repo went public — forcing it back to
+  and had a release history before the repo went public, forcing it back to
   `0.1.0` would erase that. It reports its version on every report so the
   dashboard shows what each host runs.
 
@@ -125,7 +125,7 @@ hand-set string (`backend/app/__init__.py`).
 
 A published `agent-v*` tag is **never moved.** Between agent releases,
 `git describe` reports `0.7.0-<n>-g<sha>` for a build made `n` commits past the
-tag — that is accurate (the published binary is not at the tagged commit) and
+tag, that is accurate (the published binary is not at the tagged commit) and
 the tag anchors the versioning *mechanism*, not the dashboard string. If the
 long form is unwanted for a real re-roll, cut a fresh `agent-v0.7.x` tag (a new
 anchor, even with no code change) rather than rewriting a tag that is already on
@@ -134,7 +134,7 @@ both remotes.
 The two version lines do not need to match; the server's API stays backward
 compatible within a minor line. They also have **separate release triggers**
 (see "Release automation"): an `agent-v*` tag builds the agent, a `v*` tag
-builds the server images. There is no combined tag — coupling them would force a
+builds the server images. There is no combined tag, coupling them would force a
 server release on every agent bump and vice versa.
 
 ## Agent distribution / signing
@@ -145,7 +145,7 @@ HTTP** at `/install.sh` and `/agent/*`, so a host can fetch them before it
 trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
 
 - **Releases are minisign-signed.** `scripts/publish-agent.sh` signs the binary
-  when a private key is present, and — once `agent/minisign.pub` is committed —
+  when a private key is present, and, once `agent/minisign.pub` is committed,
   *refuses to publish unsigned* rather than silently dropping the signature.
   The signing key is passwordless, kept at `~/.cadence/minisign.key` (outside
   the repo, gitignored). CI builds a SHA-256-only artifact on purpose: no
@@ -171,7 +171,7 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
   `scripts/backup.sh` folds that already-encrypted copy into every nightly
   backup dir. The live key stays passwordless (`publish-agent.sh` needs it); a
   plaintext copy is never written anywhere. The passphrase is typed into
-  `minisign`'s own prompt and kept by the operator (password manager) — never
+  `minisign`'s own prompt and kept by the operator (password manager), never
   on the box, in the repo, or in a command. It is a *stronger* bar than
   `backups/<ts>/env` on purpose: `env`'s secrets only attack this one server,
   the signing key forges releases for the whole fleet from anywhere.
@@ -186,13 +186,13 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
      public key over `agent/minisign.pub`.
   3. Commit + push `agent/minisign.pub` to both remotes.
   4. `scripts/backup-signing-key.sh --force` with a fresh passphrase.
-  5. `scripts/deploy.sh` — re-signs `dist/agent/` with the new key.
+  5. `scripts/deploy.sh`, re-signs `dist/agent/` with the new key.
   6. Re-roll every host with the new `CADENCE_MINISIGN_PUB`.
   There is no transition window to manage: a host keeps running its installed
   agent until step 6 re-rolls it, and is never "stuck" because the operator
   re-runs the installer on each. A zero-touch multi-key rotation (installer
   accepting several keys) is only needed if hosts self-update without the
-  operator — they do not.
+  operator, they do not.
 
 ## Release automation
 
@@ -208,18 +208,18 @@ the tag matches `backend/app/__init__.py` and `frontend/package.json`, then cuts
 a Release. Notes come from the matching `## <version>` section of the relevant
 changelog.
 
-- **No signing key is exposed to CI — deliberately, and this is not the old
+- **No signing key is exposed to CI, deliberately, and this is not the old
   "CI is a build-only artifact" wording softening.** The minisign key signs
   releases *for the whole fleet*; putting it in a third-party CI on a personal
   account would make a compromised workflow dependency, a stolen repo-admin
   session, or GitHub itself enough to forge a fleet-wide agent. minisign stays
   a central-server concern (`scripts/publish-agent.sh`), covering the
-  `install.sh` channel the fleet actually uses — which does **not** go through
+  `install.sh` channel the fleet actually uses, which does **not** go through
   GitHub.
 - **CI artifacts carry a Sigstore build-provenance attestation instead**
   (`actions/attest-build-provenance`, keyless via OIDC). It proves "built by
-  this workflow, from this repo, at this commit" — verifiable with
-  `gh attestation verify <file-or-oci-ref> --repo Johlansl/cadence` — with no
+  this workflow, from this repo, at this commit", verifiable with
+  `gh attestation verify <file-or-oci-ref> --repo Johlansl/cadence`, with no
   long-lived key anywhere. This is the tamper-evidence for anything pulled from
   GitHub / GHCR; minisign remains the tamper-evidence for the LAN `install.sh`
   path.
@@ -233,12 +233,12 @@ changelog.
   a file). Provenance is the same Sigstore attestation as the raw binary
   (`gh attestation verify cadence-agent_<ver>-1_<arch>.deb --repo
   Johlansl/cadence`). It is a Release asset for a local `apt install ./…deb`,
-  not a `sources.list` entry — a real repository needs its own repo-signing key
+  not a `sources.list` entry, a real repository needs its own repo-signing key
   managed out of CI (like minisign) and is out of scope. `.rpm` waits for the
   agent to speak `dnf` (see "V1 scope"); the package is deliberately
   Debian/Ubuntu-shaped (it wires up the systemd units and recommends the
   reboot-required helper) but does **not** trust a site CA or write the
-  per-host token — the operator still does that, exactly as with `install.sh`.
+  per-host token, the operator still does that, exactly as with `install.sh`.
 
 ## Monitoring the control plane
 
@@ -248,7 +248,7 @@ never auto-patched by Cadence.** Give it (and the hypervisor it runs on) a
 out of band. Rationale: the box running the control plane must not restart
 itself mid-job, or apply an upgrade on Cadence's own say-so and take the
 scheduler / API down with it. Cadence still reports its pending updates so they
-are visible — the operator acts on them manually.
+are visible, the operator acts on them manually.
 
 ## V1 scope
 

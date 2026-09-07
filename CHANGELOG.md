@@ -1,6 +1,6 @@
-# Cadence server — changelog
+# Cadence server: changelog
 
-The server — backend, dashboard and the `docker compose` stack — ships as one
+The server, backend, dashboard and the `docker compose` stack, ships as one
 unit under a single version (`backend/app/__init__.py` `__version__`,
 `frontend/package.json`). The agent is versioned separately; see
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
@@ -23,8 +23,8 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 - Security-advisory enrichment. The `scheduler` service refreshes Debian's
   `DSA/list` + `DLA/list` every 6 h into new `advisories` / `advisory_packages`
   tables (migration `0010`). `GET /api/v1/hosts/{id}` and `GET /api/v1/packages`
-  now return an `advisories` list on each pending security update — DSA/DLA id,
-  tracker URL and CVE ids — and the dashboard shows it as a link beside the
+  now return an `advisories` list on each pending security update, DSA/DLA id,
+  tracker URL and CVE ids, and the dashboard shows it as a link beside the
   `SEC` badge. Linkage is an exact match of an advisory's per-release fixed
   version against apt's candidate; the `security` heuristic and all fleet
   counts are unchanged. Disable the feed with
@@ -43,8 +43,8 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## 0.1.0
 
-First public release (Apache-2.0). The stack — `db`, `backend`, `scheduler`,
-`frontend`, `caddy` — is what has been running in production; this entry is a
+First public release (Apache-2.0). The stack, `db`, `backend`, `scheduler`,
+`frontend`, `caddy`, is what has been running in production; this entry is a
 baseline, not a diff.
 
 Fleet inventory:

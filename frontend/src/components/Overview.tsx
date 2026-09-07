@@ -80,7 +80,7 @@ export function SilentBanner({
       <span className="font-medium">
         {silent.length} host{silent.length === 1 ? '' : 's'} silent
       </span>{' '}
-      — no report in over 15 min:{' '}
+      with no report in over 15 min:{' '}
       <span className="font-mono">
         {shown}
         {extra}

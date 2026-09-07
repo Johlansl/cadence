@@ -81,7 +81,7 @@ export function FleetOverview({
         />
         <Tile
           label="Security"
-          value={s ? s.security_updates_available : '—'}
+          value={s ? s.security_updates_available : '-'}
           sub={
             s ? `${s.security_updates} package${s.security_updates === 1 ? '' : 's'}` : undefined
           }
@@ -89,14 +89,14 @@ export function FleetOverview({
         />
         <Tile
           label="Needs updates"
-          value={s ? s.updates_available + s.security_updates_available : '—'}
+          value={s ? s.updates_available + s.security_updates_available : '-'}
           sub={s ? `${s.pending_updates} package${s.pending_updates === 1 ? '' : 's'}` : undefined}
           tone={s && s.updates_available + s.security_updates_available > 0 ? 'warn' : undefined}
         />
-        <Tile label="Reboot" value={s ? s.reboot_required : '—'} tone="reboot" />
+        <Tile label="Reboot" value={s ? s.reboot_required : '-'} tone="reboot" />
         <Tile
           label="Overdue"
-          value={s ? s.late + s.silent : '—'}
+          value={s ? s.late + s.silent : '-'}
           sub={
             s?.oldest_report_age_seconds != null
               ? `oldest ${relativeTime(new Date(Date.now() - s.oldest_report_age_seconds * 1000).toISOString())}`
@@ -106,7 +106,7 @@ export function FleetOverview({
         />
         <Tile
           label="Jobs 24h"
-          value={s ? `${s.jobs_succeeded_24h}✓ ${s.jobs_failed_24h}✕` : '—'}
+          value={s ? `${s.jobs_succeeded_24h}✓ ${s.jobs_failed_24h}✕` : '-'}
           sub={s && s.jobs_running > 0 ? `${s.jobs_running} running` : undefined}
           tone={s && s.jobs_failed_24h > 0 ? 'danger' : undefined}
         />

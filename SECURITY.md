@@ -19,21 +19,21 @@ exposing it beyond a LAN you control.
 ### One shared credential guards the dashboard and read/admin API
 
 There is **no multi-user auth and no RBAC** (a deliberate V1 choice). Instead,
-Caddy applies HTTP **basic auth** — a single shared username/password
-(`CADENCE_DASHBOARD_*`) — to everything except the agent endpoints
+Caddy applies HTTP **basic auth**, a single shared username/password
+(`CADENCE_DASHBOARD_*`), to everything except the agent endpoints
 (`/api/v1/reports`, `/api/v1/agent/*`, `/api/v1/jobs/*/result`, which use
 per-host Bearer tokens). It is **on by default**; `gen-secrets.sh` generates the
 credential and Caddy binds to `127.0.0.1` unless you set
 `CADENCE_HTTP_BIND=0.0.0.0`.
 
 What this does *not* give you: per-user identity (writes are audited, but only
-as far as the optional `X-Actor` header — see *Admin key* below), brute-force
+as far as the optional `X-Actor` header, see *Admin key* below), brute-force
 protection at the proxy (rate-limit upstream if exposed), or defence against a
-leaked shared password. `CADENCE_DASHBOARD_AUTH=off` removes the gate entirely —
+leaked shared password. `CADENCE_DASHBOARD_AUTH=off` removes the gate entirely,
 only do that behind a VPN or on a management VLAN.
 
 Behind that gate, every `GET` under `/api/v1` still returns the full fleet
-picture — host list, per-host package inventory with exact installed/candidate
+picture, host list, per-host package inventory with exact installed/candidate
 versions, job logs, maintenance windows, the fleet summary. Treat the dashboard
 credential as protecting a "what is unpatched and where, and when it reboots"
 map of your fleet.
@@ -57,7 +57,7 @@ the outbound-only, piggyback design.
 
 A single shared `X-Admin-Key` secret authorizes every privileged action
 (create/delete hosts, queue jobs and reboots on any host). There is no
-per-purpose scoping, so a leak is fleet-wide — generate a strong value
+per-purpose scoping, so a leak is fleet-wide, generate a strong value
 (`scripts/gen-secrets.sh` or `openssl rand -hex 32`) and keep `.env` at mode
 `0600`. The key can be rotated without downtime by setting the new value and
 moving the old one to `CADENCE_ADMIN_KEY_PREVIOUS` while clients catch up.
@@ -80,7 +80,7 @@ list (with a derived active/expired/revoked state) and revoke via
 `/api/v1/admin/hosts/{id}/tokens`.
 
 Rotation is roll-forward: issue a new token, move the agent onto it, then
-revoke the old one — no window where the host cannot report. Revocation is
+revoke the old one, no window where the host cannot report. Revocation is
 auth-plane only: it does **not** cancel a job already queued or running for
 that host (deactivate the host to stop new jobs being handed out).
 
@@ -95,20 +95,20 @@ binary, its SHA-256 checksum, **and** the internal CA certificate over the same
 **unauthenticated HTTP** channel (they have to be reachable before the host
 trusts the CA). The checksum only guards against transport corruption, not
 tampering: an attacker who can MITM that request can replace all three. This is
-acceptable on a trusted LAN — the documented target — and risky anywhere else.
+acceptable on a trusted LAN, the documented target, and risky anywhere else.
 For a hostile network, transfer the CA and binary out of band and verify a
 fingerprint you obtained separately.
 
 The binary is tamper-evident: `scripts/publish-agent.sh` minisign-signs every
-release (see [README](README.md#signed-agent-releases)). Pass the public key —
-`agent/minisign.pub`, distributed **out of band**, not over the install channel
-— to the installer as `CADENCE_MINISIGN_PUB`, and a bad or missing signature
+release (see [README](README.md#signed-agent-releases)). Pass the public key,
+`agent/minisign.pub`, distributed **out of band**, not over the install channel,
+to the installer as `CADENCE_MINISIGN_PUB`, and a bad or missing signature
 aborts the install. Without it the installer uses the SHA-256 check only (the
 LAN-target default). The CA certificate is still TOFU either way.
 
 The pre-built binaries, the `.deb` packages and the container images attached to
 each GitHub Release (`agent-v*` / `v*` tags) are a separate channel and are
-**not** minisign- or GPG-signed — no long-lived signing key touches CI (see
+**not** minisign- or GPG-signed, no long-lived signing key touches CI (see
 [docs/decisions.md](docs/decisions.md#release-automation)). They instead carry a
 Sigstore build-provenance attestation: `gh attestation verify <file-or-oci-ref>
 --repo Johlansl/cadence`. The `.deb` is for a local `apt install ./…deb`, not an
@@ -118,7 +118,7 @@ apt repository.
 
 Caddy issues certificates from its own CA. That CA root must be installed in
 the system trust store of every monitored host and dashboard client. The CA
-private key lives in the `caddy_data` volume — **back it up**; losing it breaks
+private key lives in the `caddy_data` volume, **back it up**; losing it breaks
 TLS for every agent until they are re-provisioned. A public-domain / Let's
 Encrypt setup requires editing the `Caddyfile`.
 
