@@ -104,32 +104,32 @@ Replay that range **one private commit at a time, in order**. Each private
 commit becomes one public commit carrying a `Mirrored-from: <full private sha>`
 trailer.
 
-**Strip any `Co-Authored-By:` trailer before it lands on the public commit.**
-This is not optional. On 2026-09-05 a `Co-Authored-By: Claude Sonnet 5
-<noreply@anthropic.com>` trailer rode along from `~/cadence` straight into 3
-public commits (mirroring preserves the original message, and the source
-commits carried it), making an AI assistant show up in the public repo's
-Contributors list. Fixed with `git filter-branch --msg-filter` + a one-off
-`push --force` (repo had 0 forks/watchers/stars, verified via the GitHub API
-first), see the git log around 2026-09-05 for the incident commits. The
-step below exists so it can't recur silently:
+**The source commit's message is already trailer-free.** Commits in
+`~/cadence` never carry an AI-crediting trailer (see CLAUDE.md and the
+`.git/hooks/pre-push` guard on both repos), so the replay carries the message
+through unchanged. On 2026-09-05, before that discipline existed, a crediting
+trailer rode along from `~/cadence` into 3 public commits and put an AI
+assistant in the public repo's Contributors list; fixed with
+`git filter-branch --msg-filter` + a one-off `push --force` (repo had 0
+forks/watchers/stars, verified via the GitHub API first), see the git log
+around 2026-09-05 for the incident commits. If a stray trailer ever reaches a
+source commit, the pre-push hook blocks the push: fix the source commit, do
+not paper over it in the replay.
 
 - **Touches only shared files:**
   ```sh
   git cherry-pick <sha>
-  msg=$(git log -1 --format=%B | grep -vxF "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
-  git commit --amend -m "$msg" --trailer "Mirrored-from: $(git rev-parse <sha>)"
+  git commit --amend --trailer "Mirrored-from: $(git rev-parse <sha>)"
   ```
 - **Also touches a private-only file** (`.gitlab-ci.yml`, `CLAUDE.md`,
   `MAINTAINING.md`), apply the diff with those paths filtered out, keeping the
-  original message/author/date, then strip the trailer the same way:
+  original message/author/date:
   ```sh
   git -C ~/cadence show <sha> -- . \
     ':(exclude).gitlab-ci.yml' ':(exclude)CLAUDE.md' ':(exclude)MAINTAINING.md' \
     | git apply --index --3way
   git commit -C <sha>
-  msg=$(git log -1 --format=%B | grep -vxF "Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>")
-  git commit --amend -m "$msg" --trailer "Mirrored-from: $(git rev-parse <sha>)"
+  git commit --amend --trailer "Mirrored-from: $(git rev-parse <sha>)"
   ```
 - **Touches only private-only files** (e.g. an edit to this file), skip it,
   nothing to mirror.

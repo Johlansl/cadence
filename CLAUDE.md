@@ -45,6 +45,12 @@ shows status and triggers upgrades or reboots per host. It runs as a
     filename `CLAUDE.md` (the existing "CLAUDE.md: ..." commit-subject
     convention stays fine) and a bare "Co-Authored-By" mention with no name
     or email attached are not violations.
+  - This covers text produced while working, not only the commits themselves:
+    never write the crediting trailer, a "Generated with ..." line, or a
+    robot emoji into a proposed command, a draft, or an example, not even one
+    meant to be filtered out before it runs. Compose every commit message and
+    every mirror-replay message clean from the start. Do not write a message
+    that contains the trailer and then remove it with a filter.
   - The author and committer of every commit are always the maintainer's own
     identity, on either repo. Never anything else.
   - On the public GitHub repo specifically, Claude may never appear as a
