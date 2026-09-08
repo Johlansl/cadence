@@ -51,3 +51,49 @@ def test_trusted_proxies_rejects_garbage(monkeypatch):
     monkeypatch.setenv("CADENCE_TRUSTED_PROXIES", "not-an-ip")
     with pytest.raises(RuntimeError, match="not a valid CIDR"):
         Settings()
+
+
+def _valid_env(monkeypatch):
+    monkeypatch.setenv("CADENCE_ADMIN_KEY", "a-perfectly-fine-admin-key")
+
+
+def test_ratelimit_defaults(monkeypatch):
+    _valid_env(monkeypatch)
+    for var in (
+        "CADENCE_RATELIMIT_ENABLED",
+        "CADENCE_RATELIMIT_WINDOW_SECONDS",
+        "CADENCE_RATELIMIT_AGENT_MAX",
+        "CADENCE_RATELIMIT_ADMIN_MAX",
+        "CADENCE_RATELIMIT_DASHBOARD_MAX",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    s = Settings()
+    assert s.ratelimit_enabled is True
+    assert s.ratelimit_window_seconds == 60
+    assert (s.ratelimit_agent_max, s.ratelimit_admin_max, s.ratelimit_dashboard_max) == (
+        20,
+        60,
+        120,
+    )
+
+
+def test_ratelimit_can_be_disabled(monkeypatch):
+    _valid_env(monkeypatch)
+    monkeypatch.setenv("CADENCE_RATELIMIT_ENABLED", "false")
+    assert Settings().ratelimit_enabled is False
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-1"])
+def test_ratelimit_max_rejects_non_positive(monkeypatch, bad):
+    _valid_env(monkeypatch)
+    monkeypatch.setenv("CADENCE_RATELIMIT_AGENT_MAX", bad)
+    with pytest.raises(RuntimeError):
+        Settings()
+
+
+def test_api_docs_disabled_by_default(monkeypatch):
+    _valid_env(monkeypatch)
+    monkeypatch.delenv("CADENCE_API_DOCS_ENABLED", raising=False)
+    assert Settings().api_docs_enabled is False
+    monkeypatch.setenv("CADENCE_API_DOCS_ENABLED", "true")
+    assert Settings().api_docs_enabled is True

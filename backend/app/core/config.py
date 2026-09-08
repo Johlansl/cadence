@@ -207,5 +207,36 @@ class Settings:
         # CADENCE_PACKAGES_GC_ENABLED=false.
         self.packages_gc_enabled: bool = _bool_env("CADENCE_PACKAGES_GC_ENABLED", True)
 
+        # Volume cap on *successful* authenticated traffic (app.core.ratelimit),
+        # separate from the auth-failure throttle (app.core.throttle): a valid
+        # admin key or agent token is otherwise unlimited. Counted per fixed
+        # window, keyed by resolved token_hash for the agent path and by client
+        # IP for the admin and dashboard/read paths. Over the cap -> 429 with a
+        # Retry-After header. No per-surface "0 = off" (0 is rejected like the
+        # other _positive_int settings); CADENCE_RATELIMIT_ENABLED=false is the
+        # single off switch.
+        self.ratelimit_enabled: bool = _bool_env("CADENCE_RATELIMIT_ENABLED", True)
+        self.ratelimit_window_seconds: int = _positive_int(
+            "CADENCE_RATELIMIT_WINDOW_SECONDS", 60
+        )
+        # Per host token: real agent cadence is ~1 poll/min + a report every
+        # ~30 min, so 20/min is ~20x steady with wide burst headroom.
+        self.ratelimit_agent_max: int = _positive_int("CADENCE_RATELIMIT_AGENT_MAX", 20)
+        # Per IP: human admin writes, bursty when BulkActionBar fans out one
+        # write per selected host. 60/min covers a large bulk action.
+        self.ratelimit_admin_max: int = _positive_int("CADENCE_RATELIMIT_ADMIN_MAX", 60)
+        # Per IP: dashboard polling is ~9 req/min per open tab; 120/min is
+        # ~13 tabs' worth.
+        self.ratelimit_dashboard_max: int = _positive_int(
+            "CADENCE_RATELIMIT_DASHBOARD_MAX", 120
+        )
+
+        # Interactive API docs (/docs, /redoc) and the OpenAPI schema
+        # (/openapi.json). Off in production by default: they leak the full
+        # route map and need no credential on the backend port. Set
+        # CADENCE_API_DOCS_ENABLED=true in a dev .env to turn them on (they
+        # then sit behind the same Caddy basic-auth as the read API).
+        self.api_docs_enabled: bool = _bool_env("CADENCE_API_DOCS_ENABLED", False)
+
 
 settings = Settings()

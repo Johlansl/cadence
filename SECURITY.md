@@ -26,6 +26,11 @@ per-host signed-request tokens). It is **on by default**; `gen-secrets.sh`
 generates the credential and Caddy binds to `127.0.0.1` unless you set
 `CADENCE_HTTP_BIND=0.0.0.0`.
 
+The interactive API docs (`/docs`, `/redoc`) and the OpenAPI schema
+(`/openapi.json`) are **disabled in production by default** and gated behind
+`CADENCE_API_DOCS_ENABLED` (set it true only in a dev `.env`). When enabled
+they are served through Caddy behind the same basic-auth as the read API.
+
 What this does *not* give you: per-user identity (writes are audited, but only
 as far as the optional `X-Actor` header, see *Admin key* below), brute-force
 protection at the proxy (rate-limit upstream if exposed), or defence against a
