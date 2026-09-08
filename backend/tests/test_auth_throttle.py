@@ -40,12 +40,12 @@ def test_success_resets_the_counter():
 
     last = 0.0
     for _ in range(throttle_mod._FREE_ATTEMPTS + 2):
-        last = t.record_failure("10.0.0.2", kind="bearer")
+        last = t.record_failure("10.0.0.2", kind="signed")
     assert last > 0  # was being delayed
 
     t.record_success("10.0.0.2")
     after = [
-        t.record_failure("10.0.0.2", kind="bearer")
+        t.record_failure("10.0.0.2", kind="signed")
         for _ in range(throttle_mod._FREE_ATTEMPTS)
     ]
     assert after == [0.0] * throttle_mod._FREE_ATTEMPTS  # back under the free threshold

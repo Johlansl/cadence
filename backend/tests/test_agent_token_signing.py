@@ -1,8 +1,8 @@
 """The signed-request auth path (docs/decisions.md "Authentication"): the raw
 token never crosses the wire, an HMAC-SHA256 over timestamp+method+path+body
-does instead, keyed with the real secret recovered via app.core.crypto. The
-legacy bearer path (test_agent_tokens.py) is untouched and still works
-alongside it during the transition."""
+does instead, keyed with the real secret recovered via app.core.crypto. This
+is the only agent-auth path; token lifecycle (revoked, expired, inactive host,
+...) is covered in test_agent_tokens.py."""
 
 from __future__ import annotations
 
@@ -152,23 +152,17 @@ def test_expired_token_rejected_via_signed_path(client, db_session):
     assert r.status_code == 401
 
 
-def test_pre_migration_token_cannot_sign_but_still_works_as_bearer(client, db_session):
-    """A token with no secret_encrypted (issued before this scheme existed,
-    or never rotated onto it) can never verify a signature -- it can only
-    ever authenticate via the legacy bearer path."""
+def test_pre_migration_token_cannot_authenticate(client, db_session):
+    """A token with no secret_encrypted (issued before this scheme existed, or
+    never rotated onto it) can never verify a signature, and there is no other
+    path: it cannot authenticate at all until the host is rotated onto a fresh
+    token."""
     host_id, _ = create_host(client)
     secret = "legacy-secret-no-encrypted-copy"
     _add_token(db_session, host_id, secret=secret)  # no secret_encrypted
 
     r = _post(client, "/api/v1/reports", secret, report_payload())
     assert r.status_code == 401
-
-    r = client.post(
-        "/api/v1/reports",
-        headers={"Authorization": f"Bearer {secret}"},
-        json=report_payload(),
-    )
-    assert r.status_code == 200, r.text
 
 
 def test_unknown_token_hash_is_rejected(client):

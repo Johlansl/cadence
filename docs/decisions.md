@@ -71,16 +71,17 @@ rather than something to defer until someone asks.
   date.
 - **Signed requests, phase 1 of hardening agent<->server auth.** The token
   itself used to be sent as `Authorization: Bearer <token>` on every request.
-  Agent `0.8.0`+ instead sends `X-Cadence-Token-Hash` (the SHA-256 already
-  stored as `token_hash`, a non-secret lookup value the agent derives itself),
-  `X-Cadence-Timestamp`, and `X-Cadence-Signature` (an HMAC-SHA256 over
-  `timestamp\nMETHOD\npath\nsha256(body)`, keyed with the real token,
+  The agent (`0.8.0`+) instead sends `X-Cadence-Token-Hash` (the SHA-256
+  already stored as `token_hash`, a non-secret lookup value the agent derives
+  itself), `X-Cadence-Timestamp`, and `X-Cadence-Signature` (an HMAC-SHA256
+  over `timestamp\nMETHOD\npath\nsha256(body)`, keyed with the real token,
   compared with `hmac.compare_digest`). The raw token no longer crosses the
   wire per call, which mainly matters for exposure through anything that logs
   or captures headers along the way, not the TLS-protected transport itself.
-  Both request shapes are accepted on every request; a partial set of the
-  signed headers is rejected outright rather than silently treated as
-  bearer, so stripping one can never quietly downgrade a request.
+  This is the only accepted form (the bearer path was removed once the fleet
+  had migrated, see "Transition" below); a partial set of the signed headers
+  is rejected outright with its own error, so stripping one can never quietly
+  change how the request is read.
   - **Verifying an HMAC needs the real secret, not a hash**, so
     `agent_tokens.secret_encrypted` holds a Fernet-encrypted copy
     (`CADENCE_TOKEN_ENCRYPTION_KEY` / `_PREVIOUS`, same rotation shape as
@@ -95,11 +96,11 @@ rather than something to defer until someone asks.
     host with no client-side confirmation). This is a same-server secret,
     not the minisign key's class of risk (that one forges releases
     fleet-wide independent of ever touching this server).
-  - **A token issued before this shipped has no encrypted copy** and can
-    only ever authenticate via the bearer form until it is rotated -- its
-    plaintext was never stored anywhere to begin with, so there is nothing
-    to retrofit. Rotating a token (the existing roll-forward flow above) is
-    now also the only way an existing token gains signed-request capability.
+  - **A token issued before this shipped has no encrypted copy** and cannot
+    authenticate at all -- its plaintext was never stored anywhere to begin
+    with, so there is nothing to retrofit, and there is no other path left.
+    Rotating the host onto a fresh token (the existing roll-forward flow
+    above) is the only fix.
   - **Timestamp window: `CADENCE_SIGNATURE_WINDOW_SECONDS`, 300.** Not sized
     against how often the agent talks (~1 min job poll, ~30 min report) --
     that bounds request frequency, not signature freshness, and 300s sits
@@ -114,41 +115,26 @@ rather than something to defer until someone asks.
     sits under AWS SigV4's 15-minute upper bound. No nonce/replay tracking
     this phase -- real added infrastructure, overlapping the separately
     scoped rate-limiting work more than this auth phase.
-  - **Transition, agent `0.7.0` (bearer-only) to `0.8.0`+ (signed), no
-    flag day:**
-    1. Server ships dual-mode first (this work). No fleet agent speaks the
-       new protocol yet; every request keeps using the bearer path,
-       unaffected.
-    2. Agent `0.8.0` ships. It always signs, never sends a bearer header --
-       no fallback mode in the binary (see step 3, doing 3.1-3.3 before 3.4
-       makes a fallback unnecessary).
-    3. Per host, in this order (reversing it breaks the host until fixed):
-       1. Issue a fresh token for that host (`POST .../tokens`) -- it gets
-          both `token_hash` *and* `secret_encrypted`.
-       2. Roll the new secret into `/etc/cadence/agent.env`
-          (`CADENCE_TOKEN=...`). The still-running `0.7.0` binary keeps
-          working, unaware anything changed -- it just sends the new secret
-          as a bearer value, still accepted.
-       3. Revoke the old token.
-       4. Upgrade the agent binary to `>=0.8.0`. It reads the same
-          `CADENCE_TOKEN` and starts signing -- no config change at this
-          step.
-       5. Confirm the host is still reporting before moving on.
-    4. While both forms are live, every successful auth's scheme
-       (`bearer`/`signed`) rides the existing structured request log
-       (`request.state.auth_scheme`) -- lets an operator grep for zero
-       legacy-path hits fleet-wide, rather than trusting a self-reported
-       `agent_version` alone.
-    5. Retiring bearer support for good is its own later, separate, reviewed
-       commit that deletes the legacy branch from `get_current_host`, once
-       step 4's logs confirm no legacy-path hits across a full report+poll
-       cycle on every active host. Not a runtime flag: a real code change,
-       the same shape as how the pre-`0.7.0` advisories fallback above is a
-       fallback removed by a future deliberate commit, not a toggle.
-  - No server-side version gating anywhere in this: which path a request
-    takes is decided purely by which headers it carries, never by parsing or
-    comparing `hosts.agent_version` -- keeps the "no home-grown version
-    comparison" rule intact.
+  - **Transition, agent `0.7.0` (bearer-only) to `0.8.0`+ (signed), how it
+    was done, no flag day:** the server shipped dual-mode first (bearer and
+    signed both accepted). Then, per host, in this order (reversing it breaks
+    the host until fixed): issue a fresh token (`POST .../tokens`, it gets
+    both `token_hash` and `secret_encrypted`); roll the new secret into
+    `/etc/cadence/agent.env` while the `0.7.0` binary is still running (it
+    sends it as a bearer value, still accepted); revoke the old token;
+    upgrade the binary to `>=0.8.0` (same `CADENCE_TOKEN`, it starts
+    signing); confirm the host still reports. While both forms were live each
+    request's scheme (`bearer`/`signed`) rode the structured request log
+    (`request.state.auth_scheme`), so the migration could be confirmed
+    complete fleet-wide from the logs, not a self-reported `agent_version`.
+    Once no `bearer` hit had been seen across a full report+poll cycle on
+    every active host, a dedicated commit deleted the bearer branch from
+    `get_current_host`. Not a runtime flag: a real code change, the same
+    shape as the pre-`0.7.0` advisories fallback above.
+  - No server-side version gating anywhere in this: a request is accepted or
+    rejected purely on the headers it carries and the token they name, never
+    by parsing or comparing `hosts.agent_version` -- keeps the "no home-grown
+    version comparison" rule intact.
 - **A single shared `X-Admin-Key`** guards every admin write. Changing a system
   warrants more than an anonymous GET. It can be rotated live via
   `CADENCE_ADMIN_KEY_PREVIOUS`. Known limitation: total blast radius, a leaked

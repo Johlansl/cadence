@@ -67,11 +67,11 @@ class Host(Base):
 
 
 class AgentToken(Base):
-    """A bearer token for one host's agent. Several may be active at once so a
-    token can be rotated without downtime. State is derived from revoked_at /
-    expires_at only -- no boolean flag that could drift. Nothing here touches
-    jobs: revoking a token is an auth-plane change, it does not cancel jobs.
-    See migration 0008."""
+    """An authentication token for one host's agent. Several may be active at
+    once so a token can be rotated without downtime. State is derived from
+    revoked_at / expires_at only -- no boolean flag that could drift. Nothing
+    here touches jobs: revoking a token is an auth-plane change, it does not
+    cancel jobs. See migration 0008."""
 
     __tablename__ = "agent_tokens"
 

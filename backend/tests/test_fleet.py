@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import update
 
 from app.models.models import Host, Job
-from tests.conftest import bearer, create_host, pkg, report_payload
+from tests.conftest import create_host, pkg, report_payload, signed
 
 
 def _report(client, token, **kw):
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload(**kw))
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload(**kw))
     assert r.status_code == 200, r.text
 
 
@@ -26,12 +26,12 @@ def test_fleet_summary_aggregates(client, db_session):
 
     client.post(
         "/api/v1/reports",
-        headers=bearer(t1),
+        auth=signed(t1),
         json=report_payload(packages=[pkg("openssl", candidate="3.1", security=True), pkg("bash")]),
     )
     client.post(
         "/api/v1/reports",
-        headers=bearer(t2),
+        auth=signed(t2),
         json=report_payload(packages=[pkg("vim", candidate="9.1"), pkg("bash")], reboot_required=True),
     )
 

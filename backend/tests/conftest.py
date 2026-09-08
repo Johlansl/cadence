@@ -13,9 +13,13 @@ teardown, so tests never see each other's rows.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import pathlib
+import time
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 
@@ -135,8 +139,34 @@ def create_host(client, hostname: str = "vm-test") -> tuple[str, str]:
     return body["id"], body["token"]
 
 
-def bearer(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+class _SignedAgentAuth(httpx.Auth):
+    """Sign a request the way agent 0.8.0+ does (app.api.deps._auth_signed):
+    X-Cadence-Token-Hash / -Timestamp / -Signature, an HMAC-SHA256 over
+    timestamp + method + path + sha256(body) keyed with the raw token."""
+
+    requires_request_body = True
+
+    def __init__(self, secret: str) -> None:
+        self._secret = secret
+
+    def auth_flow(self, request):
+        ts = str(int(time.time()))
+        body_hash = hashlib.sha256(request.content or b"").hexdigest()
+        canonical = f"{ts}\n{request.method}\n{request.url.path}\n{body_hash}"
+        sig = hmac.new(
+            self._secret.encode(), canonical.encode(), hashlib.sha256
+        ).hexdigest()
+        request.headers["X-Cadence-Token-Hash"] = hashlib.sha256(
+            self._secret.encode()
+        ).hexdigest()
+        request.headers["X-Cadence-Timestamp"] = ts
+        request.headers["X-Cadence-Signature"] = sig
+        yield request
+
+
+def signed(token: str) -> _SignedAgentAuth:
+    """Auth for agent-authenticated endpoints: `client.post(url, auth=signed(token), ...)`."""
+    return _SignedAgentAuth(token)
 
 
 def report_payload(**overrides) -> dict:

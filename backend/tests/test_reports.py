@@ -4,22 +4,28 @@ from app.core.config import settings
 from app.models.models import Host, HostPackage, Job, Report
 from tests.conftest import (
     ADMIN_HEADERS,
-    bearer,
     create_host,
     pkg,
     report_payload,
+    signed,
 )
 
 
-def test_report_requires_bearer_token(client):
-    # get_current_host now accepts two credential shapes (bearer or signed),
-    # so sending neither is an auth failure like any other, not a malformed
-    # request -- 401, not the old required-header 422.
+def test_report_requires_agent_auth(client):
+    # No signed-request headers is an authentication failure, not a malformed
+    # request -- 401, not a required-header 422.
     r = client.post("/api/v1/reports", json=report_payload())
     assert r.status_code == 401
 
+    # Well-formed but bogus signed headers are a 401 too.
     r = client.post(
-        "/api/v1/reports", headers={"Authorization": "Bearer nope"}, json=report_payload()
+        "/api/v1/reports",
+        headers={
+            "X-Cadence-Token-Hash": "00" * 32,
+            "X-Cadence-Timestamp": "0",
+            "X-Cadence-Signature": "00" * 32,
+        },
+        json=report_payload(),
     )
     assert r.status_code == 401
 
@@ -34,7 +40,7 @@ def test_report_replaces_package_state_and_counts(client, db_session):
             pkg("bash"),
         ]
     )
-    r = client.post("/api/v1/reports", headers=bearer(token), json=first)
+    r = client.post("/api/v1/reports", auth=signed(token), json=first)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["installed_package_count"] == 3
@@ -44,7 +50,7 @@ def test_report_replaces_package_state_and_counts(client, db_session):
 
     # A second report fully replaces host_packages.
     second = report_payload(packages=[pkg("bash"), pkg("coreutils")])
-    r = client.post("/api/v1/reports", headers=bearer(token), json=second)
+    r = client.post("/api/v1/reports", auth=signed(token), json=second)
     assert r.status_code == 200
     assert r.json()["updates_available_count"] == 0
 
@@ -66,7 +72,7 @@ def test_report_refreshes_host_metadata_and_last_seen(client, db_session):
 
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(hostname="real-name", os_version="13", reboot_required=True),
     )
 
@@ -83,12 +89,12 @@ def test_report_refuses_empty_packages_when_host_has_inventory(client, db_sessio
 
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash"), pkg("openssl", candidate="3.1")]),
     )
 
     r = client.post(
-        "/api/v1/reports", headers=bearer(token), json=report_payload(packages=[])
+        "/api/v1/reports", auth=signed(token), json=report_payload(packages=[])
     )
     assert r.status_code == 422, r.text
 
@@ -107,7 +113,7 @@ def test_report_refuses_empty_packages_when_host_has_inventory(client, db_sessio
 def test_report_accepts_empty_packages_for_fresh_host(client):
     _, token = create_host(client)
     r = client.post(
-        "/api/v1/reports", headers=bearer(token), json=report_payload(packages=[])
+        "/api/v1/reports", auth=signed(token), json=report_payload(packages=[])
     )
     assert r.status_code == 200, r.text
     assert r.json()["installed_package_count"] == 0
@@ -119,7 +125,7 @@ def test_report_keeps_descriptive_fields_when_omitted(client, db_session):
     # A full report populates the descriptive metadata.
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(
             fqdn="vm-test.lan", os_name="Debian GNU/Linux", os_version="13"
         ),
@@ -129,7 +135,7 @@ def test_report_keeps_descriptive_fields_when_omitted(client, db_session):
     partial = report_payload()
     for field in ("fqdn", "os_name", "os_version"):
         partial.pop(field, None)
-    r = client.post("/api/v1/reports", headers=bearer(token), json=partial)
+    r = client.post("/api/v1/reports", auth=signed(token), json=partial)
     assert r.status_code == 200, r.text
 
     host = db_session.get(Host, host_id)
@@ -143,7 +149,7 @@ def test_report_persists_source_package_and_codename(client, db_session):
 
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(
             os_codename="bookworm",
             packages=[pkg("libssl3", candidate="3.0.14", security=True, source="openssl")],
@@ -165,7 +171,7 @@ def test_report_accepts_pre_070_payload_without_source_fields(client, db_session
     # No os_codename, no per-package source_package (a 0.6.x agent).
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash")]),
     )
     assert r.status_code == 200, r.text
@@ -183,13 +189,13 @@ def test_report_keeps_os_codename_when_omitted(client, db_session):
 
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(os_codename="bookworm", packages=[pkg("bash")]),
     )
     # A later report that omits os_codename must not blank the stored value.
     partial = report_payload(packages=[pkg("bash")])
     partial.pop("os_codename", None)
-    r = client.post("/api/v1/reports", headers=bearer(token), json=partial)
+    r = client.post("/api/v1/reports", auth=signed(token), json=partial)
     assert r.status_code == 200, r.text
 
     assert db_session.get(Host, host_id).os_codename == "bookworm"
@@ -200,7 +206,7 @@ def test_report_rejects_oversized_body(client, monkeypatch):
     monkeypatch.setattr(settings, "max_report_bytes", 100)
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash"), pkg("coreutils")]),
     )
     assert r.status_code == 413, r.text
@@ -211,7 +217,7 @@ def test_report_rejects_too_many_packages(client, monkeypatch):
     monkeypatch.setattr(settings, "max_report_packages", 3)
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg(f"p{i}") for i in range(4)]),
     )
     assert r.status_code == 422, r.text
@@ -219,7 +225,7 @@ def test_report_rejects_too_many_packages(client, monkeypatch):
     # At the cap is fine.
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg(f"p{i}") for i in range(3)]),
     )
     assert r.status_code == 200, r.text
@@ -230,7 +236,7 @@ def test_report_piggybacks_pending_job(client, db_session):
     jr = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
     job_id = jr.json()["id"]
 
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 200
     handoff = r.json()["job"]
     assert handoff is not None and handoff["id"] == job_id

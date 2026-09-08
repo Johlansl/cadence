@@ -56,7 +56,7 @@ async def require_admin_key(
 def _resolve_active_token(
     db: Session, tok: AgentToken | None, now: datetime
 ) -> Host | None:
-    """The chain shared by both auth paths, in order:
+    """The token/host validity chain for the signed auth path, in order:
 
         token row exists (else None)
               -> not revoked, not expired (else None)
@@ -65,8 +65,7 @@ def _resolve_active_token(
 
     A disabled host is rejected even with a valid token, an active host is
     rejected with a revoked/expired one. Returns the host on success; the
-    caller turns None into the actual 401 (each path wants a different
-    "kind" for the throttle)."""
+    caller turns None into the actual 401."""
     if (
         tok is None
         or tok.revoked_at is not None
@@ -79,27 +78,6 @@ def _resolve_active_token(
     return host
 
 
-async def _auth_bearer(
-    db: Session, ip: str, authorization: str, now: datetime
-) -> tuple[Host, AgentToken]:
-    """Legacy path: the raw token is sent as a bearer value every request,
-    hashed and looked up. Kept for agents older than the signed-request
-    protocol (docs/decisions.md "Authentication" -- transition sequence)."""
-    scheme, _, token = authorization.partition(" ")
-    token = token.strip()
-    if scheme.lower() != "bearer" or not token:
-        await _reject_401(ip, "bearer", "invalid authorization header")
-
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    tok = db.execute(
-        select(AgentToken).where(AgentToken.token_hash == token_hash)
-    ).scalar_one_or_none()
-    host = _resolve_active_token(db, tok, now)
-    if host is None:
-        await _reject_401(ip, "bearer", "invalid token")
-    return host, tok
-
-
 async def _auth_signed(
     request: Request,
     db: Session,
@@ -109,12 +87,12 @@ async def _auth_signed(
     signature_hdr: str,
     now: datetime,
 ) -> tuple[Host, AgentToken]:
-    """New path: the raw token never crosses the wire. The agent sends the
-    same SHA-256 hash already stored in token_hash (a non-secret lookup key
-    it derives itself -- it reveals nothing usable without the real secret),
-    a timestamp, and an HMAC-SHA256 over `timestamp\\nMETHOD\\npath\\nsha256(body)`
-    keyed with the real secret. Verifying it needs that real secret, which is
-    why it must be recoverable (Fernet, app.core.crypto), not just hashed."""
+    """The raw token never crosses the wire. The agent sends the same SHA-256
+    hash already stored in token_hash (a non-secret lookup key it derives
+    itself -- it reveals nothing usable without the real secret), a timestamp,
+    and an HMAC-SHA256 over `timestamp\\nMETHOD\\npath\\nsha256(body)` keyed
+    with the real secret. Verifying it needs that real secret, which is why it
+    must be recoverable (Fernet, app.core.crypto), not just hashed."""
     tok = db.execute(
         select(AgentToken).where(AgentToken.token_hash == token_hash_hdr.strip().lower())
     ).scalar_one_or_none()
@@ -147,22 +125,17 @@ async def _auth_signed(
 
 async def get_current_host(
     request: Request,
-    authorization: str | None = Header(None, alias="Authorization"),
     x_cadence_token_hash: str | None = Header(None, alias="X-Cadence-Token-Hash"),
     x_cadence_timestamp: str | None = Header(None, alias="X-Cadence-Timestamp"),
     x_cadence_signature: str | None = Header(None, alias="X-Cadence-Signature"),
     db: Session = Depends(get_db),
 ) -> Host:
-    """Authenticate an agent request, one of two ways: the legacy bearer
-    header, or the new signed-request headers (X-Cadence-Token-Hash /
-    -Timestamp / -Signature). All three signed headers must be present
-    together or none at all -- a partial set is rejected outright rather
-    than silently falling back to bearer, so stripping one can never quietly
-    downgrade a request. Neither form present is a 401, same as an invalid
-    one (previously a 422 from a required Authorization header; see
-    tests/test_reports.py -- deliberate, this endpoint now accepts either
-    credential shape, so "sent none" is an authentication failure like any
-    other, not a malformed request)."""
+    """Authenticate an agent request from the signed-request headers
+    (X-Cadence-Token-Hash / -Timestamp / -Signature). All three must be
+    present together or none at all -- a partial set is rejected outright
+    with its own message, so stripping one can never quietly change how the
+    request is read. No headers at all is a 401, the same as an invalid
+    signature: this is an authentication failure, not a malformed request."""
     ip = client_ip(request)
     now = datetime.now(timezone.utc)
     signed_headers = (x_cadence_token_hash, x_cadence_timestamp, x_cadence_signature)
@@ -175,11 +148,8 @@ async def get_current_host(
         request.state.auth_scheme = "signed"
     elif any(signed_present):
         await _reject_401(ip, "signed", "incomplete signed-request headers")
-    elif authorization is not None:
-        host, tok = await _auth_bearer(db, ip, authorization, now)
-        request.state.auth_scheme = "bearer"
     else:
-        await _reject_401(ip, "bearer", "missing authorization")
+        await _reject_401(ip, "signed", "missing signed-request headers")
 
     throttle.record_success(ip)  # clear any backoff earned by earlier failures
     # Opportunistic, rides the request's own commit -- but only when it has

@@ -22,8 +22,8 @@ There is **no multi-user auth and no RBAC** (a deliberate V1 choice). Instead,
 Caddy applies HTTP **basic auth**, a single shared username/password
 (`CADENCE_DASHBOARD_*`), to everything except the agent endpoints
 (`/api/v1/reports`, `/api/v1/agent/*`, `/api/v1/jobs/*/result`, which use
-per-host Bearer tokens). It is **on by default**; `gen-secrets.sh` generates the
-credential and Caddy binds to `127.0.0.1` unless you set
+per-host signed-request tokens). It is **on by default**; `gen-secrets.sh`
+generates the credential and Caddy binds to `127.0.0.1` unless you set
 `CADENCE_HTTP_BIND=0.0.0.0`.
 
 What this does *not* give you: per-user identity (writes are audited, but only
@@ -80,29 +80,26 @@ accepted only while it is neither expired nor revoked *and* its host is
 `is_active`. Issue, list (with a derived active/expired/revoked state) and
 revoke via `/api/v1/admin/hosts/{id}/tokens`.
 
-Two credential shapes are accepted on any given request: the original
-bearer form (`Authorization: Bearer <token>`, hashed and looked up against
-`token_hash`), or a signed request (agent `0.8.0`+: `X-Cadence-Token-Hash` /
+Agent requests are signed (agent `0.8.0`+: `X-Cadence-Token-Hash` /
 `-Timestamp` / `-Signature`, an HMAC-SHA256 over the request keyed with the
-token, verified against `hmac.compare_digest`) that never puts the raw token
-on the wire per call. A partial set of the signed headers is rejected
-outright, never silently treated as bearer. Verifying a signature needs the
-real secret, so it is also kept Fernet-encrypted at rest
-(`CADENCE_TOKEN_ENCRYPTION_KEY`, same handling as `CADENCE_ADMIN_KEY`: a
-plaintext credential in `.env`, mode 0600, backed up with it, rotatable live
-via `_PREVIOUS`) alongside the existing one-way hash. A token issued before
-this existed has no encrypted copy and can only ever use the bearer form
-until it is rotated; see `docs/decisions.md` "Authentication" for the
-rollout order and when bearer support is retired for good.
+token, verified against `hmac.compare_digest`); the raw token never crosses
+the wire per call. A partial set of the signed headers is rejected outright.
+Verifying a signature needs the real secret, so it is kept Fernet-encrypted
+at rest (`CADENCE_TOKEN_ENCRYPTION_KEY`, same handling as `CADENCE_ADMIN_KEY`:
+a plaintext credential in `.env`, mode 0600, backed up with it, rotatable
+live via `_PREVIOUS`) alongside the one-way `token_hash` lookup key. A token
+issued before this scheme existed has no encrypted copy and cannot
+authenticate at all until its host is rotated onto a fresh token; see
+`docs/decisions.md` "Authentication". The earlier `Authorization: Bearer
+<token>` form is no longer accepted.
 
 Rotation is roll-forward: issue a new token, move the agent onto it, then
-revoke the old one, no window where the host cannot report. It is also the
-only way an existing token gains signed-request capability. Revocation is
+revoke the old one, no window where the host cannot report. Revocation is
 auth-plane only: it does **not** cancel a job already queued or running for
 that host (deactivate the host to stop new jobs being handed out).
 
-Caveats: a leaked token, in either form, is valid until it expires or is
-revoked; the plaintext is shown only once at issue time. A database
+Caveats: a leaked token is valid until it expires or is revoked; the
+plaintext is shown only once at issue time. A database
 compromise now also exposes the encrypted copy for every token issued under
 the signed scheme, recoverable by anyone who also holds
 `CADENCE_TOKEN_ENCRYPTION_KEY` -- the same trade `CADENCE_ADMIN_KEY` already
