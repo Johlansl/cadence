@@ -96,9 +96,12 @@ Extensibility is built in without over-engineering: `os_family` /
 ## Deployment notes
 
 - **Redeploy.** `scripts/deploy.sh` on the server is the one command: it
-  rebuilds and restarts the stack, prints the migration head, and re-stages the
-  agent bootstrap assets. `docker compose up -d --build` alone works for a
-  stack-only change but does not restage the agent.
+  rebuilds and restarts the stack, prints the migration head, re-stages the
+  agent bootstrap assets, and recreates Caddy so a host-edited `Caddyfile` or
+  the newly staged assets take effect (Caddy bind-mounts those paths by inode,
+  so a plain restart keeps serving the old content). `docker compose up -d
+  --build` alone works for a stack-only change but does neither the agent
+  restage nor the Caddy recreate.
 - **Migrations run on boot.** The backend/scheduler entrypoint waits for the
   database and runs `alembic upgrade head` before starting; the two containers
   serialise on a Postgres advisory lock. A fresh database is built straight

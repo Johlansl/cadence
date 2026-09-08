@@ -9,7 +9,8 @@
 #
 # This is the documented redeploy command. `docker compose up -d --build` on
 # its own still works for a stack-only change, but it does NOT restage the
-# agent -- forgetting that step is how a stale agent binary keeps being served.
+# agent (a stale agent binary keeps being served) and does NOT recreate caddy
+# to pick up a host-edited Caddyfile or the freshly staged bootstrap assets.
 
 set -eu
 
@@ -25,5 +26,15 @@ docker compose run --rm backend alembic current
 
 echo "deploy.sh: staging the agent bootstrap assets"
 "$here/publish-agent.sh"
+
+# caddy bind-mounts the Caddyfile, caddy/entrypoint.sh and ./dist. A host-side
+# edit (atomic write = new inode) or a recreated dist/ leaves the running
+# container on the old content: `caddy reload` then reports the config is
+# unchanged, and `up -d --build` does not recreate caddy because its image and
+# service spec are unchanged. Force a recreate every deploy so a Caddyfile edit
+# and the freshly staged assets always take effect. A few seconds of dashboard
+# downtime; agents retry and reports are durable.
+echo "deploy.sh: recreating caddy to pick up mounted-file changes"
+docker compose up -d --force-recreate --no-deps --wait caddy
 
 echo "deploy.sh: done"

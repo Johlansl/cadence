@@ -356,9 +356,11 @@ git pull && scripts/deploy.sh
 ```
 
 `scripts/deploy.sh` rebuilds and restarts the stack (`docker compose up -d
---build --wait`), prints the migration head, and re-stages the agent bootstrap
-assets so the served binary matches the checkout. `docker compose up -d --build`
-on its own still works for a stack-only change but skips the agent restage.
+--build --wait`), prints the migration head, re-stages the agent bootstrap
+assets so the served binary matches the checkout, and recreates Caddy so a
+host-edited `Caddyfile` or the freshly staged assets take effect. `docker
+compose up -d --build` on its own still works for a stack-only change but skips
+the agent restage and the Caddy recreate.
 
 A fresh database is built from revision `0001`. `backend/app/db/init.sql` is
 kept only as a reference copy of that baseline. If you are adopting a database
