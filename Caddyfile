@@ -60,6 +60,14 @@ http://{$CADENCE_SITE_ADDRESS} {
 		Referrer-Policy no-referrer
 		Cross-Origin-Opener-Policy same-origin
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+		# The dashboard is a self-contained inventory UI: no device sensors,
+		# camera/mic, geolocation, Payment Request, WebUSB, screen capture or
+		# programmatic fullscreen; interest-cohort=() opts out of FLoC.
+		Permissions-Policy "accelerometer=(), camera=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+		# Legacy header. 0 = disable the old XSS auditor (removed from Chrome,
+		# never in Firefox, caused info-leak bugs); the enforcing CSP above is
+		# the real defense. OWASP Secure Headers recommends exactly this.
+		X-XSS-Protection "0"
 	}
 	# basic_auth's 401 is a Caddy-generated error response and bypasses the
 	# handler chain above; re-apply the same hardening on the error path.
@@ -71,6 +79,8 @@ http://{$CADENCE_SITE_ADDRESS} {
 			X-Frame-Options DENY
 			Referrer-Policy no-referrer
 			Cross-Origin-Opener-Policy same-origin
+			Permissions-Policy "accelerometer=(), camera=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+			X-XSS-Protection "0"
 		}
 		respond "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
 	}

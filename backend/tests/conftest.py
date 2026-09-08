@@ -30,6 +30,9 @@ os.environ["CADENCE_ADMIN_KEY"] = ADMIN_KEY
 # The auth-failure throttle sleeps a worker thread; disable it so the negative
 # auth tests stay fast. Covered directly in test_auth_throttle.py.
 os.environ["CADENCE_DISABLE_AUTH_THROTTLE"] = "1"
+# The successful-traffic rate limiter would 429 the many requests a single test
+# fires. Off by default here; test_ratelimit.py re-enables it per test.
+os.environ["CADENCE_RATELIMIT_ENABLED"] = "false"
 # Fresh per test run; nothing needs it to persist across runs -- every test
 # token is issued and used within the one run that generated it.
 os.environ["CADENCE_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()

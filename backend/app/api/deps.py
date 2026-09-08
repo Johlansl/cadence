@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.crypto import decrypt_token_secret
+from app.core.ratelimit import note_rejected, ratelimiter
 from app.core.throttle import client_ip, throttle
 from app.db.base import SessionLocal
 from app.models.models import AgentToken, Host
@@ -41,6 +42,24 @@ async def _reject_401(ip: str, kind: str, detail: str) -> NoReturn:
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
 
 
+def _enforce_rate_limit(
+    request: Request, key: str, *, limit: int, surface: str, key_label: str
+) -> None:
+    """Count one successful authenticated request and raise 429 (with a
+    Retry-After header) if `key` is over `limit` for the configured window.
+    Volume cap only; auth failures are handled by _reject_401 / the throttle."""
+    retry_after = ratelimiter.check(
+        key, limit=limit, window=settings.ratelimit_window_seconds
+    )
+    if retry_after:
+        note_rejected(surface, key_label, limit, retry_after, request.url.path)
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate limit exceeded",
+            headers={"Retry-After": str(int(retry_after))},
+        )
+
+
 async def require_admin_key(
     request: Request, x_admin_key: str = Header(..., alias="X-Admin-Key")
 ) -> None:
@@ -51,6 +70,10 @@ async def require_admin_key(
     if not ok:
         await _reject_401(ip, "admin-key", "invalid admin key")
     throttle.record_success(ip)  # clear any backoff earned by earlier typos
+    _enforce_rate_limit(
+        request, f"admin:{ip}", limit=settings.ratelimit_admin_max,
+        surface="admin", key_label=ip,
+    )
 
 
 def _resolve_active_token(
@@ -152,6 +175,10 @@ async def get_current_host(
         await _reject_401(ip, "signed", "missing signed-request headers")
 
     throttle.record_success(ip)  # clear any backoff earned by earlier failures
+    _enforce_rate_limit(
+        request, tok.token_hash, limit=settings.ratelimit_agent_max,
+        surface="agent", key_label=tok.token_hash[:8],
+    )
     # Opportunistic, rides the request's own commit -- but only when it has
     # drifted past the resolution we care about, to keep this off the hot path.
     if tok.last_used_at is None or now - tok.last_used_at >= _LAST_USED_MIN_INTERVAL:
