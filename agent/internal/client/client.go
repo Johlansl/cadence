@@ -6,11 +6,15 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"cadence/agent/internal/report"
@@ -105,6 +109,23 @@ func (c *Client) SubmitJobResult(ctx context.Context, jobID string, result JobRe
 	return nil
 }
 
+// sign builds the three signed-request headers for one POST: the SHA-256 of
+// the token (a non-secret lookup key -- the server already stores the same
+// hash, never the raw secret over the wire), the current Unix timestamp, and
+// an HMAC-SHA256 over "timestamp\nMETHOD\npath\nsha256(body)" keyed with the
+// real token. Must match app.api.deps._auth_signed byte for byte.
+func (c *Client) sign(method, path string, body []byte) (tokenHash, timestamp, signature string) {
+	sum := sha256.Sum256([]byte(c.token))
+	tokenHash = hex.EncodeToString(sum[:])
+	timestamp = strconv.FormatInt(time.Now().Unix(), 10)
+	bodySum := sha256.Sum256(body)
+	canonical := timestamp + "\n" + method + "\n" + path + "\n" + hex.EncodeToString(bodySum[:])
+	mac := hmac.New(sha256.New, []byte(c.token))
+	mac.Write([]byte(canonical))
+	signature = hex.EncodeToString(mac.Sum(nil))
+	return tokenHash, timestamp, signature
+}
+
 // retryWaits is the delay before attempts 2..N. A transient network error or a
 // 5xx is retried; a 4xx is returned as-is (caller decides). The systemd timer
 // still drives the next full run -- this just rides out a brief server restart
@@ -127,7 +148,15 @@ func (c *Client) do(ctx context.Context, path string, body []byte) (*http.Respon
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		// Signed request, not a raw bearer token: the token never crosses the
+		// wire per call. A fresh timestamp each attempt (retries are seconds
+		// apart at most, well inside the server's freshness window). See
+		// docs/decisions.md "Authentication" for the canonical string and the
+		// server-side verification this must match byte for byte.
+		tokenHash, timestamp, signature := c.sign(http.MethodPost, path, body)
+		req.Header.Set("X-Cadence-Token-Hash", tokenHash)
+		req.Header.Set("X-Cadence-Timestamp", timestamp)
+		req.Header.Set("X-Cadence-Signature", signature)
 
 		resp, err := c.hc.Do(req)
 		if err != nil {

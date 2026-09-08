@@ -1,4 +1,4 @@
-from tests.conftest import bearer, create_host, pkg, report_payload
+from tests.conftest import create_host, pkg, report_payload, signed
 
 
 def test_report_history_newest_first_without_payload(client):
@@ -6,7 +6,7 @@ def test_report_history_newest_first_without_payload(client):
     for _ in range(3):
         client.post(
             "/api/v1/reports",
-            headers=bearer(token),
+            auth=signed(token),
             json=report_payload(
                 packages=[pkg("bash"), pkg("openssl", candidate="3.1", security=True)]
             ),
@@ -23,7 +23,7 @@ def test_report_history_newest_first_without_payload(client):
 def test_report_history_limit_and_before(client):
     hid, token = create_host(client)
     for _ in range(5):
-        client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+        client.post("/api/v1/reports", auth=signed(token), json=report_payload())
 
     page = client.get(f"/api/v1/hosts/{hid}/reports?limit=2").json()
     assert len(page) == 2

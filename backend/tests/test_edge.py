@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 
 from app.models.models import HostPackage, Package, Report
-from tests.conftest import ADMIN_HEADERS, bearer, create_host, pkg, report_payload
+from tests.conftest import ADMIN_HEADERS, create_host, pkg, report_payload, signed
 
 
 def test_raw_payload_keeps_unknown_fields(client, db_session):
@@ -10,7 +10,7 @@ def test_raw_payload_keeps_unknown_fields(client, db_session):
     payload["experimental_flag"] = True
     payload["packages"][0]["vendor_note"] = "kept"
 
-    r = client.post("/api/v1/reports", headers=bearer(token), json=payload)
+    r = client.post("/api/v1/reports", auth=signed(token), json=payload)
     assert r.status_code == 200
 
     row = db_session.execute(
@@ -25,8 +25,8 @@ def test_packages_dimension_is_shared_across_hosts(client, db_session):
     h2, t2 = create_host(client, hostname="b")
     common = pkg("openssl", candidate="3.1")
 
-    client.post("/api/v1/reports", headers=bearer(t1), json=report_payload(packages=[common]))
-    client.post("/api/v1/reports", headers=bearer(t2), json=report_payload(packages=[common]))
+    client.post("/api/v1/reports", auth=signed(t1), json=report_payload(packages=[common]))
+    client.post("/api/v1/reports", auth=signed(t2), json=report_payload(packages=[common]))
 
     n_pkg = db_session.execute(
         select(func.count()).select_from(Package).where(Package.name == "openssl")
@@ -49,11 +49,11 @@ def test_report_piggyback_and_poll_do_not_double_claim(client, db_session):
     host_id, token = create_host(client)
     client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
 
-    first = client.post("/api/v1/agent/next-job", headers=bearer(token)).json()["job"]
+    first = client.post("/api/v1/agent/next-job", auth=signed(token)).json()["job"]
     assert first is not None
 
     # A report right after must not hand the same (now running) job out again.
     second = client.post(
-        "/api/v1/reports", headers=bearer(token), json=report_payload()
+        "/api/v1/reports", auth=signed(token), json=report_payload()
     ).json()["job"]
     assert second is None

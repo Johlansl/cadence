@@ -12,13 +12,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import update
 
 from app.models.models import Host
-from tests.conftest import bearer, create_host, pkg, report_payload
+from tests.conftest import create_host, pkg, report_payload, signed
 
 
 def _report(client, token, hostname, **kw):
     # a report also syncs Host.hostname from the payload -- pass the real name
     r = client.post(
-        "/api/v1/reports", headers=bearer(token), json=report_payload(hostname=hostname, **kw)
+        "/api/v1/reports", auth=signed(token), json=report_payload(hostname=hostname, **kw)
     )
     assert r.status_code == 200, r.text
 

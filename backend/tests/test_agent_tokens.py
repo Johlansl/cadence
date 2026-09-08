@@ -13,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from app.core.crypto import decrypt_token_secret, encrypt_token_secret
 from app.models.models import AgentToken, AuditLog, Host
-from tests.conftest import ADMIN_HEADERS, bearer, create_host, report_payload
+from tests.conftest import ADMIN_HEADERS, create_host, report_payload, signed
 
 
 def _add_token(db, host_id, *, secret, **cols) -> None:
@@ -37,10 +38,14 @@ def test_create_host_makes_one_active_token(client, db_session):
     assert len(rows) == 1
     tok = rows[0]
     assert tok.label == "initial"
-    assert tok.revoked_at is None and tok.expires_at is None
+    assert tok.revoked_at is None
+    # Default expiry, not NULL (docs/decisions.md "Authentication").
+    assert tok.expires_at is not None
+    assert tok.expires_at > datetime.now(timezone.utc) + timedelta(days=364)
     assert tok.token_hash == hashlib.sha256(token.encode()).hexdigest()
+    assert decrypt_token_secret(tok.secret_encrypted) == token
 
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 200
 
 
@@ -55,29 +60,29 @@ def test_auth_updates_last_used_at(client, db_session):
     host_id, token = create_host(client)
     assert _last_used(db_session, host_id) is None
 
-    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    client.post("/api/v1/agent/next-job", auth=signed(token))
 
     assert _last_used(db_session, host_id) is not None
 
 
 def test_last_used_at_is_not_rewritten_every_request(client, db_session):
     host_id, token = create_host(client)
-    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    client.post("/api/v1/agent/next-job", auth=signed(token))
     first = _last_used(db_session, host_id)
     assert first is not None
 
     # A second call within the resolution window must not touch the row.
-    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    client.post("/api/v1/agent/next-job", auth=signed(token))
     assert _last_used(db_session, host_id) == first
 
 
 def test_last_used_at_advances_once_the_interval_passes(client, db_session, monkeypatch):
     monkeypatch.setattr("app.api.deps._LAST_USED_MIN_INTERVAL", timedelta(0))
     host_id, token = create_host(client)
-    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    client.post("/api/v1/agent/next-job", auth=signed(token))
     first = _last_used(db_session, host_id)
 
-    client.post("/api/v1/agent/next-job", headers=bearer(token))
+    client.post("/api/v1/agent/next-job", auth=signed(token))
     assert _last_used(db_session, host_id) > first
 
 
@@ -89,7 +94,7 @@ def test_revoked_token_is_rejected(client, db_session):
     tok.revoked_at = datetime.now(timezone.utc)
     db_session.commit()
 
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 401
 
 
@@ -101,23 +106,29 @@ def test_expired_token_is_rejected(client, db_session):
     tok.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     db_session.commit()
 
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 401
 
     # a not-yet-reached expiry still works
     tok.expires_at = datetime.now(timezone.utc) + timedelta(days=1)
     db_session.commit()
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 200
 
 
 def test_multiple_active_tokens_all_authenticate(client, db_session):
     host_id, first = create_host(client)
-    _add_token(db_session, host_id, secret="second-token-secret", label="rotated")
+    _add_token(
+        db_session,
+        host_id,
+        secret="second-token-secret",
+        secret_encrypted=encrypt_token_secret("second-token-secret"),
+        label="rotated",
+    )
 
     for secret in (first, "second-token-secret"):
         r = client.post(
-            "/api/v1/reports", headers=bearer(secret), json=report_payload()
+            "/api/v1/reports", auth=signed(secret), json=report_payload()
         )
         assert r.status_code == 200, secret
 
@@ -129,13 +140,13 @@ def test_inactive_host_rejects_a_valid_token(client, db_session):
         f"/api/v1/admin/hosts/{host_id}", headers=ADMIN_HEADERS, json={"is_active": False}
     )
 
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 401
 
     client.patch(
         f"/api/v1/admin/hosts/{host_id}", headers=ADMIN_HEADERS, json={"is_active": True}
     )
-    r = client.post("/api/v1/reports", headers=bearer(token), json=report_payload())
+    r = client.post("/api/v1/reports", auth=signed(token), json=report_payload())
     assert r.status_code == 200
 
 
@@ -173,7 +184,7 @@ def test_issue_list_revoke_flow(client, db_session):
 
     # the new token authenticates
     assert client.post(
-        "/api/v1/reports", headers=bearer(secret), json=report_payload()
+        "/api/v1/reports", auth=signed(secret), json=report_payload()
     ).status_code == 200
 
     lst = client.get(
@@ -192,10 +203,10 @@ def test_issue_list_revoke_flow(client, db_session):
         f"/api/v1/admin/hosts/{host_id}/tokens/{new_id}", headers=ADMIN_HEADERS
     ).status_code == 204
     assert client.post(
-        "/api/v1/reports", headers=bearer(secret), json=report_payload()
+        "/api/v1/reports", auth=signed(secret), json=report_payload()
     ).status_code == 401
     assert client.post(
-        "/api/v1/reports", headers=bearer(initial), json=report_payload()
+        "/api/v1/reports", auth=signed(initial), json=report_payload()
     ).status_code == 200  # the initial token is untouched
 
     lst = client.get(

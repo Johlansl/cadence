@@ -67,11 +67,11 @@ class Host(Base):
 
 
 class AgentToken(Base):
-    """A bearer token for one host's agent. Several may be active at once so a
-    token can be rotated without downtime. State is derived from revoked_at /
-    expires_at only -- no boolean flag that could drift. Nothing here touches
-    jobs: revoking a token is an auth-plane change, it does not cancel jobs.
-    See migration 0008."""
+    """An authentication token for one host's agent. Several may be active at
+    once so a token can be rotated without downtime. State is derived from
+    revoked_at / expires_at only -- no boolean flag that could drift. Nothing
+    here touches jobs: revoking a token is an auth-plane change, it does not
+    cancel jobs. See migration 0008."""
 
     __tablename__ = "agent_tokens"
 
@@ -80,6 +80,10 @@ class AgentToken(Base):
         Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False
     )
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    # Fernet-encrypted copy of the plaintext, so a signed request can be
+    # verified (needs the real secret, not a one-way hash). NULL for tokens
+    # issued before this existed -- see migration 0012.
+    secret_encrypted: Mapped[str | None] = mapped_column(Text)
     label: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

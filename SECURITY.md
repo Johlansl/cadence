@@ -22,8 +22,8 @@ There is **no multi-user auth and no RBAC** (a deliberate V1 choice). Instead,
 Caddy applies HTTP **basic auth**, a single shared username/password
 (`CADENCE_DASHBOARD_*`), to everything except the agent endpoints
 (`/api/v1/reports`, `/api/v1/agent/*`, `/api/v1/jobs/*/result`, which use
-per-host Bearer tokens). It is **on by default**; `gen-secrets.sh` generates the
-credential and Caddy binds to `127.0.0.1` unless you set
+per-host signed-request tokens). It is **on by default**; `gen-secrets.sh`
+generates the credential and Caddy binds to `127.0.0.1` unless you set
 `CADENCE_HTTP_BIND=0.0.0.0`.
 
 What this does *not* give you: per-user identity (writes are audited, but only
@@ -72,21 +72,43 @@ pruned after `CADENCE_AUDIT_RETENTION_DAYS` (default 365).
 
 ### Agent tokens
 
-Bearer tokens, SHA-256-hashed at rest, in the `agent_tokens` table (one per
-host at provisioning, more can be issued). Each can be given an optional
-`expires_at` and revoked at any time (`revoked_at`); a token is accepted only
-while it is neither expired nor revoked *and* its host is `is_active`. Issue,
-list (with a derived active/expired/revoked state) and revoke via
-`/api/v1/admin/hosts/{id}/tokens`.
+Per-host tokens in the `agent_tokens` table (one per host at provisioning,
+more can be issued). Each has an optional `expires_at` (defaults to
+`CADENCE_TOKEN_DEFAULT_EXPIRY_DAYS`, 365, unless the caller passes an
+explicit one) and can be revoked at any time (`revoked_at`); a token is
+accepted only while it is neither expired nor revoked *and* its host is
+`is_active`. Issue, list (with a derived active/expired/revoked state) and
+revoke via `/api/v1/admin/hosts/{id}/tokens`.
+
+Agent requests are signed (agent `0.8.0`+: `X-Cadence-Token-Hash` /
+`-Timestamp` / `-Signature`, an HMAC-SHA256 over the request keyed with the
+token, verified against `hmac.compare_digest`); the raw token never crosses
+the wire per call. A partial set of the signed headers is rejected outright.
+Verifying a signature needs the real secret, so it is kept Fernet-encrypted
+at rest (`CADENCE_TOKEN_ENCRYPTION_KEY`, same handling as `CADENCE_ADMIN_KEY`:
+a plaintext credential in `.env`, mode 0600, backed up with it, rotatable
+live via `_PREVIOUS`) alongside the one-way `token_hash` lookup key. A token
+issued before this scheme existed has no encrypted copy and cannot
+authenticate at all until its host is rotated onto a fresh token; see
+`docs/decisions.md` "Authentication". The earlier `Authorization: Bearer
+<token>` form is no longer accepted.
 
 Rotation is roll-forward: issue a new token, move the agent onto it, then
 revoke the old one, no window where the host cannot report. Revocation is
 auth-plane only: it does **not** cancel a job already queued or running for
 that host (deactivate the host to stop new jobs being handed out).
 
-Caveats: tokens still default to **no expiry** unless one is set; a leaked
-token is valid until it expires or is revoked, and can be replayed from
-anywhere until then; the plaintext is shown only once at issue time.
+Caveats: a leaked token is valid until it expires or is revoked; the
+plaintext is shown only once at issue time. A database
+compromise now also exposes the encrypted copy for every token issued under
+the signed scheme, recoverable by anyone who also holds
+`CADENCE_TOKEN_ENCRYPTION_KEY` -- the same trade `CADENCE_ADMIN_KEY` already
+makes, and no worse than the token itself already being usable by whoever
+compromises the server (it needs the real secret to sign a verification-
+equivalent too). A signed request's timestamp window
+(`CADENCE_SIGNATURE_WINDOW_SECONDS`, 300s) bounds clock-skew tolerance but is
+not full replay protection: a request captured inside that window could be
+resent once, verbatim, before it expires. No nonce/replay tracking yet.
 
 ### Agent bootstrap is trust-on-first-use over plain HTTP
 

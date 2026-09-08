@@ -2,24 +2,59 @@ package client
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
 	"cadence/agent/internal/report"
 )
 
+// verifySignedHeaders independently recomputes the expected signed-request
+// headers (mirroring app.api.deps._auth_signed) and fails the test if the
+// request the client actually sent does not match -- a real cross-check of
+// the wire format, not just "some headers are present".
+func verifySignedHeaders(t *testing.T, r *http.Request, token string, body []byte) {
+	t.Helper()
+	if got := r.Header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization should not be sent at all, got %q", got)
+	}
+	gotHash := r.Header.Get("X-Cadence-Token-Hash")
+	sum := sha256.Sum256([]byte(token))
+	if want := hex.EncodeToString(sum[:]); gotHash != want {
+		t.Errorf("X-Cadence-Token-Hash = %q, want %q", gotHash, want)
+	}
+	tsHdr := r.Header.Get("X-Cadence-Timestamp")
+	ts, err := strconv.ParseInt(tsHdr, 10, 64)
+	if err != nil {
+		t.Fatalf("X-Cadence-Timestamp = %q, not an integer: %v", tsHdr, err)
+	}
+	if skew := time.Now().Unix() - ts; skew < -5 || skew > 5 {
+		t.Errorf("X-Cadence-Timestamp skew = %ds, want within 5s of now", skew)
+	}
+	bodySum := sha256.Sum256(body)
+	canonical := tsHdr + "\n" + r.Method + "\n" + r.URL.Path + "\n" + hex.EncodeToString(bodySum[:])
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte(canonical))
+	want := hex.EncodeToString(mac.Sum(nil))
+	if got := r.Header.Get("X-Cadence-Signature"); got != want {
+		t.Errorf("X-Cadence-Signature = %q, want %q (canonical %q)", got, want, canonical)
+	}
+}
+
 func TestSendReportParsesJob(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/reports" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer tok" {
-			t.Errorf("Authorization = %q", got)
-		}
+		body, _ := io.ReadAll(r.Body)
+		verifySignedHeaders(t, r, "tok", body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"host_id":"h","job":{"id":"job-1","job_type":"apt_upgrade","params":{}}}`)
 	}))
@@ -95,12 +130,13 @@ func TestClaimNextJobEmpty(t *testing.T) {
 }
 
 func TestSubmitJobResult(t *testing.T) {
-	var gotPath, gotAuth string
+	var gotPath string
 	var gotBody JobResult
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		gotAuth = r.Header.Get("Authorization")
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		raw, _ := io.ReadAll(r.Body)
+		verifySignedHeaders(t, r, "tok", raw)
+		_ = json.Unmarshal(raw, &gotBody)
 		_, _ = io.WriteString(w, `{}`)
 	}))
 	defer srv.Close()
@@ -113,9 +149,6 @@ func TestSubmitJobResult(t *testing.T) {
 	}
 	if gotPath != "/api/v1/jobs/job-1/result" {
 		t.Errorf("path = %q", gotPath)
-	}
-	if gotAuth != "Bearer tok" {
-		t.Errorf("Authorization = %q", gotAuth)
 	}
 	if gotBody.Status != "succeeded" || !gotBody.RebootRequired || gotBody.Log != "done" {
 		t.Errorf("body = %+v", gotBody)
@@ -162,6 +195,32 @@ func TestDoDoesNotRetry4xx(t *testing.T) {
 	_ = New(srv.URL, "tok", time.Second).SubmitJobResult(context.Background(), "j", JobResult{Status: "succeeded"})
 	if calls != 1 {
 		t.Fatalf("calls = %d, want 1 (no retry on 4xx)", calls)
+	}
+}
+
+func TestDoSignsEachRetryAttemptIndependently(t *testing.T) {
+	old := retryWaits
+	retryWaits = []time.Duration{0, 0, 0}
+	defer func() { retryWaits = old }()
+
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		verifySignedHeaders(t, r, "tok", body) // every attempt must verify on its own
+		if calls < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = io.WriteString(w, `{"job":null}`)
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL, "tok", time.Second).ClaimNextJob(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
 	}
 }
 

@@ -1,7 +1,7 @@
 import uuid
 
 from app.models.models import Job
-from tests.conftest import ADMIN_HEADERS, bearer, create_host, report_payload
+from tests.conftest import ADMIN_HEADERS, create_host, report_payload, signed
 
 
 def _set_policy(client, host_id, value):
@@ -57,7 +57,7 @@ def test_create_job_rejects_bad_reboot_override(client):
 
 
 def _claim(client, token):
-    return client.post("/api/v1/agent/next-job", headers=bearer(token)).json()["job"]
+    return client.post("/api/v1/agent/next-job", auth=signed(token)).json()["job"]
 
 
 def test_effective_reboot_from_host_policy(client, db_session):
@@ -166,7 +166,7 @@ def test_reboot_job_success_clears_host_reboot_required(client, db_session):
 
     host_id, token = create_host(client)
     client.post(
-        "/api/v1/reports", headers=bearer(token),
+        "/api/v1/reports", auth=signed(token),
         json=report_payload(reboot_required=True),
     )
     assert db_session.get(Host, host_id).reboot_required is True
@@ -179,7 +179,7 @@ def test_reboot_job_success_clears_host_reboot_required(client, db_session):
     _claim(client, token)
     r = client.post(
         f"/api/v1/jobs/{jid}/result",
-        headers=bearer(token),
+        auth=signed(token),
         json={"status": "succeeded", "exit_code": 0},
     )
     assert r.status_code == 200, r.text

@@ -52,6 +52,9 @@ async def log_requests(request: Request, call_next):
                 "status": response.status_code,
                 "duration_ms": duration_ms,
                 "client": client_ip(request),
+                # Set to "signed" by app.api.deps.get_current_host on a
+                # successful agent auth; absent for every other request.
+                "auth_scheme": getattr(request.state, "auth_scheme", None),
             }
         },
     )

@@ -1,10 +1,10 @@
-from tests.conftest import bearer, create_host, pkg, report_payload
+from tests.conftest import create_host, pkg, report_payload, signed
 
 
 def _report(client, token, packages, hostname="vm-test"):
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=packages, hostname=hostname),
     )
     assert r.status_code == 200, r.text

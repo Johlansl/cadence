@@ -8,6 +8,14 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- **Breaking (agent auth).** The server now accepts only signed agent requests
+  (`X-Cadence-Token-Hash` / `X-Cadence-Timestamp` / `X-Cadence-Signature`,
+  agent `0.8.0`+); the legacy `Authorization: Bearer <token>` path in
+  `get_current_host` is removed. A host running an agent older than `0.8.0`, or
+  a `0.8.0`+ agent still on a token issued before the signed-request scheme
+  shipped (no stored encrypted copy), loses access and must be rotated onto a
+  fresh token and upgraded. A partial set of the signed headers is still
+  rejected outright. No schema change.
 - Bumped FastAPI (`0.115.6` → `0.141.1`) and Starlette (`0.41.3`, transitive →
   `1.6.0`, now pinned) to clear the security advisories accumulated on the old
   Starlette, including CVE-2026-48710 (unvalidated `Host` header used to rebuild

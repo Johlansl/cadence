@@ -11,7 +11,7 @@ from app.scheduler import (
     gc_orphan_packages,
     run_packages_gc_if_due,
 )
-from tests.conftest import bearer, create_host, pkg, report_payload
+from tests.conftest import create_host, pkg, report_payload, signed
 
 NOW = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -24,7 +24,7 @@ def test_gc_deletes_orphan_packages_only(client, db_session):
     _, token = create_host(client)
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash"), pkg("coreutils")]),
     )
     assert r.status_code == 200
@@ -45,7 +45,7 @@ def test_gc_disabled_is_a_noop(client, db_session, monkeypatch):
     _, token = create_host(client)
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash")]),
     )
     db_session.add(Package(name="ghost-pkg", architecture="amd64"))
@@ -61,7 +61,7 @@ def test_gc_runs_at_most_once_per_interval(client, db_session):
     _, token = create_host(client)
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash")]),
     )
 
@@ -92,13 +92,13 @@ def test_report_still_ingests_after_a_gc(client, db_session):
     _, token = create_host(client)
     client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash")]),
     )
     gc_orphan_packages(db_session)
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(packages=[pkg("bash"), pkg("vim", candidate="2:9.1-1")]),
     )
     assert r.status_code == 200, r.text

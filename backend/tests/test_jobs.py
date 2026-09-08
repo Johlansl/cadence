@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.models.models import Host, Job
-from tests.conftest import ADMIN_HEADERS, bearer, create_host
+from tests.conftest import ADMIN_HEADERS, create_host, signed
 
 
 def _make_job(client, host_id: str) -> str:
@@ -15,7 +15,7 @@ def test_next_job_claims_oldest_then_empty(client, db_session):
     host_id, token = create_host(client)
     job_id = _make_job(client, host_id)
 
-    r = client.post("/api/v1/agent/next-job", headers=bearer(token))
+    r = client.post("/api/v1/agent/next-job", auth=signed(token))
     assert r.status_code == 200
     assert r.json()["job"]["id"] == job_id
     assert db_session.get(Job, job_id).status == "running"
@@ -23,7 +23,7 @@ def test_next_job_claims_oldest_then_empty(client, db_session):
     # last_seen_at is bumped by the poll, too.
     assert db_session.get(Host, host_id).last_seen_at is not None
 
-    r = client.post("/api/v1/agent/next-job", headers=bearer(token))
+    r = client.post("/api/v1/agent/next-job", auth=signed(token))
     assert r.status_code == 200
     assert r.json()["job"] is None
 
@@ -31,11 +31,11 @@ def test_next_job_claims_oldest_then_empty(client, db_session):
 def test_job_result_transitions_and_conflicts(client, db_session):
     host_id, token = create_host(client)
     job_id = _make_job(client, host_id)
-    client.post("/api/v1/agent/next-job", headers=bearer(token))  # -> running
+    client.post("/api/v1/agent/next-job", auth=signed(token))  # -> running
 
     r = client.post(
         f"/api/v1/jobs/{job_id}/result",
-        headers=bearer(token),
+        auth=signed(token),
         json={"status": "succeeded", "exit_code": 0, "log": "ok", "reboot_required": False},
     )
     assert r.status_code == 200
@@ -45,7 +45,7 @@ def test_job_result_transitions_and_conflicts(client, db_session):
     # Second callback -> job no longer running.
     r = client.post(
         f"/api/v1/jobs/{job_id}/result",
-        headers=bearer(token),
+        auth=signed(token),
         json={"status": "failed", "exit_code": 1},
     )
     assert r.status_code == 409
@@ -58,7 +58,7 @@ def test_job_result_hidden_from_other_host(client):
 
     r = client.post(
         f"/api/v1/jobs/{job_id}/result",
-        headers=bearer(token_b),
+        auth=signed(token_b),
         json={"status": "succeeded", "exit_code": 0},
     )
     assert r.status_code == 404
@@ -67,10 +67,10 @@ def test_job_result_hidden_from_other_host(client):
 def test_clear_host_jobs(client):
     host_id, token = create_host(client)
     j1 = _make_job(client, host_id)
-    client.post("/api/v1/agent/next-job", headers=bearer(token))  # -> running
+    client.post("/api/v1/agent/next-job", auth=signed(token))  # -> running
     client.post(
         f"/api/v1/jobs/{j1}/result",
-        headers=bearer(token),
+        auth=signed(token),
         json={"status": "succeeded", "exit_code": 0},
     )
     _make_job(client, host_id)  # a second, pending

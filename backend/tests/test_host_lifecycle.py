@@ -1,6 +1,6 @@
 import uuid
 
-from tests.conftest import ADMIN_HEADERS, bearer, create_host, report_payload
+from tests.conftest import ADMIN_HEADERS, create_host, report_payload, signed
 
 
 def _patch(client, host_id, body):
@@ -11,7 +11,7 @@ def test_deactivate_blocks_reports_then_reactivate(client):
     host_id, token = create_host(client)
 
     # active host can report
-    assert client.post("/api/v1/reports", headers=bearer(token), json=report_payload()).status_code == 200
+    assert client.post("/api/v1/reports", auth=signed(token), json=report_payload()).status_code == 200
 
     r = _patch(client, host_id, {"is_active": False})
     assert r.status_code == 200 and r.json()["is_active"] is False
@@ -20,10 +20,10 @@ def test_deactivate_blocks_reports_then_reactivate(client):
     assert row["is_active"] is False
 
     # the agent's token is now rejected
-    assert client.post("/api/v1/reports", headers=bearer(token), json=report_payload()).status_code == 401
+    assert client.post("/api/v1/reports", auth=signed(token), json=report_payload()).status_code == 401
 
     assert _patch(client, host_id, {"is_active": True}).json()["is_active"] is True
-    assert client.post("/api/v1/reports", headers=bearer(token), json=report_payload()).status_code == 200
+    assert client.post("/api/v1/reports", auth=signed(token), json=report_payload()).status_code == 200
 
 
 def test_patch_empty_body_422(client):

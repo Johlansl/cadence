@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import delete, select
@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.api.audit import record_audit
 from app.api.deps import get_db, require_admin_key
 from app.api.pagination import before_keyset
+from app.core.config import settings
+from app.core.crypto import encrypt_token_secret
 from app.models.models import AgentToken, AuditLog, Host, Job
 from app.schemas.schemas import (
     AuditEntry,
@@ -35,12 +37,23 @@ router = APIRouter(
 )
 
 
+def _default_token_expiry() -> datetime:
+    """A token with no explicit expires_at gets this instead of NULL --
+    CADENCE_TOKEN_DEFAULT_EXPIRY_DAYS, 365 by default. Explicit overrides
+    (TokenCreate.expires_at) are unaffected; this only fills the gap when
+    none was given."""
+    return datetime.now(timezone.utc) + timedelta(days=settings.token_default_expiry_days)
+
+
 @router.post("/hosts", response_model=HostCreated, status_code=status.HTTP_201_CREATED)
 def create_host(
     request: Request, payload: HostCreate, db: Session = Depends(get_db)
 ) -> HostCreated:
-    # Generate the agent's first token; only its sha256 hash is ever stored.
-    # Further tokens are issued/revoked via /admin/hosts/{id}/tokens.
+    # Generate the agent's first token. Its hash is stored for the legacy
+    # bearer path and an encrypted copy for the signed-request path (see
+    # app.core.crypto); no override param here, this token always gets the
+    # default expiry. Further tokens are issued/revoked via
+    # /admin/hosts/{id}/tokens.
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
@@ -51,7 +64,15 @@ def create_host(
     )
     db.add(host)
     db.flush()  # populate host.id for the token + audit rows
-    db.add(AgentToken(host_id=host.id, token_hash=token_hash, label="initial"))
+    db.add(
+        AgentToken(
+            host_id=host.id,
+            token_hash=token_hash,
+            secret_encrypted=encrypt_token_secret(token),
+            label="initial",
+            expires_at=_default_token_expiry(),
+        )
+    )
     record_audit(
         db, request, "host.create", target_type="host", target_id=host.id,
         detail={"hostname": host.hostname},
@@ -228,8 +249,9 @@ def issue_host_token(
     tok = AgentToken(
         host_id=host_id,
         token_hash=hashlib.sha256(secret.encode()).hexdigest(),
+        secret_encrypted=encrypt_token_secret(secret),
         label=payload.label,
-        expires_at=payload.expires_at,
+        expires_at=payload.expires_at or _default_token_expiry(),
     )
     db.add(tok)
     db.flush()  # populate tok.id for the audit row

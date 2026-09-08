@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.models.models import Advisory, AdvisoryPackage
-from tests.conftest import bearer, create_host, pkg, report_payload
+from tests.conftest import create_host, pkg, report_payload, signed
 
 FIXED = "3.0.14-1~deb12u2"
 DSA_URL = "https://security-tracker.debian.org/tracker/DSA-5745-1"
@@ -59,7 +59,7 @@ def _report(client, token, packages, *, os_version="12", os_codename=None):
     extra = {"os_codename": os_codename} if os_codename is not None else {}
     r = client.post(
         "/api/v1/reports",
-        headers=bearer(token),
+        auth=signed(token),
         json=report_payload(
             hostname="vm-a", os_version=os_version, packages=packages, **extra
         ),
