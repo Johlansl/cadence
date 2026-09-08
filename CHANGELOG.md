@@ -8,6 +8,13 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- `GET /api/v1/packages` is now keyset-paginated, matching `/hosts`,
+  `/hosts/{id}/jobs`, `/hosts/{id}/reports` and `/admin/audit`: `limit`
+  (default 50, max 500) plus an `after` / `after_id` cursor holding the last
+  row's package name and architecture. The default cap replaces what was an
+  unbounded `(package x host)` scan on every dashboard poll. The response
+  shape is unchanged (a plain list of package groups). The Packages view gains
+  a "Load more" button when a full page is returned.
 - **Breaking (agent auth).** The server now accepts only signed agent requests
   (`X-Cadence-Token-Hash` / `X-Cadence-Timestamp` / `X-Cadence-Signature`,
   agent `0.8.0`+); the legacy `Authorization: Bearer <token>` path in

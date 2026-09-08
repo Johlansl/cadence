@@ -193,10 +193,11 @@ def pkg(
     candidate: str | None = None,
     security: bool = False,
     source: str | None = None,
+    architecture: str = "amd64",
 ) -> dict:
     row = {
         "name": name,
-        "architecture": "amd64",
+        "architecture": architecture,
         "installed_version": "1.0",
         "candidate_version": candidate,
         "is_security_update": security,

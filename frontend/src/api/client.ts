@@ -82,10 +82,21 @@ export const api = {
   getHost: (id: string) => getJSON<HostDetail>(`/hosts/${id}`),
   getFleetSummary: () => getJSON<FleetSummary>('/fleet/summary'),
 
-  listPackages: (opts: { name?: string; status?: PackageStatusFilter } = {}) => {
+  listPackages: (
+    opts: {
+      name?: string
+      status?: PackageStatusFilter
+      limit?: number
+      after?: string
+      afterId?: string
+    } = {},
+  ) => {
     const p = new URLSearchParams()
     if (opts.name) p.set('name', opts.name)
     if (opts.status) p.set('status', opts.status)
+    if (opts.limit) p.set('limit', String(opts.limit))
+    if (opts.after) p.set('after', opts.after)
+    if (opts.afterId) p.set('after_id', opts.afterId)
     const qs = p.toString()
     return getJSON<PackageSummaryRow[]>(`/packages${qs ? `?${qs}` : ''}`)
   },

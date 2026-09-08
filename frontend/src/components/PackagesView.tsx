@@ -5,6 +5,9 @@ import type { PackageStatusFilter, PackageSummaryRow } from '../types'
 
 const POLL_MS = 30_000
 const DEBOUNCE_MS = 300
+// Matches the backend default page size for GET /api/v1/packages. Sent
+// explicitly so "is there another page" is just `page.length === PAGE_SIZE`.
+const PAGE_SIZE = 50
 
 const STATUS_OPTIONS: { value: PackageStatusFilter; label: string }[] = [
   { value: 'pending', label: 'pending updates' },
@@ -18,6 +21,8 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
   const [debouncedName, setDebouncedName] = useState('')
   const [status, setStatus] = useState<PackageStatusFilter>('pending')
   const [rows, setRows] = useState<PackageSummaryRow[]>([])
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -26,15 +31,18 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
     return () => clearTimeout(t)
   }, [name])
 
+  // First page: on mount, on any filter change, and on the poll. Replaces the
+  // list (an expanded "Load more" view collapses back to page 1 on the poll).
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     const load = () =>
       api
-        .listPackages({ name: debouncedName || undefined, status })
+        .listPackages({ name: debouncedName || undefined, status, limit: PAGE_SIZE })
         .then((r) => {
           if (cancelled) return
           setRows(r)
+          setHasMore(r.length === PAGE_SIZE)
           setError(null)
         })
         .catch((e) => {
@@ -50,6 +58,27 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
       clearInterval(t)
     }
   }, [debouncedName, status])
+
+  const loadMore = () => {
+    const last = rows[rows.length - 1]
+    if (!last || loadingMore) return
+    setLoadingMore(true)
+    api
+      .listPackages({
+        name: debouncedName || undefined,
+        status,
+        limit: PAGE_SIZE,
+        after: last.name,
+        afterId: last.architecture,
+      })
+      .then((r) => {
+        setRows((prev) => [...prev, ...r])
+        setHasMore(r.length === PAGE_SIZE)
+        setError(null)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoadingMore(false))
+  }
 
   const emptyLabel =
     status === 'pending'
@@ -146,6 +175,17 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
             </li>
           ))}
         </ul>
+      )}
+
+      {hasMore && (
+        <button
+          type="button"
+          onClick={loadMore}
+          disabled={loadingMore}
+          className="rounded border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:border-zinc-500 disabled:opacity-50"
+        >
+          {loadingMore ? 'loading…' : 'Load more'}
+        </button>
       )}
     </div>
   )

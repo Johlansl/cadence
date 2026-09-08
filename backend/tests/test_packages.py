@@ -67,3 +67,96 @@ def test_packages_no_match_returns_empty_list(client):
 
     r = client.get("/api/v1/packages", params={"name": "nonexistent"})
     assert r.json() == []
+
+
+# --- keyset pagination -------------------------------------------------------
+
+
+def _walk(client, limit=2, **params):
+    """Page through every group at `limit`, following (after, after_id) =
+    the last row's (name, architecture)."""
+    seen: list[tuple[str, str]] = []
+    qs = {"limit": limit, "status": "all", **params}
+    for _ in range(100):  # safety stop
+        page = client.get("/api/v1/packages", params=qs).json()
+        seen.extend((p["name"], p["architecture"]) for p in page)
+        if len(page) < limit:
+            break
+        last = page[-1]
+        qs = {
+            "limit": limit,
+            "status": "all",
+            "after": last["name"],
+            "after_id": last["architecture"],
+            **params,
+        }
+    return seen
+
+
+def test_packages_default_limit_is_50(client):
+    host_id, token = create_host(client)
+    _report(client, token, [pkg(f"p{i:03d}") for i in range(60)])
+
+    body = client.get("/api/v1/packages", params={"status": "all"}).json()
+    assert [p["name"] for p in body] == [f"p{i:03d}" for i in range(50)]
+
+
+def test_packages_custom_limit_returns_first_n_by_key(client):
+    host_id, token = create_host(client)
+    _report(client, token, [pkg(f"p{i:03d}") for i in range(10)])
+
+    body = client.get("/api/v1/packages", params={"status": "all", "limit": 5}).json()
+    assert [p["name"] for p in body] == [f"p{i:03d}" for i in range(5)]
+
+
+def test_packages_keyset_walks_every_group_once_with_arch_tiebreaker(client):
+    host_id, token = create_host(client)
+    _report(
+        client,
+        token,
+        [
+            pkg("acl"),
+            pkg("libc6", architecture="amd64"),
+            pkg("libc6", architecture="arm64"),
+            pkg("zlib"),
+        ],
+    )
+
+    paged = _walk(client, limit=2)
+    full = [
+        (p["name"], p["architecture"])
+        for p in client.get("/api/v1/packages", params={"status": "all", "limit": 500}).json()
+    ]
+
+    assert full == [("acl", "amd64"), ("libc6", "amd64"), ("libc6", "arm64"), ("zlib", "amd64")]
+    assert paged == full  # same set, same order, no repeats, no gaps
+    assert len(set(paged)) == len(paged)
+
+
+def test_packages_pagination_consistent_with_name_filter(client):
+    host_id, token = create_host(client)
+    _report(client, token, [pkg("lib-a"), pkg("lib-b"), pkg("other")])
+
+    paged = _walk(client, limit=1, name="lib")
+    assert paged == [("lib-a", "amd64"), ("lib-b", "amd64")]
+    assert ("other", "amd64") not in paged
+
+
+def test_packages_after_without_after_id_is_strict_on_name(client):
+    host_id, token = create_host(client)
+    _report(
+        client,
+        token,
+        [pkg("libc6", architecture="amd64"), pkg("libc6", architecture="arm64"), pkg("zzz")],
+    )
+
+    body = client.get(
+        "/api/v1/packages", params={"status": "all", "after": "libc6"}
+    ).json()
+    # every group whose name == "libc6" is excluded, both arches
+    assert [p["name"] for p in body] == ["zzz"]
+
+
+def test_packages_limit_bounds_rejected(client):
+    assert client.get("/api/v1/packages", params={"limit": 0}).status_code == 422
+    assert client.get("/api/v1/packages", params={"limit": 501}).status_code == 422
