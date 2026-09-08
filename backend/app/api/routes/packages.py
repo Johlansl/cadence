@@ -6,12 +6,13 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import and_, select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import and_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.advisories.match import advisories_for, codename_for, source_for
 from app.api.deps import get_db
+from app.api.pagination import after_keyset
 from app.models.models import Host, HostPackage, Package
 from app.schemas.schemas import PackageHostOut, PackageSummary
 
@@ -24,8 +25,53 @@ PackageStatus = Literal["pending", "security", "all"]
 def list_packages(
     name: str | None = None,
     status: PackageStatus = "pending",
+    limit: int = Query(50, ge=1, le=500),
+    after: str | None = Query(
+        None, description="page cursor: package name of the last row"
+    ),
+    after_id: str | None = Query(
+        None,
+        description="page cursor: architecture of the last row (pass with `after`)",
+    ),
     db: Session = Depends(get_db),
 ) -> list[PackageSummary]:
+    # The name / status filters go on both queries below, so a filtered page
+    # walks the filtered domain exactly as an unfiltered page walks the whole.
+    filters = []
+    if name:
+        filters.append(Package.name.ilike(f"%{name}%"))
+    if status == "pending":
+        filters.append(HostPackage.candidate_version.is_not(None))
+    elif status == "security":
+        filters.append(
+            and_(
+                HostPackage.candidate_version.is_not(None),
+                HostPackage.is_security_update.is_(True),
+            )
+        )
+
+    # 1. Which (name, architecture) groups are on this page. Keyset over the
+    #    same (name, architecture) order the row query uses, so a group is
+    #    never split across a page boundary. `packages` has UNIQUE(name,
+    #    architecture), so that pair is a stable non-null cursor.
+    page_stmt = (
+        select(Package.name, Package.architecture)
+        .join(HostPackage, HostPackage.package_id == Package.id)
+        .join(Host, Host.id == HostPackage.host_id)
+        .group_by(Package.name, Package.architecture)
+        .order_by(Package.name, Package.architecture)
+        .limit(limit)
+    )
+    if filters:
+        page_stmt = page_stmt.where(*filters)
+    keyset = after_keyset(Package.name, Package.architecture, after, after_id)
+    if keyset is not None:
+        page_stmt = page_stmt.where(keyset)
+    page_keys = [(r.name, r.architecture) for r in db.execute(page_stmt).all()]
+    if not page_keys:
+        return []
+
+    # 2. Every (package x host) row for those groups.
     stmt = (
         select(
             Package.name,
@@ -43,19 +89,11 @@ def list_packages(
         )
         .join(HostPackage, HostPackage.package_id == Package.id)
         .join(Host, Host.id == HostPackage.host_id)
+        .where(tuple_(Package.name, Package.architecture).in_(page_keys))
         .order_by(Package.name, Package.architecture, Host.hostname)
     )
-    if name:
-        stmt = stmt.where(Package.name.ilike(f"%{name}%"))
-    if status == "pending":
-        stmt = stmt.where(HostPackage.candidate_version.is_not(None))
-    elif status == "security":
-        stmt = stmt.where(
-            and_(
-                HostPackage.candidate_version.is_not(None),
-                HostPackage.is_security_update.is_(True),
-            )
-        )
+    if filters:
+        stmt = stmt.where(*filters)
 
     all_rows = db.execute(stmt).all()
 

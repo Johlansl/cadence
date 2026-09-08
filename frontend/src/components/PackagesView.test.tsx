@@ -45,6 +45,37 @@ describe('PackagesView', () => {
     expect(lastUrl(fetchMock)).toContain('status=pending')
   })
 
+  it('shows "Load more" only when a full page came back, and appends the next page', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) =>
+      row({ name: `p${String(i).padStart(3, '0')}` }),
+    )
+    const page2 = [row({ name: 'zzz-a' }), row({ name: 'zzz-b' })]
+    const fetchMock = installFetchMock({
+      [PACKAGES_URL]: (req) => (req.url.includes('after=') ? { body: page2 } : { body: page1 }),
+    })
+    render(<PackagesView onSelectHost={() => {}} />)
+
+    expect(await screen.findByText('p000')).toBeInTheDocument()
+    const more = await screen.findByRole('button', { name: 'Load more' })
+
+    await userEvent.click(more)
+
+    expect(await screen.findByText('zzz-a')).toBeInTheDocument()
+    expect(screen.getByText('p049')).toBeInTheDocument() // page 1 still shown
+    expect(lastUrl(fetchMock)).toContain('after=p049')
+    expect(lastUrl(fetchMock)).toContain('after_id=amd64')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('shows no "Load more" when the first page is not full', async () => {
+    installFetchMock({ [PACKAGES_URL]: { body: [row()] } })
+    render(<PackagesView onSelectHost={() => {}} />)
+    expect(await screen.findByText('openssl')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+  })
+
   it('shows a friendly empty state', async () => {
     installFetchMock({ [PACKAGES_URL]: { body: [] } })
     render(<PackagesView onSelectHost={() => {}} />)
