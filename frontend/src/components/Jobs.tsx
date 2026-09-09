@@ -29,6 +29,27 @@ function JobBadge({ status }: { status: JobStatus }) {
   return <span className={pill(STATUS_TONE[status])}>{status}</span>
 }
 
+// Failure categories the agent / reaper set on a failed job (server roadmap
+// item 2). Unknown values fall back to a neutral pill.
+const FAILURE_TONE: Record<string, Tone> = {
+  apt_locked: 'warn',
+  network_or_repo: 'warn',
+  timeout: 'warn',
+  dpkg_error: 'danger',
+  disk_full: 'danger',
+  agent_lost: 'neutral',
+  agent_refused: 'neutral',
+  unknown: 'neutral',
+}
+
+function FailureBadge({ category, summary }: { category: string; summary: string | null }) {
+  return (
+    <span className={pill(FAILURE_TONE[category] ?? 'neutral')} title={summary ?? undefined}>
+      {category.replace(/_/g, ' ')}
+    </span>
+  )
+}
+
 function duration(from: string | null, to: string | null): string | null {
   if (!from || !to) return null
   const s = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 1000)
@@ -225,6 +246,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                   >
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-zinc-400">
                       <JobBadge status={j.status} />
+                      {j.status === 'failed' && j.failure_category && (
+                        <FailureBadge category={j.failure_category} summary={j.failure_summary} />
+                      )}
                       <span className="font-mono text-zinc-300">{j.job_type}</span>
                       <span>
                         · <RelativeTime iso={j.created_at} />
@@ -244,6 +268,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                         <span className="text-zinc-600">· the agent picks it up within ~1 min</span>
                       )}
                     </div>
+                    {j.status === 'failed' && j.failure_summary && (
+                      <p className="mt-1 text-zinc-500">{j.failure_summary}</p>
+                    )}
                     {j.log && (
                       <details className="mt-1">
                         <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">

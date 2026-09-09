@@ -68,7 +68,53 @@ def test_job_failed_event(client, db_session):
 
     rows = _deliveries(db_session, "job.failed")
     assert len(rows) == 1
-    assert rows[0].payload["data"]["exit_code"] == 1
+    data = rows[0].payload["data"]
+    assert data["exit_code"] == 1
+    # Keys present on every job.failed, however the job failed.
+    assert data["reaped"] is False
+    assert data["failure_category"] is None
+    assert data["failure_summary"] is None
+
+
+def test_job_failed_event_carries_the_classification(client, db_session):
+    host_id, token = create_host(client)
+    webhook_row(db_session, events=("job.failed",))
+    db_session.flush()
+
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={}
+    )
+    job_id = r.json()["id"]
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "failed",
+            "exit_code": 100,
+            "log": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+            "failure_category": "dpkg_error",
+            "failure_summary": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    data = _deliveries(db_session, "job.failed")[0].payload["data"]
+    assert data["reaped"] is False
+    assert data["failure_category"] == "dpkg_error"
+    assert data["failure_summary"].startswith("E: Sub-process")
+
+
+def test_job_succeeded_event_has_no_failure_keys(client, db_session):
+    host_id, token = create_host(client)
+    webhook_row(db_session, events=("job.succeeded",))
+    db_session.flush()
+
+    _run_job(client, host_id, token, status="succeeded")
+
+    data = _deliveries(db_session, "job.succeeded")[0].payload["data"]
+    assert "failure_category" not in data
+    assert "reaped" not in data
 
 
 def test_job_log_is_truncated_in_the_payload(client, db_session, monkeypatch):

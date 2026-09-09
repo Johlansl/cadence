@@ -16,6 +16,8 @@ function job(over: Partial<Job> = {}): Job {
     requested_by: 'dashboard',
     result: null,
     log: null,
+    failure_category: null,
+    failure_summary: null,
     created_at: '2026-08-01T00:00:00Z',
     started_at: null,
     completed_at: null,
@@ -41,6 +43,35 @@ describe('Jobs', () => {
 
     expect(await screen.findByText('apt_upgrade')).toBeInTheDocument()
     expect(screen.getByText('failed')).toBeInTheDocument()
+  })
+
+  it('shows the failure category and summary on a failed job', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            status: 'failed',
+            log: 'boom',
+            failure_category: 'dpkg_error',
+            failure_summary: 'E: Sub-process /usr/bin/dpkg returned an error code (1)',
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText('dpkg error')).toBeInTheDocument()
+    expect(
+      screen.getByText('E: Sub-process /usr/bin/dpkg returned an error code (1)'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows no failure badge on a succeeded job', async () => {
+    installFetchMock({ [JOBS_URL]: { body: [job({ status: 'succeeded' })] } })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    await screen.findByText('apt_upgrade')
+    expect(screen.queryByText('dpkg error')).not.toBeInTheDocument()
   })
 
   it('triggers a dist-upgrade with the stored admin key and toasts', async () => {

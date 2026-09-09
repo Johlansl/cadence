@@ -30,21 +30,28 @@ def on_job_result(
     if not settings.webhooks_enabled:
         return
     occurred_at = occurred_at or datetime.now(timezone.utc)
-    event_type = "job.succeeded" if status == "succeeded" else "job.failed"
+    failed = status == "failed"
+    data = {
+        "job_id": str(job.id),
+        "host_id": str(job.host_id),
+        "hostname": host.hostname,
+        "job_type": job.job_type,
+        "status": status,
+        "exit_code": exit_code,
+        "requested_by": job.requested_by,
+        "completed_at": iso_z(job.completed_at) if job.completed_at else None,
+        "log": truncate_log(log_text or "", settings.webhook_log_max_bytes),
+    }
+    if failed:
+        # Same three keys the reaper's job.failed carries (on_job_reaped), so a
+        # consumer sees one shape for job.failed however the job failed.
+        data["reaped"] = False
+        data["failure_category"] = job.failure_category
+        data["failure_summary"] = job.failure_summary
     enqueue_event(
         db,
-        event_type,
-        {
-            "job_id": str(job.id),
-            "host_id": str(job.host_id),
-            "hostname": host.hostname,
-            "job_type": job.job_type,
-            "status": status,
-            "exit_code": exit_code,
-            "requested_by": job.requested_by,
-            "completed_at": iso_z(job.completed_at) if job.completed_at else None,
-            "log": truncate_log(log_text or "", settings.webhook_log_max_bytes),
-        },
+        "job.failed" if failed else "job.succeeded",
+        data,
         occurred_at=occurred_at,
     )
 
