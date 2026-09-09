@@ -124,6 +124,46 @@ export interface ScheduleInput {
   params: Record<string, unknown>
 }
 
+export type WebhookEvent =
+  | 'job.succeeded'
+  | 'job.failed'
+  | 'host.offline'
+  | 'host.reboot_required'
+  | 'host.security_updates_available'
+
+export interface Webhook {
+  id: string
+  url_preview: string
+  enabled: boolean
+  event_types: WebhookEvent[]
+  description: string | null
+  created_at: string
+  updated_at: string
+  last_success_at: string | null
+  last_error: string | null
+  pending_count: number
+  failed_count: number
+}
+
+export interface WebhookInput {
+  url: string
+  event_types: WebhookEvent[]
+  enabled: boolean
+  description: string | null
+}
+
+// The one response that carries the full URL and the plaintext secret, shown
+// once at creation.
+export interface WebhookCreated {
+  id: string
+  url: string
+  secret: string
+  enabled: boolean
+  event_types: WebhookEvent[]
+  description: string | null
+  created_at: string
+}
+
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
 export interface Job {

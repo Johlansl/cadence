@@ -9,19 +9,23 @@ import { HostList } from './components/HostList'
 import { OverviewChips, SilentBanner } from './components/Overview'
 import { PackagesView } from './components/PackagesView'
 import { RelativeTime } from './components/RelativeTime'
+import { WebhooksView } from './components/WebhooksView'
 import { EMPTY_FILTERS, filterHosts, type HostFilters as Filters } from './lib/hostFilter'
 import type { HostDetail as HostDetailData, HostSummary } from './types'
 
 const POLL_MS = 30_000
 
-// The current view is mirrored in the URL hash (#host=<id> or #packages) so a
-// reload keeps the view and the link is shareable.
+// The current view is mirrored in the URL hash (#host=<id>, #packages,
+// #webhooks) so a reload keeps the view and the link is shareable.
 function readHashHostId(): string | null {
   const m = /(?:^|[#&])host=([^&]+)/.exec(window.location.hash)
   return m ? decodeURIComponent(m[1]) : null
 }
 function readHashIsPackages(): boolean {
   return window.location.hash === '#packages'
+}
+function readHashIsWebhooks(): boolean {
+  return window.location.hash === '#webhooks'
 }
 function writeHash(next: string): void {
   if (window.location.hash === next) return
@@ -33,6 +37,7 @@ export default function App() {
   const [hosts, setHosts] = useState<HostSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(readHashHostId)
   const [showPackages, setShowPackages] = useState<boolean>(readHashIsPackages)
+  const [showWebhooks, setShowWebhooks] = useState<boolean>(readHashIsWebhooks)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   // Two independent failures: the host-list poll drives the global sync
   // indicator; a host-detail poll failure is shown in the detail pane only,
@@ -105,13 +110,22 @@ export default function App() {
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
     setShowPackages(false)
+    setShowWebhooks(false)
     writeHash(id ? `#host=${encodeURIComponent(id)}` : '')
   }, [])
 
   const selectPackages = useCallback(() => {
     setSelectedId(null)
     setShowPackages(true)
+    setShowWebhooks(false)
     writeHash('#packages')
+  }, [])
+
+  const selectWebhooks = useCallback(() => {
+    setSelectedId(null)
+    setShowPackages(false)
+    setShowWebhooks(true)
+    writeHash('#webhooks')
   }, [])
 
   // Called after a host mutation from the detail pane.
@@ -129,6 +143,7 @@ export default function App() {
     const onHashChange = () => {
       setSelectedId(readHashHostId())
       setShowPackages(readHashIsPackages())
+      setShowWebhooks(readHashIsWebhooks())
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
@@ -154,6 +169,15 @@ export default function App() {
             }`}
           >
             Packages
+          </button>
+          <button
+            type="button"
+            onClick={selectWebhooks}
+            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+              showWebhooks ? 'text-zinc-200' : 'text-zinc-500'
+            }`}
+          >
+            Webhooks
           </button>
           <OverviewChips hosts={hosts} />
         </div>
@@ -204,7 +228,9 @@ export default function App() {
           </nav>
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {showPackages ? (
+          {showWebhooks ? (
+            <WebhooksView />
+          ) : showPackages ? (
             <PackagesView onSelectHost={select} />
           ) : detail ? (
             <>
