@@ -249,6 +249,14 @@ export function Jobs({ hostId }: { hostId: string }) {
                       {j.status === 'failed' && j.failure_category && (
                         <FailureBadge category={j.failure_category} summary={j.failure_summary} />
                       )}
+                      {j.result?.held_conflicts != null && j.result.held_conflicts.length > 0 && (
+                        <span
+                          className={pill('warn')}
+                          title={`policy holds may have blocked: ${j.result.held_conflicts.join(', ')}`}
+                        >
+                          hold conflict
+                        </span>
+                      )}
                       <span className="font-mono text-zinc-300">{j.job_type}</span>
                       <span>
                         · <RelativeTime iso={j.created_at} />

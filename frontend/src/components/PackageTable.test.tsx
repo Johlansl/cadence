@@ -14,6 +14,7 @@ function pkg(over: Partial<HostPackage> = {}): HostPackage {
     update_origin: null,
     updated_at: '2026-01-01T00:00:00Z',
     advisories: [],
+    excluded: false,
     ...over,
   }
 }

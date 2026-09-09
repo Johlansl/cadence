@@ -383,6 +383,15 @@ export function HostDetail({
             {host.security_updates_count > 0 && (
               <span className="text-red-400"> · {host.security_updates_count} security</span>
             )}
+            {host.excluded_count > 0 && (
+              <span
+                className="text-zinc-500"
+                title={`${withUpdates - host.excluded_count} would install on the next apt_upgrade job`}
+              >
+                {' '}
+                · {host.excluded_count} excluded
+              </span>
+            )}
           </Meta>
         </dl>
 

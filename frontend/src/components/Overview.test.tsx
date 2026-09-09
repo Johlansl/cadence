@@ -25,6 +25,7 @@ function host(over: Partial<HostSummary> = {}): HostSummary {
     status: 'up_to_date',
     updates_available_count: 0,
     security_updates_count: 0,
+    excluded_count: 0,
     ...over,
   }
 }

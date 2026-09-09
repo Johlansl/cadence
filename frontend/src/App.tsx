@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api/client'
 import { BulkActionBar } from './components/BulkActionBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ExclusionsView } from './components/ExclusionsView'
 import { FleetOverview } from './components/FleetOverview'
 import { HostDetail } from './components/HostDetail'
 import { HostFilters } from './components/HostFilters'
@@ -16,7 +17,8 @@ import type { HostDetail as HostDetailData, HostSummary } from './types'
 const POLL_MS = 30_000
 
 // The current view is mirrored in the URL hash (#host=<id>, #packages,
-// #webhooks) so a reload keeps the view and the link is shareable.
+// #webhooks, #exclusions) so a reload keeps the view and the link is
+// shareable.
 function readHashHostId(): string | null {
   const m = /(?:^|[#&])host=([^&]+)/.exec(window.location.hash)
   return m ? decodeURIComponent(m[1]) : null
@@ -26,6 +28,9 @@ function readHashIsPackages(): boolean {
 }
 function readHashIsWebhooks(): boolean {
   return window.location.hash === '#webhooks'
+}
+function readHashIsExclusions(): boolean {
+  return window.location.hash === '#exclusions'
 }
 function writeHash(next: string): void {
   if (window.location.hash === next) return
@@ -38,6 +43,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(readHashHostId)
   const [showPackages, setShowPackages] = useState<boolean>(readHashIsPackages)
   const [showWebhooks, setShowWebhooks] = useState<boolean>(readHashIsWebhooks)
+  const [showExclusions, setShowExclusions] = useState<boolean>(readHashIsExclusions)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   // Two independent failures: the host-list poll drives the global sync
   // indicator; a host-detail poll failure is shown in the detail pane only,
@@ -111,6 +117,7 @@ export default function App() {
     setSelectedId(id)
     setShowPackages(false)
     setShowWebhooks(false)
+    setShowExclusions(false)
     writeHash(id ? `#host=${encodeURIComponent(id)}` : '')
   }, [])
 
@@ -118,6 +125,7 @@ export default function App() {
     setSelectedId(null)
     setShowPackages(true)
     setShowWebhooks(false)
+    setShowExclusions(false)
     writeHash('#packages')
   }, [])
 
@@ -125,7 +133,16 @@ export default function App() {
     setSelectedId(null)
     setShowPackages(false)
     setShowWebhooks(true)
+    setShowExclusions(false)
     writeHash('#webhooks')
+  }, [])
+
+  const selectExclusions = useCallback(() => {
+    setSelectedId(null)
+    setShowPackages(false)
+    setShowWebhooks(false)
+    setShowExclusions(true)
+    writeHash('#exclusions')
   }, [])
 
   // Called after a host mutation from the detail pane.
@@ -144,6 +161,7 @@ export default function App() {
       setSelectedId(readHashHostId())
       setShowPackages(readHashIsPackages())
       setShowWebhooks(readHashIsWebhooks())
+      setShowExclusions(readHashIsExclusions())
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
@@ -178,6 +196,15 @@ export default function App() {
             }`}
           >
             Webhooks
+          </button>
+          <button
+            type="button"
+            onClick={selectExclusions}
+            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+              showExclusions ? 'text-zinc-200' : 'text-zinc-500'
+            }`}
+          >
+            Exclusions
           </button>
           <OverviewChips hosts={hosts} />
         </div>
@@ -230,6 +257,8 @@ export default function App() {
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {showWebhooks ? (
             <WebhooksView />
+          ) : showExclusions ? (
+            <ExclusionsView />
           ) : showPackages ? (
             <PackagesView onSelectHost={select} />
           ) : detail ? (

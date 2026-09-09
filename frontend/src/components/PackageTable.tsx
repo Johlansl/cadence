@@ -136,6 +136,14 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
                     SEC
                   </span>
                 )}
+                {p.excluded && (
+                  <span
+                    className="ml-2 rounded bg-zinc-700/40 px-1 font-sans text-[10px] font-medium text-zinc-400 ring-1 ring-zinc-600"
+                    title="excluded by policy: never auto-upgraded"
+                  >
+                    HELD
+                  </span>
+                )}
                 {p.advisories.map((a) => (
                   <a
                     key={a.id}

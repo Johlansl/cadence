@@ -74,6 +74,34 @@ describe('Jobs', () => {
     expect(screen.queryByText('dpkg error')).not.toBeInTheDocument()
   })
 
+  it('shows a hold-conflict badge on a succeeded job with held_conflicts', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            status: 'succeeded',
+            result: { exit_code: 0, held_conflicts: ['docker-ce'] },
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText('hold conflict')).toBeInTheDocument()
+  })
+
+  it('shows no hold-conflict badge when held_conflicts is empty', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [job({ status: 'succeeded', result: { exit_code: 0, held_conflicts: [] } })],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    await screen.findByText('apt_upgrade')
+    expect(screen.queryByText('hold conflict')).not.toBeInTheDocument()
+  })
+
   it('triggers a dist-upgrade with the stored admin key and toasts', async () => {
     sessionStorage.setItem('cadence.adminKey', 'sekret')
     const fetchMock = installFetchMock({

@@ -3,6 +3,8 @@ import type {
   HostDetail,
   HostSummary,
   Job,
+  PackageExclusion,
+  PackageExclusionInput,
   PackageStatusFilter,
   PackageSummaryRow,
   RebootPolicy,
@@ -195,6 +197,24 @@ export const api = {
       adminKey,
       'POST',
       {},
+    )
+  },
+
+  listExclusions: (hostId?: string) =>
+    getJSON<PackageExclusion[]>(
+      hostId ? `/package-exclusions?host_id=${encodeURIComponent(hostId)}` : '/package-exclusions',
+    ),
+
+  createExclusion(adminKey: string, body: PackageExclusionInput) {
+    return adminWrite<PackageExclusion>('/admin/package-exclusions', adminKey, 'POST', body)
+  },
+
+  deleteExclusion(exclusionId: string, adminKey: string) {
+    return adminWrite<null>(
+      `/admin/package-exclusions/${exclusionId}`,
+      adminKey,
+      'DELETE',
+      undefined,
     )
   },
 }

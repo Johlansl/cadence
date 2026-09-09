@@ -22,6 +22,7 @@ export interface HostSummary {
   status: HostStatus
   updates_available_count: number
   security_updates_count: number
+  excluded_count: number
 }
 
 export interface FleetSummary {
@@ -68,6 +69,7 @@ export interface HostPackage {
   updated_at: string
   source_package?: string | null
   advisories: AdvisoryRef[]
+  excluded: boolean
 }
 
 export interface HostDetail extends HostSummary {
@@ -164,6 +166,24 @@ export interface WebhookCreated {
   created_at: string
 }
 
+export type PolicyScope = 'global' | 'host'
+
+export interface PackageExclusion {
+  id: string
+  scope: PolicyScope
+  host_id: string | null
+  pattern: string
+  description: string | null
+  created_at: string
+}
+
+export interface PackageExclusionInput {
+  scope: PolicyScope
+  host_id: string | null
+  pattern: string
+  description: string | null
+}
+
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
 export interface Job {
@@ -173,7 +193,11 @@ export interface Job {
   status: JobStatus
   params: Record<string, unknown>
   requested_by: string | null
-  result: { exit_code?: number | null; reboot_required?: boolean | null } | null
+  result: {
+    exit_code?: number | null
+    reboot_required?: boolean | null
+    held_conflicts?: string[] | null
+  } | null
   log: string | null
   failure_category: string | null
   failure_summary: string | null
