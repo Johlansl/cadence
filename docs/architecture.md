@@ -85,6 +85,17 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   `agent_refused`), and the scheduler reaper classifies a job it failed with
   no agent result (`timeout` if the host is still reporting, else
   `agent_lost`). The set is open (no CHECK); `unknown` is the honest default.
+  An `apt_upgrade` job's `params.excluded_packages` is the exact list of
+  package names the server resolved from `package_exclusions` for that host;
+  a successful or failed result's `result.held_conflicts` names any of them
+  apt showed real evidence of skipping or blocking on that run.
+- `package_exclusions`: operator hold rules (`scope` `global` or `host`,
+  `host_id` nullable, `pattern` a glob matched with Python's `fnmatch`).
+  Additive across scopes, no re-inclusion, no tag scope yet. Resolved to
+  exact package names against a host's known inventory at job-creation time;
+  the pattern itself never reaches the agent, which reconciles dpkg's real
+  hold state (`apt-mark hold`/`unhold`) to that list on every `apt_upgrade`
+  run. A rule is created or deleted, not edited in place.
 - `schedules`: one maintenance window per host (`weekly` / `monthly`).
 - `advisories` / `advisory_packages`: Debian DSA/DLA advisories (id, CVE ids,
   URL) and the per-release source-package fixed versions the read API joins

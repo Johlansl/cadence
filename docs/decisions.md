@@ -325,11 +325,12 @@ are visible, the operator acts on them manually.
 Deliberately **out of the initial version** (the data model stays extensible
 for them, but there is no code):
 
-- package exclusion / hold lists
 - multi-host reboot sequencing / rollout batching
 - notifications (Slack / email / webhooks)
 - multi-distribution (dnf / RPM)
 - multi-user authentication / RBAC
 
 **Since added:** automatic scheduling / maintenance windows (the `schedules`
-table + the `scheduler` service).
+table + the `scheduler` service); package exclusion / hold lists (roadmap
+item 3: global and per-host glob patterns resolved server-side, reconciled
+into dpkg's hold state by the agent every `apt_upgrade` run).
