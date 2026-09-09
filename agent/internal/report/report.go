@@ -94,6 +94,34 @@ type Response struct {
 	Job *JobHandoff `json:"job"`
 }
 
+// DryRunPkg is one package line in an apt_dry_run preview (roadmap item 4).
+// InstalledVersion is empty for a newly pulled dependency; CandidateVersion
+// is empty for a removal.
+type DryRunPkg struct {
+	Name             string `json:"name"`
+	Architecture     string `json:"architecture"`
+	InstalledVersion string `json:"installed_version"`
+	CandidateVersion string `json:"candidate_version"`
+	IsSecurityUpdate bool   `json:"is_security_update"`
+}
+
+// DryRun is the structured result of an apt_dry_run job: what a real
+// apt_upgrade would do right now, computed from `apt-get -s dist-upgrade`
+// without changing anything on the host. Every list is always present (never
+// null) so a consumer can rely on the shape; an empty list means nothing in
+// that category. Excluded holds names dropped from Updated/NewlyInstalled
+// because they match an active Cadence exclusion rule (even one no real run
+// has applied as a hold yet); HeldInPlace holds names apt itself kept back
+// because of a hold already on the box.
+type DryRun struct {
+	Updated        []DryRunPkg `json:"updated"`
+	NewlyInstalled []DryRunPkg `json:"newly_installed"`
+	Removed        []DryRunPkg `json:"removed"`
+	KeptBack       []string    `json:"kept_back"`
+	Excluded       []string    `json:"excluded"`
+	HeldInPlace    []string    `json:"held_in_place"`
+}
+
 // Counts returns the number of packages with a pending update, and how many of
 // those are flagged as security updates. Used for logging only; the server
 // computes its own counters.

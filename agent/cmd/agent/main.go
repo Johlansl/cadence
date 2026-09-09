@@ -30,7 +30,7 @@ import (
 // builds override it with the git tag via
 // -ldflags "-X main.agentVersion=<version>" (see scripts/publish-agent.sh).
 // Keep this literal in step with the newest agent/CHANGELOG.md heading.
-var agentVersion = "0.10.1"
+var agentVersion = "0.11.0"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
@@ -42,6 +42,7 @@ const (
 	reportTimeout        = 10 * time.Minute // collect + POST /reports
 	jobTimeout           = 30 * time.Minute // apt-get dist-upgrade for a job
 	postJobReportTimeout = 5 * time.Minute  // the fresh report sent after a job
+	dryRunTimeout        = 5 * time.Minute  // apt-get update + -s dist-upgrade
 )
 
 func main() {
@@ -114,9 +115,11 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logging.Info("job received", "job_id", job.ID, "job_type", job.JobType)
 
 	// failCat / failSummary are sent only for a failed job, "" on success.
-	// heldConflicts / heldPackages are nil except on the apt_upgrade path.
+	// heldConflicts / heldPackages are nil except on the apt_upgrade path;
+	// dryRun is nil except on the apt_dry_run path.
 	submit := func(status string, exitCode int, logText string, reboot bool,
-		failCat, failSummary string, heldConflicts, heldPackages []string) error {
+		failCat, failSummary string, heldConflicts, heldPackages []string,
+		dryRun *report.DryRun) error {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer cancel()
 		return c.SubmitJobResult(ctx, job.ID, client.JobResult{
@@ -128,12 +131,13 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			FailureSummary:  failSummary,
 			HeldConflicts:   heldConflicts,
 			HeldPackages:    heldPackages,
+			DryRun:          dryRun,
 		})
 	}
 	// refused reports a job the agent declined before running anything: the
 	// category is fixed, the reason is the message itself.
 	refused := func(msg string) error {
-		return submit("failed", 0, msg, false, apterr.CategoryAgentRefused, msg, nil, nil)
+		return submit("failed", 0, msg, false, apterr.CategoryAgentRefused, msg, nil, nil, nil)
 	}
 
 	// Dedicated reboot job (reboot_policy "prompt" / a "reboot now" from the
@@ -146,7 +150,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		logging.Info("dedicated reboot job -> systemctl --no-block reboot", "job_id", job.ID)
 		if err := submit("succeeded", 0,
 			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n",
-			true, "", "", nil, nil); err != nil {
+			true, "", "", nil, nil, nil); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
 		}
 		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
@@ -155,6 +159,28 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			return fmt.Errorf("issuing reboot: %w", err)
 		}
 		logging.Info("reboot queued", "job_id", job.ID)
+		return nil
+	}
+
+	// Dry-run: a pure-read "what would apt_upgrade do" preview. Placed before
+	// the CADENCE_ENABLE_UPGRADES gate on purpose -- it changes nothing on the
+	// host (no apt-mark, no dpkg, no -y upgrade), so previewing pending changes
+	// is useful even where real upgrades are switched off.
+	if job.JobType == "apt_dry_run" {
+		dctx, dcancel := context.WithTimeout(context.Background(), dryRunTimeout)
+		defer dcancel()
+
+		logging.Info("running apt-get -s dist-upgrade (dry run)", "job_id", job.ID)
+		res := executor.RunAptDryRun(dctx, job.ExcludedPackages())
+		logging.Info("dry run finished", "job_id", job.ID, "status", res.Status)
+
+		if err := submit(res.Status, res.ExitCode, res.Log, false,
+			res.FailureCategory, res.FailureSummary, nil, nil, res.DryRun); err != nil {
+			return fmt.Errorf("submitting job result: %w", err)
+		}
+		if res.Status == "failed" {
+			return fmt.Errorf("dry-run job %s failed", job.ID)
+		}
 		return nil
 	}
 
@@ -186,7 +212,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logText := res.Log + logSuffix
 
 	if err := submit(status, res.ExitCode, logText, res.RebootRequired,
-		res.FailureCategory, res.FailureSummary, res.HeldConflicts, res.HeldPackages); err != nil {
+		res.FailureCategory, res.FailureSummary, res.HeldConflicts, res.HeldPackages, nil); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}
 

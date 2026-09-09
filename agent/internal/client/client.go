@@ -105,6 +105,12 @@ type JobResult struct {
 	// convention as HeldConflicts: null = not applicable, [] = reconciled
 	// and nothing held, list = the real set.
 	HeldPackages []string `json:"held_packages"`
+
+	// DryRun is the structured simulation preview, set only for an
+	// apt_dry_run job that ran the simulation (roadmap item 4). Deliberately
+	// NOT omitempty: null tells the server "not a dry-run, or a dry-run that
+	// failed before producing a result" apart from a real preview.
+	DryRun *report.DryRun `json:"dry_run"`
 }
 
 // SubmitJobResult reports the outcome of a job back to the server.

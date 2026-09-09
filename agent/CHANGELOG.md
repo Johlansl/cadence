@@ -3,6 +3,31 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.11.0
+
+Dry-run (server roadmap item 4): a new `apt_dry_run` job type that previews
+what an `apt_upgrade` would do without changing anything on the host.
+
+- `RunAptDryRun` refreshes the package lists, runs `apt-get -s
+  dist-upgrade`, and parses the simulation into a structured result:
+  packages that would be upgraded, newly installed (dependencies apt would
+  pull in), or removed, plus the ones apt keeps back. It never runs
+  `apt-mark`, `dpkg`, or a real upgrade; all three commands it does run
+  (`apt-get update`, `apt-get -s dist-upgrade`, `apt-mark showhold`) have
+  fixed arguments.
+- The job's `params.excluded_packages` (resolved server-side, exactly as
+  for `apt_upgrade`) is used only to filter the parsed result: a name
+  matching an active exclusion is moved to `dry_run.excluded`, even if apt
+  has not been told to hold it yet. Separately, `dry_run.held_in_place`
+  lists packages apt kept back because of a hold already on the box,
+  correlated the same way `held_conflicts` is on a real upgrade.
+- The dispatch runs a dry-run even when `CADENCE_ENABLE_UPGRADES=false`:
+  it is a pure read, and previewing pending changes on an upgrade-disabled
+  host is useful.
+- The `apt-get -s dist-upgrade` line parsing that the periodic report
+  collector already used is now a shared `internal/aptsim` package, so the
+  report path and the dry-run path cannot drift apart.
+
 ## 0.10.1
 
 Bug fix: `0.10.0`'s hold reconciliation diffed against a live `apt-mark
