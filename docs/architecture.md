@@ -79,7 +79,12 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   agent reports it). Replaced wholesale on every report.
 - `reports`: an append-only log of each report (counters + the raw payload).
 - `jobs`: queued/running/finished actions (`apt_upgrade`, `reboot`), with a
-  jsonb `params` and a captured `log`.
+  jsonb `params` and a captured `log`. A failed job also carries a coarse
+  `failure_category` and a one-line `failure_summary`: the agent classifies
+  from the output of the apt/dpkg command that failed (or reports `timeout` /
+  `agent_refused`), and the scheduler reaper classifies a job it failed with
+  no agent result (`timeout` if the host is still reporting, else
+  `agent_lost`). The set is open (no CHECK); `unknown` is the honest default.
 - `schedules`: one maintenance window per host (`weekly` / `monthly`).
 - `advisories` / `advisory_packages`: Debian DSA/DLA advisories (id, CVE ids,
   URL) and the per-release source-package fixed versions the read API joins
@@ -99,7 +104,8 @@ Extensibility is built in without over-engineering: `os_family` /
 ## Webhooks
 
 Cadence emits outbound notifications for five events: `job.succeeded` /
-`job.failed` (when an agent submits a job result), `host.reboot_required` (a
+`job.failed` (when an agent submits a job result, or the scheduler reaps a job
+that never reported back), `host.reboot_required` (a
 report flips the host from not-needing to needing a reboot),
 `host.security_updates_available` (a report's security-update count is non-zero
 and differs from the last one notified for that host), and `host.offline` (a

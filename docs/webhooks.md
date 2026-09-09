@@ -107,7 +107,8 @@ Every POST body is:
 ### `job.succeeded` / `job.failed`
 
 Fires when an agent reports a job result, for any job type (`apt_upgrade`,
-`reboot`, ...).
+`reboot`, ...). `job.failed` also fires when the scheduler gives up on a job
+that was claimed but never reported back (see `reaped` below).
 
 ```json
 {
@@ -121,6 +122,9 @@ Fires when an agent reports a job result, for any job type (`apt_upgrade`,
     "job_type": "apt_upgrade",
     "status": "failed",
     "exit_code": 100,
+    "reaped": false,
+    "failure_category": "dpkg_error",
+    "failure_summary": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
     "requested_by": "scheduler",
     "completed_at": "2026-01-15T09:42:11.480902Z",
     "log": "Reading package lists...\nBuilding dependency tree...\n\n[cadence] ... 5123 bytes of log elided ...\n\nE: Sub-process /usr/bin/dpkg returned an error code (1)\n"
@@ -129,13 +133,38 @@ Fires when an agent reports a job result, for any job type (`apt_upgrade`,
 ```
 
 - `status` is `"succeeded"` or `"failed"` (matches `event_type`).
-- `exit_code` is the command's exit code (`0` on success).
+- `exit_code` is the command's exit code (`0` on success), or `null` for a
+  reaped job (no process ran to completion).
 - `requested_by` is `"scheduler"`, `"dashboard"`, or `null`.
 - `completed_at` may be `null`.
 - `log` is truncated to `CADENCE_WEBHOOK_LOG_MAX_BYTES` (4096 by default): the
   head and tail are kept and the middle is replaced by a
   `[cadence] ... N bytes of log elided ...` marker. Set the variable to `0` to
   send the whole log.
+
+**`job.failed` only** (absent from `job.succeeded`):
+
+- `reaped` is `true` when the scheduler failed the job because it stayed
+  `running` past `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` with no result, `false`
+  when the agent reported the failure itself.
+- `failure_category` is a coarse cause, one of:
+
+  | value | meaning |
+  |---|---|
+  | `apt_locked` | the apt/dpkg lock was still held after the agent's own retries |
+  | `network_or_repo` | a mirror was unreachable or a download failed |
+  | `dpkg_error` | a dpkg processing error, a broken package state, or a dependency / file conflict |
+  | `disk_full` | out of disk space |
+  | `timeout` | the run exceeded its time limit (agent-side deadline, or reaped while the host was still reporting) |
+  | `agent_lost` | reaped with no result while the host was silent |
+  | `agent_refused` | the agent declined the job before running anything (upgrades or reboots disabled on the host, unsupported job type) |
+  | `unknown` | nothing matched; read `failure_summary` and `log` |
+
+  It may be `null` for a job failed by an agent older than 0.9.0. The set is
+  open: treat an unrecognised value like `unknown`.
+- `failure_summary` is one line pulled from the apt/dpkg output (or a synthetic
+  line for the no-output cases), so a relay need not parse `log`. May be
+  `null`.
 
 ### `host.reboot_required`
 
@@ -361,10 +390,10 @@ into what Discord's webhook API expects and POSTs **that** to the Discord URL:
       "color": 15158332,
       "fields": [
         { "name": "Host", "value": "web-01", "inline": true },
-        { "name": "Exit code", "value": "100", "inline": true },
-        { "name": "Requested by", "value": "scheduler", "inline": true }
+        { "name": "Cause", "value": "dpkg_error", "inline": true },
+        { "name": "Exit code", "value": "100", "inline": true }
       ],
-      "description": "```\n...last lines of data.log...\n```",
+      "description": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
       "timestamp": "2026-01-15T09:42:11.503817Z"
     }
   ]
@@ -383,11 +412,12 @@ export default {
     {
       title: `${d.job_type} ${d.status} on ${d.hostname}`,
       color: d.status === 'failed' ? 0xe74c3c : 0x2ecc71,
-      description: d.log ? '```\n' + d.log.slice(-1500) + '\n```' : undefined,
+      description: d.failure_summary || (d.log ? '```\n' + d.log.slice(-1500) + '\n```' : undefined),
       fields: [
         { name: 'Host', value: d.hostname, inline: true },
+        d.failure_category && { name: 'Cause', value: d.failure_category, inline: true },
         { name: 'Exit code', value: String(d.exit_code), inline: true },
-      ],
+      ].filter(Boolean),
       timestamp: e.timestamp,
     },
   ],

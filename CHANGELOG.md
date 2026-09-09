@@ -8,6 +8,17 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Failed jobs are classified. A failed job now carries a coarse
+  `failure_category` (`apt_locked`, `network_or_repo`, `dpkg_error`,
+  `disk_full`, `timeout`, `agent_lost`, `agent_refused`, `unknown`) and a
+  one-line `failure_summary` (migration `0014`: two nullable columns on
+  `jobs`, no CHECK, not backfilled). The agent (>= 0.9.0) classifies from the
+  output of the apt/dpkg command that failed; the scheduler reaper classifies
+  a job it fails with no agent result (`timeout` if the host is still
+  reporting, else `agent_lost`) and now also emits a `job.failed` webhook for
+  it. The two fields appear in the jobs API, as a pill plus summary line on
+  the dashboard, and in the `job.failed` webhook body (with a `reaped` flag).
+  An older agent leaves the category `null`.
 - Outbound webhooks. A new `webhooks` section on the dashboard registers HTTP
   endpoints that Cadence POSTs a signed JSON body to when an event fires:
   `job.succeeded` / `job.failed` (on a job result), `host.reboot_required` (on
