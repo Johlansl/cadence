@@ -48,7 +48,7 @@ func TestRunAptUpgradeSuccess(t *testing.T) {
 	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
 	fakeBin(t, dir, "dpkg", `exit 0`)
 
-	res := RunAptUpgrade(context.Background())
+	res := RunAptUpgrade(context.Background(), nil)
 
 	if res.Err != nil || res.ExitCode != 0 {
 		t.Fatalf("want clean success, got exit=%d err=%v log=%q", res.ExitCode, res.Err, res.Log)
@@ -61,7 +61,7 @@ func TestRunAptUpgradeFailureMapsExitCodeAndRepairsDpkg(t *testing.T) {
 	fakeBin(t, dir, "apt-get", `case "$*" in *dist-upgrade*) echo "E: boom" >&2; exit 100;; esac; exit 0`)
 	fakeBin(t, dir, "dpkg", `[ "$1 $2" = "--configure -a" ] && : > `+marker+`; exit 0`)
 
-	res := RunAptUpgrade(context.Background())
+	res := RunAptUpgrade(context.Background(), nil)
 
 	if res.ExitCode != 100 {
 		t.Fatalf("exit code: want 100, got %d", res.ExitCode)
@@ -88,7 +88,7 @@ esac
 exit 0`)
 	fakeBin(t, dir, "dpkg", `exit 0`)
 
-	res := RunAptUpgrade(context.Background())
+	res := RunAptUpgrade(context.Background(), nil)
 
 	if res.Err != nil {
 		t.Fatalf("want success after the lock clears, got err=%v log=%q", res.Err, res.Log)
@@ -111,7 +111,7 @@ esac
 exit 0`)
 	fakeBin(t, dir, "dpkg", `exit 0`)
 
-	res := RunAptUpgrade(context.Background())
+	res := RunAptUpgrade(context.Background(), nil)
 
 	if res.ExitCode != 100 {
 		t.Fatalf("exit code: want 100, got %d", res.ExitCode)
@@ -126,7 +126,7 @@ func TestRunAptUpgradeCapsHugeOutput(t *testing.T) {
 	fakeBin(t, dir, "apt-get", `case "$*" in *dist-upgrade*) yes cadence-output-line | head -c 400000; echo; exit 0;; esac; exit 0`)
 	fakeBin(t, dir, "dpkg", `exit 0`)
 
-	res := RunAptUpgrade(context.Background())
+	res := RunAptUpgrade(context.Background(), nil)
 
 	if res.Err != nil {
 		t.Fatalf("unexpected err: %v", res.Err)
@@ -179,7 +179,7 @@ func TestRunAptUpgradeClassifiesTheFailure(t *testing.T) {
 				`case "$*" in *dist-upgrade*) echo `+shq(tc.stderr)+` >&2; exit 100;; esac; exit 0`)
 			fakeBin(t, dir, "dpkg", `exit 0`)
 
-			res := RunAptUpgrade(context.Background())
+			res := RunAptUpgrade(context.Background(), nil)
 
 			if res.FailureCategory != tc.wantCat {
 				t.Fatalf("FailureCategory = %q, want %q (log=%q)", res.FailureCategory, tc.wantCat, res.Log)
@@ -199,7 +199,7 @@ func TestRunAptUpgradeSuccessLeavesFailureFieldsEmpty(t *testing.T) {
 	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
 	fakeBin(t, dir, "dpkg", `exit 0`)
 
-	res := RunAptUpgrade(context.Background())
+	res := RunAptUpgrade(context.Background(), nil)
 
 	if res.FailureCategory != "" || res.FailureSummary != "" {
 		t.Fatalf("want empty failure fields on success, got category=%q summary=%q",
@@ -215,7 +215,7 @@ func TestRunAptUpgradeClassifiesAnExpiredDeadlineAsTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	res := RunAptUpgrade(ctx)
+	res := RunAptUpgrade(ctx, nil)
 
 	if res.FailureCategory != "timeout" {
 		t.Fatalf("FailureCategory = %q, want %q", res.FailureCategory, "timeout")
@@ -233,12 +233,120 @@ func TestRunAptUpgradeRepairsDpkgOnAFreshContextAfterTheDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	res := RunAptUpgrade(ctx)
+	res := RunAptUpgrade(ctx, nil)
 
 	if res.Err == nil {
 		t.Fatal("expected the expired deadline to fail the upgrade")
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("dpkg --configure -a must still run under a fresh context: %v", err)
+	}
+}
+
+// fakeAptMark writes an apt-mark stand-in that appends every invocation
+// (space-joined args) as one line to a calls log, and answers `showhold`
+// with currentlyHeld (one name per line). Returns the calls-log path.
+func fakeAptMark(t *testing.T, dir string, currentlyHeld ...string) string {
+	t.Helper()
+	callsLog := filepath.Join(t.TempDir(), "apt-mark-calls")
+	if _, err := os.Create(callsLog); err != nil {
+		t.Fatal(err)
+	}
+	fakeBin(t, dir, "apt-mark", `
+echo "$*" >> `+callsLog+`
+case "$1" in
+  showhold) printf '%s\n' `+shq(strings.Join(currentlyHeld, "\n"))+` ;;
+esac
+exit 0`)
+	return callsLog
+}
+
+func TestRunAptUpgradeReconcilesHolds(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+	calls := fakeAptMark(t, dir, "old-package") // held from a previous, superseded run
+
+	res := RunAptUpgrade(context.Background(), []string{"docker-ce", "postgresql-14"})
+
+	if res.Err != nil {
+		t.Fatalf("unexpected err: %v", res.Err)
+	}
+	raw, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "hold docker-ce postgresql-14") &&
+		!strings.Contains(got, "hold postgresql-14 docker-ce") {
+		t.Errorf("apt-mark hold not called with the resolved names: %q", got)
+	}
+	if !strings.Contains(got, "unhold old-package") {
+		t.Errorf("apt-mark unhold not called on the orphaned hold: %q", got)
+	}
+}
+
+func TestRunAptUpgradeRejectsAnInvalidExcludedPackageName(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+	calls := fakeAptMark(t, dir)
+
+	res := RunAptUpgrade(context.Background(), []string{"docker-ce", "rm -rf /"})
+
+	if !strings.Contains(res.Log, `ignoring invalid excluded-package name`) {
+		t.Errorf("expected a rejection breadcrumb in the log, got: %q", res.Log)
+	}
+	raw, _ := os.ReadFile(calls)
+	if strings.Contains(string(raw), "rm -rf") {
+		t.Errorf("an invalid name must never reach apt-mark, calls: %q", raw)
+	}
+	if !strings.Contains(string(raw), "hold docker-ce") {
+		t.Errorf("the valid name should still be held, calls: %q", raw)
+	}
+}
+
+func TestRunAptUpgradeReconciliationSurvivesAMissingAptMark(t *testing.T) {
+	// No apt-mark on PATH at all: showhold fails, hold/unhold are never
+	// reached because there is nothing to reconcile against an empty
+	// current set that also equals the (empty) wanted set. Must not fail
+	// the job over this.
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+
+	res := RunAptUpgrade(context.Background(), nil)
+
+	if res.Err != nil || res.ExitCode != 0 {
+		t.Fatalf("want clean success despite no apt-mark, got exit=%d err=%v", res.ExitCode, res.Err)
+	}
+}
+
+func TestRunAptUpgradeHeldConflictsOnAKeptBackPackage(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `case "$*" in
+*dist-upgrade*) echo "The following packages have been kept back:"; echo "  docker-ce"; exit 0;;
+esac
+exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+	fakeAptMark(t, dir)
+
+	res := RunAptUpgrade(context.Background(), []string{"docker-ce"})
+
+	if len(res.HeldConflicts) != 1 || res.HeldConflicts[0] != "docker-ce" {
+		t.Errorf("HeldConflicts = %v, want [docker-ce]", res.HeldConflicts)
+	}
+}
+
+func TestRunAptUpgradeHeldConflictsNilOnACleanRun(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+	fakeAptMark(t, dir)
+
+	res := RunAptUpgrade(context.Background(), []string{"docker-ce"})
+
+	if res.HeldConflicts != nil {
+		t.Errorf("HeldConflicts = %v, want nil", res.HeldConflicts)
 	}
 }

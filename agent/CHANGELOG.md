@@ -3,6 +3,29 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.10.0
+
+Package exclusion / hold policies (server roadmap item 3):
+
+- A new `internal/holds` package validates the package names an
+  `apt_upgrade` job carries in `params.excluded_packages` (a strict Debian
+  package-name format; an invalid name is logged and dropped, never passed
+  to a command), reconciles dpkg's real hold state to them every run
+  (`apt-mark hold`/`unhold`, diffed against `apt-mark showhold` so an
+  orphaned hold from an interrupted or superseded run never lingers), and
+  correlates dist-upgrade's own output back to the exact names this agent
+  held.
+- `RunAptUpgrade` now reconciles holds between refreshing the package lists
+  and running dist-upgrade. The job result carries `held_conflicts`: nil
+  when not applicable, an empty list when reconciliation ran cleanly, and
+  the held package name(s) apt showed real evidence of skipping or blocking
+  on ("kept back", or a dependency conflict) otherwise. Unlike
+  `failure_category`/`failure_summary`, this field is never omitted from
+  the result, even on success: the null/empty/non-empty distinction is the
+  point.
+- The server resolves patterns to exact names before they ever reach the
+  agent; the pattern itself is never sent.
+
 ## 0.9.0
 
 Failure classification on a failed job (server roadmap item 2):

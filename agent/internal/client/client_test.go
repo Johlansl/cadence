@@ -181,6 +181,29 @@ func TestSubmitJobResultCarriesFailureClassification(t *testing.T) {
 	}
 }
 
+func TestSubmitJobResultHeldConflictsIsNeverOmitted(t *testing.T) {
+	var gotRaw string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotRaw = string(raw)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	// Unlike FailureCategory/FailureSummary, HeldConflicts has no omitempty:
+	// nil must serialize as JSON null (not applicable), never be dropped, so
+	// the server can tell it apart from an empty list (checked, found nothing).
+	err := New(srv.URL, "tok", 5*time.Second).SubmitJobResult(context.Background(), "j", JobResult{
+		Status: "succeeded", ExitCode: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotRaw, `"held_conflicts":null`) {
+		t.Errorf("expected an explicit null held_conflicts, got: %s", gotRaw)
+	}
+}
+
 func TestDoRetriesOn5xxThenSucceeds(t *testing.T) {
 	old := retryWaits
 	retryWaits = []time.Duration{0, 0, 0}

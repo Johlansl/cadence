@@ -56,6 +56,21 @@ func (j JobHandoff) RebootMode() string {
 	return p.Reboot
 }
 
+// ExcludedPackages returns params.excluded_packages: the exact package names
+// the server resolved from the operator's exclusion rules for this host
+// (roadmap item 3). The server never sends a raw pattern, only names it read
+// back from this host's own report; nil on absence or malformed JSON.
+func (j JobHandoff) ExcludedPackages() []string {
+	if len(j.Params) == 0 {
+		return nil
+	}
+	var p struct {
+		ExcludedPackages []string `json:"excluded_packages"`
+	}
+	_ = json.Unmarshal(j.Params, &p)
+	return p.ExcludedPackages
+}
+
 // Response is the body returned by POST /api/v1/reports. Only the piggybacked
 // job is of interest to the agent; the rest is ignored.
 type Response struct {

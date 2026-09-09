@@ -30,7 +30,7 @@ import (
 // builds override it with the git tag via
 // -ldflags "-X main.agentVersion=<version>" (see scripts/publish-agent.sh).
 // Keep this literal in step with the newest agent/CHANGELOG.md heading.
-var agentVersion = "0.9.0"
+var agentVersion = "0.10.0"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
@@ -113,8 +113,10 @@ func run(pollOnly bool) error {
 func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logging.Info("job received", "job_id", job.ID, "job_type", job.JobType)
 
-	// failCat / failSummary are sent only for a failed job. "" on success.
-	submit := func(status string, exitCode int, logText string, reboot bool, failCat, failSummary string) error {
+	// failCat / failSummary are sent only for a failed job, "" on success.
+	// heldConflicts is nil except on the apt_upgrade path.
+	submit := func(status string, exitCode int, logText string, reboot bool,
+		failCat, failSummary string, heldConflicts []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer cancel()
 		return c.SubmitJobResult(ctx, job.ID, client.JobResult{
@@ -124,12 +126,13 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			RebootRequired:  reboot,
 			FailureCategory: failCat,
 			FailureSummary:  failSummary,
+			HeldConflicts:   heldConflicts,
 		})
 	}
 	// refused reports a job the agent declined before running anything: the
 	// category is fixed, the reason is the message itself.
 	refused := func(msg string) error {
-		return submit("failed", 0, msg, false, apterr.CategoryAgentRefused, msg)
+		return submit("failed", 0, msg, false, apterr.CategoryAgentRefused, msg, nil)
 	}
 
 	// Dedicated reboot job (reboot_policy "prompt" / a "reboot now" from the
@@ -141,7 +144,8 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		}
 		logging.Info("dedicated reboot job -> systemctl --no-block reboot", "job_id", job.ID)
 		if err := submit("succeeded", 0,
-			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n", true, "", ""); err != nil {
+			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n",
+			true, "", "", nil); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
 		}
 		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
@@ -165,7 +169,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	defer cancel()
 
 	logging.Info("running apt-get dist-upgrade", "job_id", job.ID)
-	res := executor.RunAptUpgrade(ctx)
+	res := executor.RunAptUpgrade(ctx, job.ExcludedPackages())
 
 	status := "succeeded"
 	if res.ExitCode != 0 || res.Err != nil {
@@ -181,7 +185,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logText := res.Log + logSuffix
 
 	if err := submit(status, res.ExitCode, logText, res.RebootRequired,
-		res.FailureCategory, res.FailureSummary); err != nil {
+		res.FailureCategory, res.FailureSummary, res.HeldConflicts); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}
 

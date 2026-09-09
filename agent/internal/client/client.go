@@ -92,6 +92,13 @@ type JobResult struct {
 	// omitempty keeps a success result byte-identical to older agents.
 	FailureCategory string `json:"failure_category,omitempty"`
 	FailureSummary  string `json:"failure_summary,omitempty"`
+
+	// HeldConflicts names any held package a hold/dependency conflict was
+	// found in (roadmap item 3). Deliberately NOT omitempty: nil must encode
+	// as JSON null (not applicable -- a non-apt_upgrade job) so the server
+	// can tell that apart from an empty list (reconciliation ran and found
+	// nothing wrong).
+	HeldConflicts []string `json:"held_conflicts"`
 }
 
 // SubmitJobResult reports the outcome of a job back to the server.

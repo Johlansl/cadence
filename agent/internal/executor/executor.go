@@ -8,11 +8,13 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"cadence/agent/internal/apterr"
+	"cadence/agent/internal/holds"
 	"cadence/agent/internal/procenv"
 	"cadence/agent/internal/rebootcheck"
 )
@@ -56,6 +58,12 @@ type Result struct {
 	// categories; FailureSummary is a single line lifted from the output.
 	FailureCategory string
 	FailureSummary  string
+
+	// HeldConflicts names the packages, among the ones this run held, apt
+	// showed real evidence of skipping or blocking on -- nil when reconciled
+	// holds caused no visible problem (or none were held at all), never
+	// silently omitted just because the run happened to succeed.
+	HeldConflicts []string
 }
 
 func aptEnv() []string {
@@ -80,12 +88,13 @@ func aptCommand(ctx context.Context, out *bytes.Buffer, name string, args ...str
 	return cmd
 }
 
-// RunAptUpgrade refreshes the package lists, then runs a non-interactive
-// `apt-get dist-upgrade -y`, retrying while another process holds the apt lock.
-// If the upgrade still fails it runs `dpkg --configure -a` (under a fresh
-// context) so a half-applied transaction is left as consistent as possible.
-// Output from every command is captured in execution order.
-func RunAptUpgrade(ctx context.Context) Result {
+// RunAptUpgrade refreshes the package lists, reconciles dpkg's hold state to
+// excludedPackages, then runs a non-interactive `apt-get dist-upgrade -y`,
+// retrying while another process holds the apt lock. If the upgrade still
+// fails it runs `dpkg --configure -a` (under a fresh context) so a
+// half-applied transaction is left as consistent as possible. Output from
+// every command is captured in execution order.
+func RunAptUpgrade(ctx context.Context, excludedPackages []string) Result {
 	var out bytes.Buffer
 
 	// Refresh lists so the upgrade reflects current apt state. Non-fatal: a
@@ -94,7 +103,9 @@ func RunAptUpgrade(ctx context.Context) Result {
 		out.WriteString("\n[cadence] apt-get update failed; using existing lists\n")
 	}
 
-	res, failingOutput := runDistUpgrade(ctx, &out)
+	heldNames := reconcileHolds(ctx, &out, excludedPackages)
+
+	res, lastAttemptOutput := runDistUpgrade(ctx, &out)
 
 	if res.Err != nil {
 		out.WriteString("\n[cadence] apt failed; running dpkg --configure -a\n")
@@ -104,12 +115,96 @@ func RunAptUpgrade(ctx context.Context) Result {
 	}
 
 	if res.ExitCode != 0 || res.Err != nil {
-		classifyFailure(ctx, &res, failingOutput, out.String())
+		classifyFailure(ctx, &res, lastAttemptOutput, out.String())
 	}
+	res.HeldConflicts = holds.Correlate(lastAttemptOutput, heldNames)
 
 	res.Log = capLog(out.String())
 	res.RebootRequired = rebootcheck.Pending()
 	return res
+}
+
+// reconcileHolds aligns dpkg's hold state with excludedPackages, the exact
+// package names the server resolved for this host (roadmap item 3). Every
+// apt_upgrade run reconciles from scratch: hold whatever should be held,
+// unhold anything currently held that fell off the list, so `apt-mark
+// showhold` always reflects current policy, never an orphan from an
+// interrupted or superseded run. Returns the names actually held afterward.
+// Best-effort throughout: a hold/unhold problem is logged into out and never
+// fails the job -- the upgrade itself is the point of the run.
+func reconcileHolds(ctx context.Context, out *bytes.Buffer, excludedPackages []string) []string {
+	valid, rejected := holds.Filter(excludedPackages)
+	for _, name := range rejected {
+		fmt.Fprintf(out, "\n[cadence] ignoring invalid excluded-package name from server: %q\n", name)
+	}
+
+	// Always check for an orphaned hold, even when valid is empty (a policy
+	// removed since the last run): apt-mark showhold is a cheap local dpkg
+	// query, no network involved.
+	var showhold bytes.Buffer
+	var current []string
+	if err := aptCommand(ctx, &showhold, "apt-mark", "showhold").Run(); err != nil {
+		out.WriteString("\n[cadence] apt-mark showhold failed; assuming nothing is currently held\n")
+	} else {
+		current = holds.ParseShowHold(showhold.String())
+	}
+
+	toHold, toUnhold := holds.Diff(current, valid)
+	held := applyMark(ctx, out, "hold", toHold)
+	unheld := applyMark(ctx, out, "unhold", toUnhold)
+	if len(toHold) > 0 || len(toUnhold) > 0 {
+		fmt.Fprintf(out, "\n[cadence] policy: holding %d package(s), releasing %d\n", len(held), len(unheld))
+	}
+
+	// Final held set = names already held and still wanted, plus names newly
+	// held this run.
+	final := make(map[string]bool, len(current)+len(held))
+	validSet := make(map[string]bool, len(valid))
+	for _, n := range valid {
+		validSet[n] = true
+	}
+	for _, n := range current {
+		if validSet[n] {
+			final[n] = true
+		}
+	}
+	for _, n := range held {
+		final[n] = true
+	}
+	names := make([]string, 0, len(final))
+	for n := range final {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// applyMark runs `apt-mark <verb> <names...>` and returns the names it
+// actually applied to. It tries the whole batch first; if that fails (e.g.
+// one name is stale -- present in the server's resolved list but no longer
+// installed locally, possible if the inventory is slightly out of date), it
+// retries one name at a time so a single bad name cannot block the rest, and
+// logs each individual failure into out.
+func applyMark(ctx context.Context, out *bytes.Buffer, verb string, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	args := append([]string{verb}, names...)
+	if aptCommand(ctx, out, "apt-mark", args...).Run() == nil {
+		return names
+	}
+
+	var applied []string
+	for _, name := range names {
+		var attempt bytes.Buffer
+		if aptCommand(ctx, &attempt, "apt-mark", verb, name).Run() == nil {
+			applied = append(applied, name)
+		} else {
+			fmt.Fprintf(out, "\n[cadence] apt-mark %s %s failed: %s\n",
+				verb, name, strings.TrimSpace(attempt.String()))
+		}
+	}
+	return applied
 }
 
 // classifyFailure fills res.FailureCategory / res.FailureSummary. It classifies
@@ -148,8 +243,9 @@ func stripAnnotations(s string) string {
 
 // runDistUpgrade runs `apt-get -y dist-upgrade`, retrying on a held apt lock.
 // Every attempt's output is appended to out in order. The second return value
-// is the isolated output of the attempt that failed (empty on success or when
-// the context is cancelled before an attempt runs), for failure classification.
+// is the isolated output of the final attempt -- success or failure, empty
+// only when the context is cancelled before any attempt runs -- used for
+// failure classification and for correlating a hold to the outcome.
 func runDistUpgrade(ctx context.Context, out *bytes.Buffer) (Result, string) {
 	var res Result
 	last := len(aptLockRetryWaits) - 1
@@ -172,7 +268,7 @@ func runDistUpgrade(ctx context.Context, out *bytes.Buffer) (Result, string) {
 		out.Write(attempt.Bytes())
 
 		if err == nil {
-			return Result{}, ""
+			return Result{}, attempt.String()
 		}
 
 		res = Result{Err: err, ExitCode: -1} // -1: failed to start, or killed
