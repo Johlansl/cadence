@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
@@ -21,6 +22,11 @@ RebootMode = Literal["auto", "never", "prompt"]
 
 # Job kinds the API accepts. The scheduler only ever creates 'apt_upgrade'.
 JobType = Literal["apt_upgrade", "reboot"]
+
+# Scope of a package_exclusions rule: every host, or one named host. A
+# genuinely small, closed set (unlike JobType/failure category), gets a DB
+# CHECK (migration 0015). No tag scope yet -- roadmap item 6.
+PolicyScope = Literal["global", "host"]
 
 # Event names a webhook can subscribe to. 'webhook.test' is deliberately not
 # here: it is never subscribable, only ever sent to one explicitly targeted
@@ -431,6 +437,53 @@ class WebhookOut(BaseModel):
 
 class WebhookTestAccepted(BaseModel):
     delivery_id: uuid.UUID
+
+
+# --- package exclusions -------------------------------------------------------
+
+# A conservative glob charset: package names and fnmatch wildcards, no shell
+# metacharacters that would suggest the operator pasted something else.
+_PATTERN_RE = re.compile(r"^[A-Za-z0-9+.*?_-]+$")
+
+
+class PackageExclusionCreate(BaseModel):
+    """A new hold rule. `host_id` is required iff scope='host', forbidden
+    otherwise -- validated here (early 422) and again by the DB CHECK."""
+
+    scope: PolicyScope
+    host_id: uuid.UUID | None = None
+    pattern: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=200)
+
+    @field_validator("pattern")
+    @classmethod
+    def _pattern(cls, v: str) -> str:
+        v = v.strip()
+        if not v or not _PATTERN_RE.match(v):
+            raise ValueError(
+                "pattern must be a package name or glob "
+                "(letters, digits, + . * ? _ -)"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _scope_host(self) -> "PackageExclusionCreate":
+        if self.scope == "global" and self.host_id is not None:
+            raise ValueError("host_id must not be set when scope='global'")
+        if self.scope == "host" and self.host_id is None:
+            raise ValueError("host_id is required when scope='host'")
+        return self
+
+
+class PackageExclusionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    scope: PolicyScope
+    host_id: uuid.UUID | None
+    pattern: str
+    description: str | None
+    created_at: datetime
 
 
 # --- schedules -----------------------------------------------------------

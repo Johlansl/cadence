@@ -13,6 +13,7 @@ from sqlalchemy import text
 from app import __version__
 from app.api.routes import (
     admin,
+    exclusions,
     fleet,
     hosts,
     jobs,
@@ -119,6 +120,8 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
         return response
 
     app.include_router(admin.router)
+    app.include_router(exclusions.router)
+    app.include_router(exclusions.admin_router)
     app.include_router(fleet.router)
     app.include_router(hosts.router)
     app.include_router(jobs.router)

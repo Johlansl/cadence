@@ -286,6 +286,31 @@ class SchedulerState(Base):
     )
 
 
+class PackageExclusion(Base):
+    """An operator rule: never auto-upgrade packages matching `pattern` (a
+    glob). `scope='global'` applies to every host; `scope='host'` applies to
+    `host_id` only. Additive across scopes, no re-inclusion, no tag scope yet
+    (roadmap item 6). The server resolves `pattern` to exact package names
+    against the host's known inventory at job-creation time; the pattern
+    itself never reaches the agent. See migration 0015. Create/delete only,
+    no in-place edit."""
+
+    __tablename__ = "package_exclusions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    host_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE")
+    )
+    pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Webhook(Base):
     """An operator-configured outbound notification endpoint. `secret_encrypted`
     is a Fernet-encrypted copy of the signing secret (app/core/crypto.py); the
