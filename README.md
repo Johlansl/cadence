@@ -24,7 +24,9 @@ DNS) and tools that only show you the problem without fixing it. It gives you
   freshness indicator (spots a stopped agent), tags and filters, and a fleet
   summary.
 - **Remediation**: trigger `apt-get dist-upgrade` on a host from the dashboard;
-  the agent runs it within ~1 minute and posts the log back.
+  the agent runs it within ~1 minute and posts the log back. A "dry run"
+  button previews what the upgrade would change (packages upgraded, installed,
+  removed, kept back) without touching the host.
 - **Reboots**: per-host policy (`never` / `auto` / `prompt`), overridable per
   job; the agent reboots only when the upgrade actually left one pending.
 - **Maintenance windows**: one recurring weekly/monthly window per host,

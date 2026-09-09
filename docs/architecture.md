@@ -78,8 +78,15 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   candidate version, security flag, and the Debian `source_package` when the
   agent reports it). Replaced wholesale on every report.
 - `reports`: an append-only log of each report (counters + the raw payload).
-- `jobs`: queued/running/finished actions (`apt_upgrade`, `reboot`), with a
-  jsonb `params` and a captured `log`. A failed job also carries a coarse
+- `jobs`: queued/running/finished actions (`apt_upgrade`, `reboot`,
+  `apt_dry_run`), with a jsonb `params` and a captured `log`. `apt_dry_run`
+  is a pure-read simulation: the agent runs `apt-get -s dist-upgrade` and
+  reports, in `result.dry_run`, what a real `apt_upgrade` would do (packages
+  it would upgrade / newly install / remove, the ones apt keeps back, the
+  ones a Cadence exclusion rule filters out, and the ones already on hold on
+  the box). It never runs `apt-mark`, `dpkg`, or a real upgrade, and it runs
+  even where `CADENCE_ENABLE_UPGRADES=false`. A failed job also carries a
+  coarse
   `failure_category` and a one-line `failure_summary`: the agent classifies
   from the output of the apt/dpkg command that failed (or reports `timeout` /
   `agent_refused`), and the scheduler reaper classifies a job it failed with
@@ -92,7 +99,10 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   A successful or failed result's `result.held_conflicts` names any held
   package apt showed real evidence of skipping or blocking on that run;
   `result.held_packages` is what Cadence actually holds after reconciliation,
-  fed back as the next job's `known_held_packages`.
+  fed back as the next job's `known_held_packages`. An `apt_dry_run` job also
+  gets `params.excluded_packages` (same resolution as `apt_upgrade`), but not
+  `params.known_held_packages`: it never reconciles, it only filters its own
+  preview.
 - `package_exclusions`: operator hold rules (`scope` `global` or `host`,
   `host_id` nullable, `pattern` a glob matched with Python's `fnmatch`).
   Additive across scopes, no re-inclusion, no tag scope yet. Resolved to

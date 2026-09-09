@@ -107,8 +107,12 @@ Every POST body is:
 ### `job.succeeded` / `job.failed`
 
 Fires when an agent reports a job result, for any job type (`apt_upgrade`,
-`reboot`, ...). `job.failed` also fires when the scheduler gives up on a job
-that was claimed but never reported back (see `reaped` below).
+`reboot`, `apt_dry_run`, ...). `job.failed` also fires when the scheduler
+gives up on a job that was claimed but never reported back (see `reaped`
+below). A dry-run (`job_type: "apt_dry_run"`) is a pure-read simulation and
+still emits `job.succeeded` / `job.failed`; filter on `job_type` if you only
+want real upgrades. The structured preview lives on the job record
+(`result.dry_run`), not in the webhook body.
 
 ```json
 {

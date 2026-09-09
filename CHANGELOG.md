@@ -8,6 +8,19 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Dry-run. A new `apt_dry_run` job type previews what an `apt_upgrade` would
+  do on a host without changing anything: the agent (>= 0.11.0) runs
+  `apt-get -s dist-upgrade` and reports, in `result.dry_run`, the packages it
+  would upgrade / newly install / remove, the ones apt keeps back, the ones a
+  Cadence exclusion rule filters out, and the ones already on hold on the
+  box. It never runs `apt-mark`, `dpkg`, or a real upgrade, and it runs even
+  where `CADENCE_ENABLE_UPGRADES=false`. The job gets `params.excluded_packages`
+  resolved the same way as an `apt_upgrade` (but no `known_held_packages`: it
+  never reconciles). A "dry run" button next to "trigger dist-upgrade" on the
+  host page queues one and renders the preview as a count strip plus a
+  collapsible list per category. No migration (`jobs.job_type` stays free
+  `TEXT`). `job.succeeded` / `job.failed` webhooks fire for a dry-run too;
+  filter on `job_type` to skip them.
 - Package exclusions (holds). A new `package_exclusions` table (migration
   `0015`) lets an operator keep packages or families off automatic upgrades,
   globally or per host (`postgresql-14`, `docker-ce`, `linux-image*`,

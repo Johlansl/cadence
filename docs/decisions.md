@@ -54,6 +54,25 @@ rather than something to defer until someone asks.
 - **The agent never reboots on its own** unless the host's `reboot_policy` is
   `auto` (or a job overrides it) *and* the kill-switch `CADENCE_ENABLE_REBOOT`
   is not `false`. It otherwise just reports `reboot_required`.
+- **Dry-run is a separate job type (`apt_dry_run`), not a flag on
+  `apt_upgrade`.** Mixing a system-changing action and a pure read in one type
+  invites a wiring bug (a "dry-run" that actually upgrades, or the reverse); a
+  distinct type makes the difference visible everywhere `job_type` already
+  shows up (dashboard, webhooks, logs). The agent runs `apt-get -s
+  dist-upgrade` and nothing that mutates the host: no `apt-mark`, no `dpkg`,
+  no `-y` upgrade. It runs even when `CADENCE_ENABLE_UPGRADES=false`, because
+  previewing pending changes on an upgrade-disabled host is useful and safe.
+- **The dry-run preview reflects exclusion policy without applying it.** The
+  server injects `params.excluded_packages` exactly as for `apt_upgrade`, and
+  the agent drops matching names from the "would upgrade / would install"
+  lists into a separate `excluded` list, even for a rule no real run has
+  turned into an `apt-mark hold` yet. Separately it reports `held_in_place`:
+  what apt itself kept back because of a hold already on the box (correlated
+  the same way `held_conflicts` is on a real upgrade). So the operator sees
+  both what is blocked now and what the next real run will block.
+- **`jobs.job_type` stays free `TEXT`** (no DB CHECK); the API `Literal` is the
+  only closed set. A CHECK waits until campaigns introduce more job types, so
+  it is added once rather than widened repeatedly.
 
 ## Authentication
 
