@@ -2,70 +2,19 @@ package collector
 
 import (
 	"context"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"cadence/agent/internal/apterr"
+	"cadence/agent/internal/aptsim"
 	"cadence/agent/internal/logging"
 	"cadence/agent/internal/report"
 )
 
-// pendingUpdate is a parsed `Inst` line from `apt-get -s dist-upgrade`.
-type pendingUpdate struct {
-	name       string
-	arch       string
-	candidate  string
-	origin     string
-	isSecurity bool
-}
-
 func aptUpdate(ctx context.Context) error {
 	_, err := runCommand(ctx, "apt-get", "update")
 	return err
-}
-
-// instLine matches:  Inst <name> [<old>]? (<candidate> <origin...> [<arch>])
-var instLine = regexp.MustCompile(`^Inst\s+(\S+)\s+(?:\[[^\]]*\]\s+)?\(([^)]*)\)`)
-
-// trailingArch matches the "[amd64]" / "[all]" suffix inside the parentheses.
-var trailingArch = regexp.MustCompile(`\s*\[([^\]]+)\]\s*$`)
-
-// parseInstLine parses one line of `apt-get -s dist-upgrade` output. It returns
-// ok=false for any line that is not a parseable `Inst` line.
-//
-// The security flag is a heuristic: apt has no explicit "security" marker, so we
-// look for the substring "security" in the package's origin string (e.g.
-// "Debian-Security:12/stable-security"). Documented as a heuristic, not truth.
-func parseInstLine(line string) (pendingUpdate, bool) {
-	m := instLine.FindStringSubmatch(line)
-	if m == nil {
-		return pendingUpdate{}, false
-	}
-	name := m[1]
-	inner := strings.TrimSpace(m[2])
-
-	arch := ""
-	if loc := trailingArch.FindStringSubmatchIndex(inner); loc != nil {
-		arch = inner[loc[2]:loc[3]]
-		inner = strings.TrimSpace(inner[:loc[0]])
-	}
-
-	fields := strings.Fields(inner)
-	if len(fields) == 0 {
-		return pendingUpdate{}, false
-	}
-	candidate := fields[0]
-	origin := strings.TrimSpace(strings.TrimPrefix(inner, candidate))
-
-	return pendingUpdate{
-		name:       name,
-		arch:       arch,
-		candidate:  candidate,
-		origin:     origin,
-		isSecurity: strings.Contains(strings.ToLower(origin), "security"),
-	}, true
 }
 
 // aptRetryWaits is the delay before attempts 2..N of the dist-upgrade
@@ -80,7 +29,7 @@ const dpkgRepairTimeout = 5 * time.Minute
 // half-configured dpkg state once (`dpkg --configure -a`) and retries, and it
 // retries a few times while another process holds the apt lock
 // (unattended-upgrades). Any other error fails fast.
-func pendingUpdatesWithRetry(ctx context.Context) (map[string]pendingUpdate, error) {
+func pendingUpdatesWithRetry(ctx context.Context) (map[string]aptsim.Inst, error) {
 	updates, err := pendingUpdates(ctx)
 	if err == nil {
 		return updates, nil
@@ -129,21 +78,23 @@ func repairInterruptedDpkg(ctx context.Context) error {
 	return err
 }
 
-// pendingUpdates parses `apt-get -s dist-upgrade` into a map keyed by
-// name+architecture.
-func pendingUpdates(ctx context.Context) (map[string]pendingUpdate, error) {
+// pendingUpdates parses `apt-get -s dist-upgrade` into a map of pending
+// `Inst` lines keyed by name+architecture. Only `Inst` lines matter for the
+// periodic report; removals, kept-back packages and newly pulled dependencies
+// are the dry-run path's concern (see internal/aptsim).
+func pendingUpdates(ctx context.Context) (map[string]aptsim.Inst, error) {
 	out, err := runCommand(ctx, "apt-get", "-s", "dist-upgrade")
 	if err != nil {
 		return nil, err
 	}
 
-	updates := make(map[string]pendingUpdate)
+	updates := make(map[string]aptsim.Inst)
 	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.HasPrefix(line, "Inst ") {
 			continue
 		}
-		if u, ok := parseInstLine(line); ok {
-			updates[pkgKey(u.name, u.arch)] = u
+		if u, ok := aptsim.ParseInst(line); ok {
+			updates[pkgKey(u.Name, u.Arch)] = u
 		}
 	}
 	return updates, nil
@@ -153,12 +104,12 @@ func pendingUpdates(ctx context.Context) (map[string]pendingUpdate, error) {
 // appear in apt output but are not installed (new dependencies pulled by a
 // dist-upgrade) are ignored: an update is always relative to an installed
 // package. The result is sorted for deterministic payloads.
-func mergeUpdates(installed map[string]report.Package, updates map[string]pendingUpdate) []report.Package {
+func mergeUpdates(installed map[string]report.Package, updates map[string]aptsim.Inst) []report.Package {
 	// Fallback index for apt lines that carried no architecture.
-	byName := make(map[string]pendingUpdate, len(updates))
+	byName := make(map[string]aptsim.Inst, len(updates))
 	for _, u := range updates {
-		if u.arch == "" {
-			byName[u.name] = u
+		if u.Arch == "" {
+			byName[u.Name] = u
 		}
 	}
 
@@ -181,12 +132,12 @@ func mergeUpdates(installed map[string]report.Package, updates map[string]pendin
 	return out
 }
 
-func applyUpdate(p *report.Package, u pendingUpdate) {
-	candidate := u.candidate
+func applyUpdate(p *report.Package, u aptsim.Inst) {
+	candidate := u.Candidate
 	p.CandidateVersion = &candidate
-	p.IsSecurityUpdate = u.isSecurity
-	if u.origin != "" {
-		origin := u.origin
+	p.IsSecurityUpdate = u.IsSecurity
+	if u.Origin != "" {
+		origin := u.Origin
 		p.UpdateOrigin = &origin
 	}
 }
