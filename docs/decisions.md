@@ -329,6 +329,43 @@ changelog.
   reboot-required helper) but does **not** trust a site CA or write the
   per-host token, the operator still does that, exactly as with `install.sh`.
 
+## CI
+
+Two CI configs run the same five jobs (`agent`, `scripts`, `backend`,
+`frontend`, `stack`): `.gitlab-ci.yml` on the private GitLab repo (metered
+runner minutes) and `.github/workflows/ci.yml` on the public GitHub mirror
+(free minutes for a public repo). They are kept behaviourally equal;
+`MAINTAINING.md` "Keeping the two CI configs in sync" is the reference.
+
+- **Path-filter every job.** A job runs only when its own tree, the CI file,
+  or a coupled component's contract files change. The filter patterns are the
+  **shared contract** between the two CIs; the mechanism differs (GitLab
+  native `rules:changes`; GitHub a first `changes` job that diffs the range
+  and a `gate` job that aggregates the results as the single required check).
+  `agent` and `backend` cross-list each other's wire-contract files
+  (`app/api/deps.py`, `app/schemas/schemas.py`, `internal/report/`,
+  `internal/client/`, this file) so an edit to one side's contract still runs
+  the other side's suite.
+- **`stack` runs only on `main` and merge-request pipelines**, never a plain
+  feature branch: the dind smoke is the most expensive job and its
+  regressions (a broken Dockerfile, a migration that fails to bootstrap from
+  `0001`) only need catching before a change lands. With the local-`--ff-only`
+  workflow this is the push to `main`.
+- **No redundant runs.** GitLab drops tag pipelines (nothing is tag-gated;
+  releases run on GitHub) and auto-cancels a superseded pipeline
+  (`interruptible`); GitHub cancels the in-flight run for a ref on a new push
+  (`concurrency`, `cancel-in-progress: true`).
+- **Caches are platform-specific by design** (GitLab job cache vs the
+  `actions/setup-*` caches) and are not required to match.
+- **Known coverage gap:** each of the agent (Go) and backend (Python) suites
+  only checks its own internal consistency; nothing cross-checks the two
+  implementations of the HMAC canonical string ("Authentication" above) or the
+  wire JSON shapes. A coherent change to either, made with its own component's
+  tests, passes CI undetected. The path-filter cross-listing does not close
+  this. Tracked in `cadence-backlog.md` ("Infra / quality backlog"): a
+  committed golden-vector test (recommended) or a live signed round-trip in
+  the `stack` job.
+
 ## Monitoring the control plane
 
 The host that runs the Cadence stack is **monitored like any other host but
