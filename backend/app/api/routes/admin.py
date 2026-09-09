@@ -16,6 +16,7 @@ from app.api.deps import get_db, require_admin_key
 from app.api.pagination import before_keyset
 from app.core.config import settings
 from app.core.crypto import encrypt_token_secret
+from app.exclusions import resolve_for_job
 from app.models.models import AgentToken, AuditLog, Host, Job
 from app.schemas.schemas import (
     AuditEntry,
@@ -156,10 +157,17 @@ def create_job(
             "a job is already pending or running for this host",
         )
 
+    params = dict(payload.params)
+    if payload.job_type == "apt_upgrade":
+        # Server-resolved, always wins over whatever the caller sent for this
+        # key: a job's held set must never be able to drift from actual
+        # policy (roadmap item 3).
+        params["excluded_packages"] = resolve_for_job(db, host_id)
+
     job = Job(
         host_id=host_id,
         job_type=payload.job_type,
-        params=payload.params,
+        params=params,
         requested_by=payload.requested_by,
     )
     db.add(job)
