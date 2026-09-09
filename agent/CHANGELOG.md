@@ -3,6 +3,27 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.9.0
+
+Failure classification on a failed job (server roadmap item 2):
+
+- `internal/apterr` gains disk-full, network/mirror and dpkg-error detection
+  on top of the held-lock and interrupted-state patterns it already had, plus
+  a `Classify` that maps the output of the command that failed to one coarse
+  category (`apt_locked`, `network_or_repo`, `dpkg_error`, `disk_full`,
+  `timeout`, `unknown`) and a `Summary` that lifts the single most useful
+  line out of the output.
+- The job result now carries `failure_category` and `failure_summary` for a
+  failed job. The executor classifies the isolated output of the failing
+  `dist-upgrade` attempt (so an earlier retry's lock message cannot mislabel
+  it), falls back to the full log, and reports `timeout` when the job's own
+  deadline expired. A job the agent declines before running anything
+  (upgrades disabled, reboot disabled, unsupported job type) reports
+  `agent_refused`. Both fields are omitted from a successful result, so the
+  wire form of a success is unchanged.
+- Needs a server that stores the two fields (shipped alongside this); an
+  older server simply ignores them.
+
 ## 0.8.0
 
 Signed requests, replacing the raw bearer token on every call:

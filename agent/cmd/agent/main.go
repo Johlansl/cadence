@@ -16,6 +16,7 @@ import (
 	"os"
 	"time"
 
+	"cadence/agent/internal/apterr"
 	"cadence/agent/internal/client"
 	"cadence/agent/internal/collector"
 	"cadence/agent/internal/config"
@@ -29,7 +30,7 @@ import (
 // builds override it with the git tag via
 // -ldflags "-X main.agentVersion=<version>" (see scripts/publish-agent.sh).
 // Keep this literal in step with the newest agent/CHANGELOG.md heading.
-var agentVersion = "0.8.0"
+var agentVersion = "0.9.0"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
@@ -112,15 +113,23 @@ func run(pollOnly bool) error {
 func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logging.Info("job received", "job_id", job.ID, "job_type", job.JobType)
 
-	submit := func(status string, exitCode int, logText string, reboot bool) error {
+	// failCat / failSummary are sent only for a failed job. "" on success.
+	submit := func(status string, exitCode int, logText string, reboot bool, failCat, failSummary string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer cancel()
 		return c.SubmitJobResult(ctx, job.ID, client.JobResult{
-			Status:         status,
-			ExitCode:       exitCode,
-			Log:            logText,
-			RebootRequired: reboot,
+			Status:          status,
+			ExitCode:        exitCode,
+			Log:             logText,
+			RebootRequired:  reboot,
+			FailureCategory: failCat,
+			FailureSummary:  failSummary,
 		})
+	}
+	// refused reports a job the agent declined before running anything: the
+	// category is fixed, the reason is the message itself.
+	refused := func(msg string) error {
+		return submit("failed", 0, msg, false, apterr.CategoryAgentRefused, msg)
 	}
 
 	// Dedicated reboot job (reboot_policy "prompt" / a "reboot now" from the
@@ -128,12 +137,11 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	// the job never hangs in "running".
 	if job.JobType == "reboot" {
 		if !cfg.EnableReboot {
-			return submit("failed", 0,
-				"reboot is disabled on this host (CADENCE_ENABLE_REBOOT=false)", false)
+			return refused("reboot is disabled on this host (CADENCE_ENABLE_REBOOT=false)")
 		}
 		logging.Info("dedicated reboot job -> systemctl --no-block reboot", "job_id", job.ID)
 		if err := submit("succeeded", 0,
-			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n", true); err != nil {
+			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n", true, "", ""); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
 		}
 		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
@@ -147,11 +155,10 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 
 	if !cfg.EnableUpgrades {
 		logging.Warn("upgrades disabled on this host, reporting job as failed", "job_id", job.ID)
-		return submit("failed", 0,
-			"upgrades are disabled on this host (CADENCE_ENABLE_UPGRADES=false)", false)
+		return refused("upgrades are disabled on this host (CADENCE_ENABLE_UPGRADES=false)")
 	}
 	if job.JobType != "apt_upgrade" {
-		return submit("failed", 0, "unsupported job type: "+job.JobType, false)
+		return refused("unsupported job type: " + job.JobType)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
@@ -173,7 +180,8 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	willReboot, logSuffix := rebootDecision(status, res.RebootRequired, cfg.EnableReboot, job.RebootMode())
 	logText := res.Log + logSuffix
 
-	if err := submit(status, res.ExitCode, logText, res.RebootRequired); err != nil {
+	if err := submit(status, res.ExitCode, logText, res.RebootRequired,
+		res.FailureCategory, res.FailureSummary); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}
 

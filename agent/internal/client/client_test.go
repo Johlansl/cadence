@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,11 +131,12 @@ func TestClaimNextJobEmpty(t *testing.T) {
 }
 
 func TestSubmitJobResult(t *testing.T) {
-	var gotPath string
+	var gotPath, gotRaw string
 	var gotBody JobResult
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		raw, _ := io.ReadAll(r.Body)
+		gotRaw = string(raw)
 		verifySignedHeaders(t, r, "tok", raw)
 		_ = json.Unmarshal(raw, &gotBody)
 		_, _ = io.WriteString(w, `{}`)
@@ -151,6 +153,30 @@ func TestSubmitJobResult(t *testing.T) {
 		t.Errorf("path = %q", gotPath)
 	}
 	if gotBody.Status != "succeeded" || !gotBody.RebootRequired || gotBody.Log != "done" {
+		t.Errorf("body = %+v", gotBody)
+	}
+	if !strings.Contains(gotRaw, `"status":"succeeded"`) || strings.Contains(gotRaw, "failure_category") {
+		t.Errorf("a success result must not carry failure_category: %s", gotRaw)
+	}
+}
+
+func TestSubmitJobResultCarriesFailureClassification(t *testing.T) {
+	var gotBody JobResult
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	err := New(srv.URL, "tok", 5*time.Second).SubmitJobResult(context.Background(), "j", JobResult{
+		Status: "failed", ExitCode: 100, Log: "boom",
+		FailureCategory: "dpkg_error", FailureSummary: "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBody.FailureCategory != "dpkg_error" || gotBody.FailureSummary == "" {
 		t.Errorf("body = %+v", gotBody)
 	}
 }
