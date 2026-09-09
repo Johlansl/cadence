@@ -19,7 +19,8 @@ from app.advisories.match import advisories_for, codename_for, source_for
 from app.api.deps import get_db
 from app.api.pagination import after_keyset
 from app.core.staleness import LATE_AFTER
-from app.models.models import Host, HostPackage, Package
+from app.exclusions import matching, patterns_for_host
+from app.models.models import Host, HostPackage, Package, PackageExclusion
 from app.schemas.schemas import HostDetail, HostPackageOut, HostStatus, HostSummary
 
 router = APIRouter(prefix="/api/v1", tags=["hosts"])
@@ -34,6 +35,46 @@ def _status(updates_available: int, security_updates: int) -> HostStatus:
     if updates_available > 0:
         return HostStatus.updates_available
     return HostStatus.up_to_date
+
+
+def _excluded_counts(db: Session, host_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """How many pending updates a package_exclusions rule matches, per host.
+    Bounded to host_ids (the already-paginated page), so this stays cheap
+    regardless of fleet size. A host absent from the returned dict has 0."""
+    if not host_ids:
+        return {}
+    global_patterns = list(
+        db.execute(
+            select(PackageExclusion.pattern).where(PackageExclusion.scope == "global")
+        )
+        .scalars()
+        .all()
+    )
+    host_patterns: dict[uuid.UUID, list[str]] = {}
+    for hid, pattern in db.execute(
+        select(PackageExclusion.host_id, PackageExclusion.pattern).where(
+            PackageExclusion.scope == "host", PackageExclusion.host_id.in_(host_ids)
+        )
+    ).all():
+        host_patterns.setdefault(hid, []).append(pattern)
+    if not global_patterns and not host_patterns:
+        return {}
+
+    names_by_host: dict[uuid.UUID, list[str]] = {}
+    for hid, name in db.execute(
+        select(HostPackage.host_id, Package.name)
+        .join(Package, Package.id == HostPackage.package_id)
+        .where(
+            HostPackage.host_id.in_(host_ids),
+            HostPackage.candidate_version.is_not(None),
+        )
+    ).all():
+        names_by_host.setdefault(hid, []).append(name)
+
+    return {
+        hid: len(matching(names, global_patterns + host_patterns.get(hid, [])))
+        for hid, names in names_by_host.items()
+    }
 
 
 def _summary_fields(host: Host) -> dict:
@@ -128,14 +169,18 @@ def list_hosts(
     if limit is not None:
         stmt = stmt.limit(limit)
 
+    rows = db.execute(stmt).all()
+    excluded = _excluded_counts(db, [host.id for host, _, _ in rows])
+
     return [
         HostSummary(
             **_summary_fields(host),
             status=_status(updates_available, security_updates),
             updates_available_count=updates_available,
             security_updates_count=security_updates,
+            excluded_count=excluded.get(host.id, 0),
         )
-        for host, updates_available, security_updates in db.execute(stmt).all()
+        for host, updates_available, security_updates in rows
     ]
 
 
@@ -166,6 +211,15 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
         1 for r in pkg_rows if r.candidate_version is not None and r.is_security_update
     )
 
+    # excluded is computed against every package (mirrors is_security_update,
+    # shown per row regardless of a pending update -- a hold is meaningful
+    # even before a candidate exists); excluded_count only tallies pending
+    # ones, matching "N of the M available updates are excluded".
+    excluded_names = set(matching((r.name for r in pkg_rows), patterns_for_host(db, host.id)))
+    excluded_count = sum(
+        1 for r in pkg_rows if r.candidate_version is not None and r.name in excluded_names
+    )
+
     # Link each apt-flagged pending security update to the DSA/DLA(s) that fix
     # it. Never affects the counts above -- purely additive metadata.
     advisories_by_key: dict[tuple[str, str], list] = {}
@@ -190,10 +244,12 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
         status=_status(updates_available, security_updates),
         updates_available_count=updates_available,
         security_updates_count=security_updates,
+        excluded_count=excluded_count,
         packages=[
             HostPackageOut(
                 **r._mapping,
                 advisories=advisories_by_key.get((r.name, r.architecture), []),
+                excluded=r.name in excluded_names,
             )
             for r in pkg_rows
         ],

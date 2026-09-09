@@ -241,6 +241,9 @@ class HostSummary(BaseModel):
     status: HostStatus
     updates_available_count: int
     security_updates_count: int
+    # How many of updates_available_count a package_exclusions rule matches;
+    # always recomputed at read time, never stored (roadmap item 3).
+    excluded_count: int
 
 
 class FleetSummary(BaseModel):
@@ -284,6 +287,7 @@ class HostPackageOut(BaseModel):
     updated_at: datetime
     source_package: str | None = None
     advisories: list[AdvisoryRef] = []
+    excluded: bool = False
 
 
 class HostDetail(HostSummary):
