@@ -238,5 +238,40 @@ class Settings:
         # then sit behind the same Caddy basic-auth as the read API).
         self.api_docs_enabled: bool = _bool_env("CADENCE_API_DOCS_ENABLED", False)
 
+        # Outbound webhooks. Inert with no webhook rows configured;
+        # CADENCE_WEBHOOKS_ENABLED=false is a hard off switch for both the
+        # enqueue side (request handlers) and the dispatch side (scheduler).
+        self.webhooks_enabled: bool = _bool_env("CADENCE_WEBHOOKS_ENABLED", True)
+        # Per-attempt HTTP timeout for a webhook delivery. No outbound call is
+        # ever unbounded.
+        self.webhook_timeout_seconds: int = _positive_int(
+            "CADENCE_WEBHOOK_TIMEOUT_SECONDS", 10
+        )
+        # Delivery attempts before a webhook_deliveries row is parked in
+        # 'failed'. Backoff is min(60s * 2**(n-1), 1h) between attempts.
+        self.webhook_max_attempts: int = _positive_int(
+            "CADENCE_WEBHOOK_MAX_ATTEMPTS", 6
+        )
+        # How many pending deliveries the dispatcher drains per scheduler tick.
+        self.webhook_dispatch_batch: int = _positive_int(
+            "CADENCE_WEBHOOK_DISPATCH_BATCH", 20
+        )
+        # last_seen_at age past which an active host is considered offline and a
+        # host.offline event is enqueued (once, until it reports again).
+        # Default matches app.core.staleness.SILENT_AFTER (15 min).
+        self.webhook_offline_after_seconds: int = _positive_int(
+            "CADENCE_WEBHOOK_OFFLINE_AFTER_SECONDS", 900
+        )
+        # Terminal (delivered/failed) delivery rows older than this are removed
+        # by the scheduler's retention sweep. 0 = keep forever.
+        self.webhook_deliveries_retention_days: int = _non_negative_int(
+            "CADENCE_WEBHOOK_DELIVERIES_RETENTION_DAYS", 30
+        )
+        # Cap on the job `log` embedded in job.* payloads (head + tail kept,
+        # middle elided). 0 = embed the full stored log.
+        self.webhook_log_max_bytes: int = _non_negative_int(
+            "CADENCE_WEBHOOK_LOG_MAX_BYTES", 4096
+        )
+
 
 settings = Settings()

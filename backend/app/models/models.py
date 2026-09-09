@@ -280,3 +280,87 @@ class SchedulerState(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class Webhook(Base):
+    """An operator-configured outbound notification endpoint. `secret_encrypted`
+    is a Fernet-encrypted copy of the signing secret (app/core/crypto.py); the
+    plaintext is returned once at creation and never stored. `event_types` is a
+    JSON array of subscribed event names, left free text like jobs.job_type
+    (the closed set is enforced by a Pydantic Literal at the API). See
+    migration 0013."""
+
+    __tablename__ = "webhooks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    event_types: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class WebhookDelivery(Base):
+    """The outbox. One row per (webhook, event) written in the same transaction
+    as the change that produced the event; the scheduler's dispatcher drains
+    `status = 'pending'` rows with retry + exponential backoff. `payload` is the
+    exact JSON body POSTed. `status` is pending -> delivered | failed (DB CHECK,
+    migration 0013)."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    webhook_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'pending'")
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class WebhookHostState(Base):
+    """Per-host bookkeeping so a repeating condition notifies once, not every
+    cycle. `security_updates_notified` is the security count at the last
+    host.security_updates_available notification sent for that host (NULL =
+    never); `offline_notified` guards host.offline and is cleared when the host
+    reports again. See migration 0013."""
+
+    __tablename__ = "webhook_host_state"
+
+    host_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), primary_key=True
+    )
+    security_updates_notified: Mapped[int | None] = mapped_column(Integer)
+    offline_notified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
