@@ -328,6 +328,10 @@ class JobResultIn(BaseModel):
     exit_code: int
     log: str = ""
     reboot_required: bool | None = None
+    # Sent by agent >= 0.9.0 for a failed job. Optional: an older agent omits
+    # them and the columns stay NULL. Agent-authoritative, not constrained here.
+    failure_category: str | None = None
+    failure_summary: str | None = None
 
 
 class JobOut(BaseModel):
@@ -341,6 +345,8 @@ class JobOut(BaseModel):
     requested_by: str | None
     result: dict | None
     log: str | None
+    failure_category: str | None
+    failure_summary: str | None
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

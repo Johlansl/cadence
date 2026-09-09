@@ -51,6 +51,89 @@ def test_job_result_transitions_and_conflicts(client, db_session):
     assert r.status_code == 409
 
 
+def test_job_result_stores_failure_classification(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))  # -> running
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "failed",
+            "exit_code": 100,
+            "log": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+            "failure_category": "dpkg_error",
+            "failure_summary": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["failure_category"] == "dpkg_error"
+    assert body["failure_summary"].startswith("E: Sub-process")
+
+    job = db_session.get(Job, job_id)
+    assert job.failure_category == "dpkg_error"
+    assert job.failure_summary.startswith("E: Sub-process")
+
+
+def test_job_result_ignores_classification_on_success(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "succeeded",
+            "exit_code": 0,
+            "failure_category": "dpkg_error",
+            "failure_summary": "should be dropped",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["failure_category"] is None
+    job = db_session.get(Job, job_id)
+    assert job.failure_category is None and job.failure_summary is None
+
+
+def test_job_result_from_older_agent_leaves_classification_null(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    # No failure_category / failure_summary keys at all (agent < 0.9.0).
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "failed", "exit_code": 1, "log": "boom"},
+    )
+    assert r.status_code == 200
+    assert r.json()["failure_category"] is None
+    job = db_session.get(Job, job_id)
+    assert job.failure_category is None and job.failure_summary is None
+
+
+def test_job_result_clips_an_overlong_summary(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "failed",
+            "exit_code": 1,
+            "failure_category": "unknown",
+            "failure_summary": "x" * 2000,
+        },
+    )
+    assert r.status_code == 200
+    assert len(db_session.get(Job, job_id).failure_summary) == 500
+
+
 def test_job_result_hidden_from_other_host(client):
     host_a, _ = create_host(client, hostname="a")
     _host_b, token_b = create_host(client, hostname="b")
