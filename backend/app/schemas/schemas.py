@@ -6,6 +6,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -20,6 +21,18 @@ RebootMode = Literal["auto", "never", "prompt"]
 
 # Job kinds the API accepts. The scheduler only ever creates 'apt_upgrade'.
 JobType = Literal["apt_upgrade", "reboot"]
+
+# Event names a webhook can subscribe to. 'webhook.test' is deliberately not
+# here: it is never subscribable, only ever sent to one explicitly targeted
+# endpoint. Campaign events will be added later; the DB column stays free text
+# so that needs no migration.
+WebhookEventType = Literal[
+    "job.succeeded",
+    "job.failed",
+    "host.offline",
+    "host.reboot_required",
+    "host.security_updates_available",
+]
 
 
 # --- admin: host provisioning -------------------------------------------------
@@ -331,6 +344,87 @@ class JobOut(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+
+
+# --- webhooks ----------------------------------------------------------------
+
+
+def _validate_webhook_url(v: str) -> str:
+    v = v.strip()
+    if not v:
+        raise ValueError("url must not be empty")
+    parsed = urlsplit(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("url must be an absolute http(s) URL")
+    return v
+
+
+class WebhookCreate(BaseModel):
+    """Register an outbound webhook. The signing secret is generated server
+    side and returned once in WebhookCreated."""
+
+    url: str
+    event_types: list[WebhookEventType] = Field(min_length=1)
+    enabled: bool = True
+    description: str | None = Field(default=None, max_length=200)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str) -> str:
+        return _validate_webhook_url(v)
+
+    @field_validator("event_types")
+    @classmethod
+    def _dedup(cls, v: list[str]) -> list[str]:
+        seen: dict[str, None] = {}
+        for item in v:
+            seen.setdefault(item, None)
+        return list(seen)
+
+
+class WebhookUpdate(BaseModel):
+    """Partial update. The route merges these onto the row and re-validates the
+    result as a WebhookCreate."""
+
+    url: str | None = None
+    event_types: list[WebhookEventType] | None = None
+    enabled: bool | None = None
+    description: str | None = None
+
+
+class WebhookCreated(BaseModel):
+    """The only response that carries the full url and the plaintext secret,
+    returned exactly once at creation."""
+
+    id: uuid.UUID
+    url: str
+    secret: str
+    enabled: bool
+    event_types: list[str]
+    description: str | None
+    created_at: datetime
+
+
+class WebhookOut(BaseModel):
+    """A webhook as shown on the dashboard. `url_preview` is masked; the raw
+    url and the secret are never returned here. `last_*` / `pending_count` are
+    derived from webhook_deliveries at read time."""
+
+    id: uuid.UUID
+    url_preview: str
+    enabled: bool
+    event_types: list[str]
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+    last_success_at: datetime | None
+    last_attempt_at: datetime | None
+    last_error: str | None
+    pending_count: int
+
+
+class WebhookTestAccepted(BaseModel):
+    delivery_id: uuid.UUID
 
 
 # --- schedules -----------------------------------------------------------
