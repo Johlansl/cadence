@@ -11,7 +11,16 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app import __version__
-from app.api.routes import admin, fleet, hosts, jobs, packages, reports, schedules
+from app.api.routes import (
+    admin,
+    fleet,
+    hosts,
+    jobs,
+    packages,
+    reports,
+    schedules,
+    webhooks,
+)
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.ratelimit import note_rejected, ratelimiter
@@ -117,6 +126,8 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
     app.include_router(reports.router)
     app.include_router(schedules.router)
     app.include_router(schedules.admin_router)
+    app.include_router(webhooks.router)
+    app.include_router(webhooks.admin_router)
 
     @app.get("/healthz", tags=["meta"])
     def healthz() -> dict[str, str]:
