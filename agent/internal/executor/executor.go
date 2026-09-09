@@ -64,6 +64,12 @@ type Result struct {
 	// holds caused no visible problem (or none were held at all), never
 	// silently omitted just because the run happened to succeed.
 	HeldConflicts []string
+
+	// HeldPackages is the set Cadence actually holds after this run's
+	// reconciliation (may differ from what was requested if apt-mark failed
+	// on a stale name). Becomes the server's known_held_packages for the
+	// next job. Same never-omitted convention as HeldConflicts.
+	HeldPackages []string
 }
 
 func aptEnv() []string {
@@ -89,12 +95,12 @@ func aptCommand(ctx context.Context, out *bytes.Buffer, name string, args ...str
 }
 
 // RunAptUpgrade refreshes the package lists, reconciles dpkg's hold state to
-// excludedPackages, then runs a non-interactive `apt-get dist-upgrade -y`,
-// retrying while another process holds the apt lock. If the upgrade still
-// fails it runs `dpkg --configure -a` (under a fresh context) so a
-// half-applied transaction is left as consistent as possible. Output from
-// every command is captured in execution order.
-func RunAptUpgrade(ctx context.Context, excludedPackages []string) Result {
+// excludedPackages against knownHeldPackages, then runs a non-interactive
+// `apt-get dist-upgrade -y`, retrying while another process holds the apt
+// lock. If the upgrade still fails it runs `dpkg --configure -a` (under a
+// fresh context) so a half-applied transaction is left as consistent as
+// possible. Output from every command is captured in execution order.
+func RunAptUpgrade(ctx context.Context, excludedPackages, knownHeldPackages []string) Result {
 	var out bytes.Buffer
 
 	// Refresh lists so the upgrade reflects current apt state. Non-fatal: a
@@ -103,7 +109,7 @@ func RunAptUpgrade(ctx context.Context, excludedPackages []string) Result {
 		out.WriteString("\n[cadence] apt-get update failed; using existing lists\n")
 	}
 
-	heldNames := reconcileHolds(ctx, &out, excludedPackages)
+	heldNames := reconcileHolds(ctx, &out, excludedPackages, knownHeldPackages)
 
 	res, lastAttemptOutput := runDistUpgrade(ctx, &out)
 
@@ -118,52 +124,58 @@ func RunAptUpgrade(ctx context.Context, excludedPackages []string) Result {
 		classifyFailure(ctx, &res, lastAttemptOutput, out.String())
 	}
 	res.HeldConflicts = holds.Correlate(lastAttemptOutput, heldNames)
+	res.HeldPackages = heldNames
 
 	res.Log = capLog(out.String())
 	res.RebootRequired = rebootcheck.Pending()
 	return res
 }
 
-// reconcileHolds aligns dpkg's hold state with excludedPackages, the exact
-// package names the server resolved for this host (roadmap item 3). Every
-// apt_upgrade run reconciles from scratch: hold whatever should be held,
-// unhold anything currently held that fell off the list, so `apt-mark
-// showhold` always reflects current policy, never an orphan from an
-// interrupted or superseded run. Returns the names actually held afterward.
+// reconcileHolds aligns dpkg's hold state with excludedPackages, using
+// knownHeldPackages -- the set the server last recorded Cadence itself
+// holding for this host -- as the reconciliation baseline, NOT a live
+// `apt-mark showhold` read. This is deliberate: apt-mark showhold reports
+// every held package on the box, including ones a third party (the operator
+// by hand, unattended-upgrades, a distro default) put there for its own
+// reasons -- diffing against it would unhold them the moment they are not in
+// excludedPackages, which is not Cadence's call to make. A hold neither known
+// nor wanted is left untouched. Returns the names Cadence actually holds
+// after this run (fed back to the server as the next known_held_packages).
 // Best-effort throughout: a hold/unhold problem is logged into out and never
 // fails the job -- the upgrade itself is the point of the run.
-func reconcileHolds(ctx context.Context, out *bytes.Buffer, excludedPackages []string) []string {
+func reconcileHolds(ctx context.Context, out *bytes.Buffer, excludedPackages, knownHeldPackages []string) []string {
 	valid, rejected := holds.Filter(excludedPackages)
 	for _, name := range rejected {
 		fmt.Fprintf(out, "\n[cadence] ignoring invalid excluded-package name from server: %q\n", name)
 	}
-
-	// Always check for an orphaned hold, even when valid is empty (a policy
-	// removed since the last run): apt-mark showhold is a cheap local dpkg
-	// query, no network involved.
-	var showhold bytes.Buffer
-	var current []string
-	if err := aptCommand(ctx, &showhold, "apt-mark", "showhold").Run(); err != nil {
-		out.WriteString("\n[cadence] apt-mark showhold failed; assuming nothing is currently held\n")
-	} else {
-		current = holds.ParseShowHold(showhold.String())
+	known, knownRejected := holds.Filter(knownHeldPackages)
+	for _, name := range knownRejected {
+		fmt.Fprintf(out, "\n[cadence] ignoring invalid known-held-package name from server: %q\n", name)
 	}
 
-	toHold, toUnhold := holds.Diff(current, valid)
+	// Informational only, never fed into the diff below: lets an operator
+	// reading the job log notice e.g. a third-party hold in passing.
+	var showhold bytes.Buffer
+	if err := aptCommand(ctx, &showhold, "apt-mark", "showhold").Run(); err == nil {
+		fmt.Fprintf(out, "\n[cadence] apt-mark currently reports %d package(s) on hold (informational)\n",
+			len(holds.ParseShowHold(showhold.String())))
+	}
+
+	toHold, toUnhold := holds.Diff(known, valid)
 	held := applyMark(ctx, out, "hold", toHold)
 	unheld := applyMark(ctx, out, "unhold", toUnhold)
 	if len(toHold) > 0 || len(toUnhold) > 0 {
 		fmt.Fprintf(out, "\n[cadence] policy: holding %d package(s), releasing %d\n", len(held), len(unheld))
 	}
 
-	// Final held set = names already held and still wanted, plus names newly
-	// held this run.
-	final := make(map[string]bool, len(current)+len(held))
+	// Final Cadence-managed held set = names already known-held and still
+	// wanted, plus names newly held this run.
+	final := make(map[string]bool, len(known)+len(held))
 	validSet := make(map[string]bool, len(valid))
 	for _, n := range valid {
 		validSet[n] = true
 	}
-	for _, n := range current {
+	for _, n := range known {
 		if validSet[n] {
 			final[n] = true
 		}

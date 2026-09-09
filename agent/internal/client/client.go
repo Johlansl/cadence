@@ -99,6 +99,12 @@ type JobResult struct {
 	// can tell that apart from an empty list (reconciliation ran and found
 	// nothing wrong).
 	HeldConflicts []string `json:"held_conflicts"`
+
+	// HeldPackages is what Cadence actually holds on this host after this
+	// run's reconciliation (roadmap item 3 follow-up). Same never-omitted
+	// convention as HeldConflicts: null = not applicable, [] = reconciled
+	// and nothing held, list = the real set.
+	HeldPackages []string `json:"held_packages"`
 }
 
 // SubmitJobResult reports the outcome of a job back to the server.

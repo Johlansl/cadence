@@ -202,6 +202,30 @@ func TestSubmitJobResultHeldConflictsIsNeverOmitted(t *testing.T) {
 	if !strings.Contains(gotRaw, `"held_conflicts":null`) {
 		t.Errorf("expected an explicit null held_conflicts, got: %s", gotRaw)
 	}
+	if !strings.Contains(gotRaw, `"held_packages":null`) {
+		t.Errorf("expected an explicit null held_packages, got: %s", gotRaw)
+	}
+}
+
+func TestSubmitJobResultHeldPackagesRoundTrips(t *testing.T) {
+	var gotBody JobResult
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	err := New(srv.URL, "tok", 5*time.Second).SubmitJobResult(context.Background(), "j", JobResult{
+		Status: "succeeded", ExitCode: 0,
+		HeldPackages: []string{"docker-ce", "postgresql-14"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotBody.HeldPackages) != 2 {
+		t.Errorf("HeldPackages = %v", gotBody.HeldPackages)
+	}
 }
 
 func TestDoRetriesOn5xxThenSucceeds(t *testing.T) {

@@ -71,6 +71,23 @@ func (j JobHandoff) ExcludedPackages() []string {
 	return p.ExcludedPackages
 }
 
+// KnownHeldPackages returns params.known_held_packages: the packages the
+// server last recorded Cadence itself holding on this host (from the most
+// recent completed apt_upgrade job's held_packages result), used as the
+// reconciliation baseline instead of a live `apt-mark showhold` read, so a
+// hold Cadence has never itself recorded is never touched. Nil on absence or
+// malformed JSON.
+func (j JobHandoff) KnownHeldPackages() []string {
+	if len(j.Params) == 0 {
+		return nil
+	}
+	var p struct {
+		KnownHeldPackages []string `json:"known_held_packages"`
+	}
+	_ = json.Unmarshal(j.Params, &p)
+	return p.KnownHeldPackages
+}
+
 // Response is the body returned by POST /api/v1/reports. Only the piggybacked
 // job is of interest to the agent; the rest is ignored.
 type Response struct {

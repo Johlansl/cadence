@@ -3,6 +3,26 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.10.1
+
+Bug fix: `0.10.0`'s hold reconciliation diffed against a live `apt-mark
+showhold` read, so it unheld *every* package not in that run's
+`excluded_packages` -- including ones held by something other than Cadence
+(an operator, unattended-upgrades, a distro default). Confirmed live on a
+real host: two long-standing third-party holds were lifted, one of the
+freed packages then hit an unrelated dpkg permission error during its
+upgrade.
+
+Reconciliation now diffs against `params.known_held_packages`, the set the
+server last recorded Cadence itself holding on that host (from the
+previous `apt_upgrade` job's `held_packages` result), never against
+`apt-mark showhold` directly. `apt-mark showhold` is still read, but only
+to log an informational count in the job log. A hold in neither
+`known_held_packages` nor `excluded_packages` -- a third party's -- is now
+left untouched. The job result carries `held_packages`, the set actually
+held after reconciliation, with the same never-omitted convention as
+`held_conflicts`, so the server can track it forward to the next job.
+
 ## 0.10.0
 
 Package exclusion / hold policies (server roadmap item 3):
