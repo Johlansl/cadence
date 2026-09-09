@@ -281,7 +281,7 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
 | `CADENCE_AUDIT_RETENTION_DAYS` | `365` | daily prune of the admin audit trail (`audit_log`); `0` = keep forever |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
-| `CADENCE_WEBHOOKS_ENABLED` | `true` | master switch for outbound webhooks (inert until one is configured on the dashboard); `false` hard-disables enqueue + dispatch |
+| `CADENCE_WEBHOOKS_ENABLED` | `true` | master switch for outbound webhooks (inert until one is configured on the dashboard); `false` hard-disables enqueue + dispatch. See [Webhooks](#webhooks) and [docs/webhooks.md](docs/webhooks.md) |
 | `CADENCE_WEBHOOK_TIMEOUT_SECONDS` / `CADENCE_WEBHOOK_MAX_ATTEMPTS` | `10` / `6` | per-attempt HTTP timeout; delivery attempts before a row is parked `failed` (backoff 60 s ... 1 h) |
 | `CADENCE_WEBHOOK_DISPATCH_BATCH` | `20` | pending deliveries drained per scheduler tick |
 | `CADENCE_WEBHOOK_OFFLINE_AFTER_SECONDS` | `900` | `last_seen_at` age before a `host.offline` webhook fires (once, re-arms on the next report) |
@@ -471,6 +471,20 @@ curl -s https://<site>/api/v1/admin/audit -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
 
 Callers may set `X-Actor: alice` on their writes to stamp the `actor` column
 (it defaults to `admin`, the shared key proves no identity on its own).
+
+### Webhooks
+
+Cadence can POST a signed JSON body to an endpoint you control when a job
+finishes, a host goes offline, a host starts needing a reboot, or a host gains
+pending security updates. Configure it in the dashboard's **Webhooks** section
+(the full URL and the signing secret are shown once, at creation), or through
+`POST /api/v1/admin/webhooks`.
+
+The body is one generic shape for every event and receiver: it is **not** the
+format Discord, Slack or Teams expect, so a webhook pointed straight at a chat
+URL fails every delivery. [docs/webhooks.md](docs/webhooks.md) has the payload
+of each event, a signature-verification receiver to copy, and how to relay to a
+chat tool.
 
 ### Recording the real client IP
 

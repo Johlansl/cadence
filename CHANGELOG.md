@@ -28,6 +28,9 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
   dashboard reads but the stored URL is masked and the signing secret, like
   the full URL, is shown only once at creation. All new `CADENCE_WEBHOOK*`
   settings are optional and the feature is inert until a webhook is configured.
+  `docs/webhooks.md` is the operator guide: the payload of each event, a
+  signature-verification receiver to copy, and how to relay to Discord / Slack
+  / Teams (which need their own message format, not this generic body).
 - `GET /api/v1/packages` is now keyset-paginated, matching `/hosts`,
   `/hosts/{id}/jobs`, `/hosts/{id}/reports` and `/admin/audit`: `limit`
   (default 50, max 500) plus an `after` / `after_id` cursor holding the last
