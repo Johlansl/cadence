@@ -19,6 +19,7 @@ from app.api.deps import get_current_host, get_db
 from app.api.pagination import before_keyset
 from app.models.models import Host, Job
 from app.schemas.schemas import JobHandoff, JobOut, JobResultIn, NextJob
+from app.webhooks.events import on_job_result
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
 
@@ -126,6 +127,16 @@ def submit_job_result(
     if job.job_type == "reboot" and payload.status == "succeeded":
         host.reboot_required = False
         host.updated_at = job.completed_at
+
+    on_job_result(
+        db,
+        job,
+        host,
+        status=payload.status,
+        exit_code=payload.exit_code,
+        log_text=payload.log,
+        occurred_at=job.completed_at,
+    )
 
     db.commit()
     db.refresh(job)

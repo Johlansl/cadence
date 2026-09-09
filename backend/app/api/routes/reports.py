@@ -17,6 +17,7 @@ from app.api.routes.jobs import claim_pending_job
 from app.core.config import settings
 from app.models.models import Host, HostPackage, Package, Report
 from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn, ReportSummary
+from app.webhooks.events import on_report
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
 
@@ -120,6 +121,7 @@ def create_report(
     host.os_codename = report_in.os_codename or host.os_codename
     host.package_manager = report_in.package_manager or host.package_manager
     host.agent_version = report_in.agent_version or host.agent_version
+    was_reboot_required = host.reboot_required
     host.reboot_required = report_in.reboot_required
     host.last_seen_at = now
     host.updated_at = now
@@ -166,7 +168,18 @@ def create_report(
         )
     )
 
-    # 5. Piggyback: hand the oldest pending job (if any) to the agent and mark
+    # 5. Outbound webhooks: reboot-required edge, security-count change, and
+    #    clear the offline flag now that the host has reported.
+    on_report(
+        db,
+        host,
+        was_reboot_required=was_reboot_required,
+        now_reboot_required=report_in.reboot_required,
+        security_updates=security_updates,
+        occurred_at=now,
+    )
+
+    # 6. Piggyback: hand the oldest pending job (if any) to the agent and mark
     #    it running. One job per report; the agent runs them serially.
     job = claim_pending_job(db, host, now)
     handoff = (
