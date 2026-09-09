@@ -9,6 +9,9 @@ import type {
   ReportSummary,
   Schedule,
   ScheduleInput,
+  Webhook,
+  WebhookCreated,
+  WebhookInput,
 } from '../types'
 
 const BASE = '/api/v1'
@@ -170,5 +173,28 @@ export const api = {
 
   deleteSchedule(scheduleId: string, adminKey: string) {
     return adminWrite<null>(`/admin/schedules/${scheduleId}`, adminKey, 'DELETE', undefined)
+  },
+
+  listWebhooks: () => getJSON<Webhook[]>('/webhooks'),
+
+  createWebhook(adminKey: string, body: WebhookInput) {
+    return adminWrite<WebhookCreated>('/admin/webhooks', adminKey, 'POST', body)
+  },
+
+  updateWebhook(webhookId: string, adminKey: string, body: Partial<WebhookInput>) {
+    return adminWrite<Webhook>(`/admin/webhooks/${webhookId}`, adminKey, 'PATCH', body)
+  },
+
+  deleteWebhook(webhookId: string, adminKey: string) {
+    return adminWrite<null>(`/admin/webhooks/${webhookId}`, adminKey, 'DELETE', undefined)
+  },
+
+  testWebhook(webhookId: string, adminKey: string) {
+    return adminWrite<{ delivery_id: string }>(
+      `/admin/webhooks/${webhookId}/test`,
+      adminKey,
+      'POST',
+      {},
+    )
   },
 }
