@@ -130,6 +130,11 @@ def submit_job_result(
     # known_held_packages (app.exclusions.known_held_for_host).
     if payload.held_packages is not None:
         result["held_packages"] = payload.held_packages
+    # dry_run (roadmap item 4): the structured simulation preview, present only
+    # for an apt_dry_run job whose simulation ran. Same presence rule again, so
+    # a None is distinguishable from a dry-run that produced an empty preview.
+    if payload.dry_run is not None:
+        result["dry_run"] = payload.dry_run.model_dump()
     job.result = result
     # Failure classification (roadmap item 2). Only meaningful for a failed job;
     # ignore whatever the agent sent on success. The agent already caps the

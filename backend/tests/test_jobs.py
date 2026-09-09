@@ -200,6 +200,65 @@ def test_job_result_omits_held_packages_key_when_not_sent(client, db_session):
     assert "held_packages" not in db_session.get(Job, job_id).result
 
 
+def _make_dry_run_job(client, host_id: str) -> str:
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs",
+        headers=ADMIN_HEADERS,
+        json={"job_type": "apt_dry_run"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_dry_run_result_is_stored_structured(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_dry_run_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    preview = {
+        "updated": [
+            {
+                "name": "openssl",
+                "architecture": "amd64",
+                "installed_version": "3.0.11-1",
+                "candidate_version": "3.0.14-1",
+                "is_security_update": True,
+            }
+        ],
+        "newly_installed": [],
+        "removed": [{"name": "obsolete-lib", "installed_version": "4.5-6"}],
+        "kept_back": ["docker-ce"],
+        "excluded": ["linux-image-amd64"],
+        "held_in_place": ["docker-ce"],
+    }
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "succeeded", "exit_code": 0, "dry_run": preview},
+    )
+    assert r.status_code == 200
+    stored = db_session.get(Job, job_id).result["dry_run"]
+    assert stored["updated"][0]["candidate_version"] == "3.0.14-1"
+    assert stored["removed"][0]["name"] == "obsolete-lib"
+    assert stored["kept_back"] == ["docker-ce"]
+    assert stored["excluded"] == ["linux-image-amd64"]
+    assert r.json()["result"]["dry_run"]["held_in_place"] == ["docker-ce"]
+
+
+def test_dry_run_key_absent_when_not_sent(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "succeeded", "exit_code": 0},
+    )
+    assert r.status_code == 200
+    assert "dry_run" not in db_session.get(Job, job_id).result
+
+
 def test_job_result_hidden_from_other_host(client):
     host_a, _ = create_host(client, hostname="a")
     _host_b, token_b = create_host(client, hostname="b")

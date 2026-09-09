@@ -104,6 +104,19 @@ def test_only_applies_to_apt_upgrade(client):
     assert "known_held_packages" not in job["params"]
 
 
+def test_dry_run_job_gets_excluded_packages_but_not_known_held(client):
+    host_id, token = create_host(client)
+    _report(client, token, [pkg("docker-ce")])
+    _exclusion(client, pattern="docker-ce")
+    # A prior apt_upgrade that held something, so known_held_for_host would
+    # return a non-empty list if a dry-run asked for it.
+    _run_job(client, host_id, token, held_packages=["docker-ce"])
+
+    job = _create_job(client, host_id, job_type="apt_dry_run").json()
+    assert job["params"]["excluded_packages"] == ["docker-ce"]
+    assert "known_held_packages" not in job["params"]
+
+
 def test_no_matching_policy_resolves_empty(client):
     host_id, token = create_host(client)
     _report(client, token, [pkg("curl")])

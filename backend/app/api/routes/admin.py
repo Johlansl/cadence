@@ -158,14 +158,17 @@ def create_job(
         )
 
     params = dict(payload.params)
-    if payload.job_type == "apt_upgrade":
+    if payload.job_type in ("apt_upgrade", "apt_dry_run"):
         # Server-resolved, always wins over whatever the caller sent for this
         # key: a job's held set must never be able to drift from actual
-        # policy (roadmap item 3).
+        # policy (roadmap item 3). A dry-run gets the same list so its preview
+        # reflects the current exclusion policy (roadmap item 4).
         params["excluded_packages"] = resolve_for_job(db, host_id)
+    if payload.job_type == "apt_upgrade":
         # The agent reconciles against this, not a live apt-mark showhold
         # read, so a hold Cadence has never itself recorded is never touched
-        # (roadmap item 3 follow-up).
+        # (roadmap item 3 follow-up). A dry-run never reconciles, so it does
+        # not need this.
         params["known_held_packages"] = known_held_for_host(db, host_id)
 
     job = Job(

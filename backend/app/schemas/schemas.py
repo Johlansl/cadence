@@ -21,7 +21,11 @@ from app.core.config import settings
 RebootMode = Literal["auto", "never", "prompt"]
 
 # Job kinds the API accepts. The scheduler only ever creates 'apt_upgrade'.
-JobType = Literal["apt_upgrade", "reboot"]
+# 'apt_dry_run' is a pure-read simulation (roadmap item 4): it never changes
+# anything on the host. jobs.job_type stays free TEXT in the DB (no CHECK);
+# this Literal is the only closed-set enforcement, tightened to a DB CHECK
+# only when campaigns (item 5) add job types.
+JobType = Literal["apt_upgrade", "reboot", "apt_dry_run"]
 
 # Scope of a package_exclusions rule: every host, or one named host. A
 # genuinely small, closed set (unlike JobType/failure category), gets a DB
@@ -331,6 +335,32 @@ class JobCreate(BaseModel):
         return v
 
 
+class DryRunPackageIn(BaseModel):
+    """One package line in an apt_dry_run preview (roadmap item 4).
+    installed_version is empty for a newly pulled dependency; candidate_version
+    is empty for a removal. Agent-authoritative, not constrained here."""
+
+    name: str
+    architecture: str = ""
+    installed_version: str = ""
+    candidate_version: str = ""
+    is_security_update: bool = False
+
+
+class DryRunResultIn(BaseModel):
+    """The structured simulation preview an agent >= 0.11.0 posts for an
+    apt_dry_run job (roadmap item 4). Stored verbatim under
+    job.result['dry_run']. Every list defaults to empty so an older or partial
+    payload still has a stable shape."""
+
+    updated: list[DryRunPackageIn] = Field(default_factory=list)
+    newly_installed: list[DryRunPackageIn] = Field(default_factory=list)
+    removed: list[DryRunPackageIn] = Field(default_factory=list)
+    kept_back: list[str] = Field(default_factory=list)
+    excluded: list[str] = Field(default_factory=list)
+    held_in_place: list[str] = Field(default_factory=list)
+
+
 class JobResultIn(BaseModel):
     """Posted by the agent once it has run the job."""
 
@@ -351,6 +381,10 @@ class JobResultIn(BaseModel):
     # None = not applicable; [] = reconciled, nothing held. Becomes the next
     # job's known_held_packages (app.exclusions.known_held_for_host).
     held_packages: list[str] | None = None
+    # Sent by agent >= 0.11.0 for an apt_dry_run job whose simulation ran
+    # (roadmap item 4). None = not a dry-run, or a dry-run that failed before
+    # producing a preview. Stored under job.result['dry_run'].
+    dry_run: DryRunResultIn | None = None
 
 
 class JobOut(BaseModel):
