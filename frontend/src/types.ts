@@ -175,6 +175,8 @@ export interface Job {
   requested_by: string | null
   result: { exit_code?: number | null; reboot_required?: boolean | null } | null
   log: string | null
+  failure_category: string | null
+  failure_summary: string | null
   created_at: string
   started_at: string | null
   completed_at: string | null
