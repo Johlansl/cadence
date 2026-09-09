@@ -281,6 +281,12 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
 | `CADENCE_AUDIT_RETENTION_DAYS` | `365` | daily prune of the admin audit trail (`audit_log`); `0` = keep forever |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
+| `CADENCE_WEBHOOKS_ENABLED` | `true` | master switch for outbound webhooks (inert until one is configured on the dashboard); `false` hard-disables enqueue + dispatch |
+| `CADENCE_WEBHOOK_TIMEOUT_SECONDS` / `CADENCE_WEBHOOK_MAX_ATTEMPTS` | `10` / `6` | per-attempt HTTP timeout; delivery attempts before a row is parked `failed` (backoff 60 s ... 1 h) |
+| `CADENCE_WEBHOOK_DISPATCH_BATCH` | `20` | pending deliveries drained per scheduler tick |
+| `CADENCE_WEBHOOK_OFFLINE_AFTER_SECONDS` | `900` | `last_seen_at` age before a `host.offline` webhook fires (once, re-arms on the next report) |
+| `CADENCE_WEBHOOK_DELIVERIES_RETENTION_DAYS` | `30` | daily prune of terminal `webhook_deliveries` rows; `0` = keep forever |
+| `CADENCE_WEBHOOK_LOG_MAX_BYTES` | `4096` | cap on the job log embedded in `job.*` payloads (head + tail kept); `0` = full log |
 | `CADENCE_LOG_LEVEL` | `INFO` | backend + scheduler log level (output is logfmt) |
 | `CADENCE_DB_WAIT_SECONDS` | `60` | how long the entrypoint waits for Postgres before giving up |
 | `CADENCE_SCHEDULER_HEARTBEAT_TIMEOUT` | `180` | scheduler healthcheck: max age of the loop's heartbeat |

@@ -88,10 +88,57 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   advisory refresh, heartbeat).
 - `audit_log`: append-only trail of successful admin writes, one row per
   mutating `X-Admin-Key` call, written in the mutation's own transaction.
+- `webhooks` / `webhook_deliveries` / `webhook_host_state`: outbound
+  notification config, the delivery outbox, and per-host "already notified"
+  bookkeeping. See "Webhooks" below.
 
 Extensibility is built in without over-engineering: `os_family` /
 `package_manager` leave room for non-apt package managers, `jobs.params` and
 `schedules.params` are jsonb, `hosts.tags` is groundwork for grouping.
+
+## Webhooks
+
+Cadence emits outbound notifications for five events: `job.succeeded` /
+`job.failed` (when an agent submits a job result), `host.reboot_required` (a
+report flips the host from not-needing to needing a reboot),
+`host.security_updates_available` (a report's security-update count is non-zero
+and differs from the last one notified for that host), and `host.offline` (a
+host's `last_seen_at` is older than `CADENCE_WEBHOOK_OFFLINE_AFTER_SECONDS`,
+checked on the scheduler tick; it fires once and re-arms when the host reports
+again).
+
+**Outbox, not inline.** The request or scheduler code that observes an event
+inserts a `webhook_deliveries` row (one per subscribed enabled webhook) in the
+*same database transaction* as the change that produced it, then returns. No
+HTTP happens on that path, so a slow or dead endpoint never blocks a report,
+a job callback, or the scheduler, and a delivery is never lost to a crash.
+
+**Dispatch.** Every scheduler pass (~60 s) `dispatch_pending_deliveries` claims
+a batch of due `pending` rows (`FOR UPDATE SKIP LOCKED`), POSTs each body, and
+on failure reschedules with exponential backoff (60 s, 120 s, ... capped at
+1 h) up to `CADENCE_WEBHOOK_MAX_ATTEMPTS`, after which the row is left
+`failed`. Each attempt has an explicit `CADENCE_WEBHOOK_TIMEOUT_SECONDS`
+timeout. First-attempt latency is therefore up to one tick. Terminal rows are
+pruned by the daily retention sweep
+(`CADENCE_WEBHOOK_DELIVERIES_RETENTION_DAYS`).
+
+**Body and signature.** The body is
+`{event_type, timestamp, delivery_id, data}` (`timestamp` is when the event
+occurred; `data` is event-specific). Each POST carries `X-Cadence-Event`,
+`X-Cadence-Delivery`, `X-Cadence-Timestamp` (this attempt's send time, fresh
+per retry) and `X-Cadence-Signature` = `HMAC-SHA256(secret,
+"{X-Cadence-Timestamp}\n{sha256_hex(body)}")`. This is the agent
+request-signing construction (see "Authentication") reduced to the two parts a
+receiver can reproduce; the timestamp is inside the signed scope, so a replay
+with a new timestamp fails the HMAC and a verbatim replay fails the receiver's
+freshness check.
+
+**Config.** `POST/PATCH/DELETE /api/v1/admin/webhooks` and
+`POST /api/v1/admin/webhooks/{id}/test` need `X-Admin-Key`; the `GET` views are
+unauthenticated like the other dashboard reads, but the URL is masked and the
+signing secret, like the full URL, is only ever in the creation response. The
+test endpoint writes a real `webhook.test` outbox row delivered by the same
+dispatcher.
 
 ## Deployment notes
 
