@@ -407,8 +407,8 @@ class WebhookCreated(BaseModel):
 
 class WebhookOut(BaseModel):
     """A webhook as shown on the dashboard. `url_preview` is masked; the raw
-    url and the secret are never returned here. `last_*` / `pending_count` are
-    derived from webhook_deliveries at read time."""
+    url and the secret are never returned here. `last_success_at` / `last_error`
+    / `*_count` are derived from webhook_deliveries at read time."""
 
     id: uuid.UUID
     url_preview: str
@@ -418,9 +418,9 @@ class WebhookOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_success_at: datetime | None
-    last_attempt_at: datetime | None
     last_error: str | None
     pending_count: int
+    failed_count: int
 
 
 class WebhookTestAccepted(BaseModel):
