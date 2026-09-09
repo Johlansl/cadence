@@ -87,15 +87,22 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   `agent_lost`). The set is open (no CHECK); `unknown` is the honest default.
   An `apt_upgrade` job's `params.excluded_packages` is the exact list of
   package names the server resolved from `package_exclusions` for that host;
-  a successful or failed result's `result.held_conflicts` names any of them
-  apt showed real evidence of skipping or blocking on that run.
+  `params.known_held_packages` is the Cadence-managed hold set the server
+  last recorded (the previous `apt_upgrade` job's `result.held_packages`).
+  A successful or failed result's `result.held_conflicts` names any held
+  package apt showed real evidence of skipping or blocking on that run;
+  `result.held_packages` is what Cadence actually holds after reconciliation,
+  fed back as the next job's `known_held_packages`.
 - `package_exclusions`: operator hold rules (`scope` `global` or `host`,
   `host_id` nullable, `pattern` a glob matched with Python's `fnmatch`).
   Additive across scopes, no re-inclusion, no tag scope yet. Resolved to
   exact package names against a host's known inventory at job-creation time;
-  the pattern itself never reaches the agent, which reconciles dpkg's real
-  hold state (`apt-mark hold`/`unhold`) to that list on every `apt_upgrade`
-  run. A rule is created or deleted, not edited in place.
+  the pattern itself never reaches the agent. The agent reconciles dpkg's
+  real hold state (`apt-mark hold`/`unhold`) toward `excluded_packages`,
+  diffed against `known_held_packages` -- **not** a live `apt-mark showhold`
+  read -- so a hold neither wanted nor previously recorded by Cadence (an
+  operator's, unattended-upgrades', a distro default) is never touched. A
+  rule is created or deleted, not edited in place.
 - `schedules`: one maintenance window per host (`weekly` / `monthly`).
 - `advisories` / `advisory_packages`: Debian DSA/DLA advisories (id, CVE ids,
   URL) and the per-release source-package fixed versions the read API joins

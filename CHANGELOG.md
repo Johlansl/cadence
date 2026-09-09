@@ -13,14 +13,19 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
   globally or per host (`postgresql-14`, `docker-ce`, `linux-image*`,
   `nvidia*`, ...), matched with a glob. The server resolves rules to an exact
   package list per host and puts it in an `apt_upgrade` job's
-  `params.excluded_packages`; the agent (>= 0.10.0) validates every name and
-  reconciles dpkg's hold state to it every run (`apt-mark hold`/`unhold`),
-  and reports `held_conflicts` when apt shows real evidence a hold blocked or
-  degraded the run. `GET /hosts` and `GET /hosts/{id}` gain a recomputed
-  `excluded_count` and a per-package `excluded` flag; a new `#exclusions`
-  dashboard section manages the rules (create/delete only, no in-place edit);
-  `job.succeeded` / `job.failed` webhook bodies gain `held_conflicts`. No
-  tag-scoped rules yet (roadmap item 6).
+  `params.excluded_packages`; the agent (>= 0.10.1) validates every name and
+  reconciles dpkg's hold state toward it, diffed against
+  `params.known_held_packages` (the Cadence-managed hold set the server last
+  recorded, from the previous job's `result.held_packages`) rather than a
+  live `apt-mark showhold` read, so a hold neither wanted nor previously
+  recorded by Cadence -- an operator's, unattended-upgrades', a distro
+  default -- is never touched. Reports `held_conflicts` when apt shows real
+  evidence a hold blocked or degraded the run. `GET /hosts` and `GET
+  /hosts/{id}` gain a recomputed `excluded_count` and a per-package
+  `excluded` flag; a new `#exclusions` dashboard section manages the rules
+  (create/delete only, no in-place edit); `job.succeeded` / `job.failed`
+  webhook bodies gain `held_conflicts`. No tag-scoped rules yet (roadmap
+  item 6).
 - Failed jobs are classified. A failed job now carries a coarse
   `failure_category` (`apt_locked`, `network_or_repo`, `dpkg_error`,
   `disk_full`, `timeout`, `agent_lost`, `agent_refused`, `unknown`) and a
