@@ -342,6 +342,10 @@ class JobResultIn(BaseModel):
     # them and the columns stay NULL. Agent-authoritative, not constrained here.
     failure_category: str | None = None
     failure_summary: str | None = None
+    # Sent by agent >= 0.10.0 for an apt_upgrade job, success or failure
+    # (roadmap item 3): [] means holds were reconciled and nothing was
+    # affected, None means not applicable (a reboot job, or an older agent).
+    held_conflicts: list[str] | None = None
 
 
 class JobOut(BaseModel):

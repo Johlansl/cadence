@@ -115,10 +115,17 @@ def submit_job_result(
 
     job.status = payload.status
     job.log = payload.log
-    job.result = {
+    result: dict = {
         "exit_code": payload.exit_code,
         "reboot_required": payload.reboot_required,
     }
+    # held_conflicts (roadmap item 3): only present when the agent actually
+    # reconciled holds this run (an apt_upgrade job on agent >= 0.10.0), on
+    # either outcome. Absent from result entirely otherwise, so a None here
+    # is distinguishable from "checked, found nothing" ([]).
+    if payload.held_conflicts is not None:
+        result["held_conflicts"] = payload.held_conflicts
+    job.result = result
     # Failure classification (roadmap item 2). Only meaningful for a failed job;
     # ignore whatever the agent sent on success. The agent already caps the
     # summary, clip defensively in case it does not.

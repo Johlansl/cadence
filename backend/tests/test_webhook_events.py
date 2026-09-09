@@ -115,6 +115,26 @@ def test_job_succeeded_event_has_no_failure_keys(client, db_session):
     data = _deliveries(db_session, "job.succeeded")[0].payload["data"]
     assert "failure_category" not in data
     assert "reaped" not in data
+    assert data["held_conflicts"] is None
+
+
+def test_held_conflicts_reaches_the_webhook_on_either_outcome(client, db_session):
+    host_id, token = create_host(client)
+    webhook_row(db_session, events=("job.succeeded", "job.failed"))
+    db_session.flush()
+
+    r = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
+    job_id = r.json()["id"]
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "succeeded", "exit_code": 0, "held_conflicts": ["docker-ce"]},
+    )
+    assert r.status_code == 200, r.text
+
+    data = _deliveries(db_session, "job.succeeded")[0].payload["data"]
+    assert data["held_conflicts"] == ["docker-ce"]
 
 
 def test_job_log_is_truncated_in_the_payload(client, db_session, monkeypatch):

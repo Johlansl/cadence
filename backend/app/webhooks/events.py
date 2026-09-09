@@ -41,6 +41,10 @@ def on_job_result(
         "requested_by": job.requested_by,
         "completed_at": iso_z(job.completed_at) if job.completed_at else None,
         "log": truncate_log(log_text or "", settings.webhook_log_max_bytes),
+        # None when not applicable (a reboot job, or an older agent); a
+        # conflict can coincide with either outcome, so this is not gated on
+        # `failed` the way the failure-classification keys below are.
+        "held_conflicts": (job.result or {}).get("held_conflicts"),
     }
     if failed:
         # Same three keys the reaper's job.failed carries (on_job_reaped), so a
