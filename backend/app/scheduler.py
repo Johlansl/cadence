@@ -35,7 +35,10 @@ from app.models.models import (
     Report,
     Schedule,
     SchedulerState,
+    WebhookDelivery,
 )
+from app.webhooks.delivery import dispatch_pending_deliveries
+from app.webhooks.offline import scan_offline_hosts
 
 log = logging.getLogger("cadence.scheduler")
 
@@ -225,6 +228,24 @@ def retention_sweep(
     return reports_deleted, jobs_deleted, audit_deleted, tokens_deleted
 
 
+def sweep_webhook_deliveries(db: Session, now: datetime, *, days: int) -> int:
+    """Delete terminal (delivered/failed) webhook_deliveries rows older than
+    `days`. 0 = keep forever. Pending rows are never removed here. Returns the
+    row count deleted."""
+    if days <= 0:
+        return 0
+    cutoff = now - timedelta(days=days)
+    deleted = db.execute(
+        delete(WebhookDelivery).where(
+            WebhookDelivery.status.in_(("delivered", "failed")),
+            WebhookDelivery.completed_at.is_not(None),
+            WebhookDelivery.completed_at < cutoff,
+        )
+    ).rowcount
+    db.commit()
+    return deleted
+
+
 def _retention_due(db: Session, now: datetime) -> bool:
     """True when a sweep hasn't run within RETENTION_EVERY. The last-run time
     is persisted in scheduler_state so a process restart doesn't re-trigger."""
@@ -258,6 +279,7 @@ def run_retention_if_due(now: datetime | None = None) -> None:
         and settings.jobs_retention_days == 0
         and settings.audit_retention_days == 0
         and settings.token_retention_days == 0
+        and settings.webhook_deliveries_retention_days == 0
     ):
         return
     with SessionLocal() as db:
@@ -271,6 +293,9 @@ def run_retention_if_due(now: datetime | None = None) -> None:
             audit_days=settings.audit_retention_days,
             tokens_days=settings.token_retention_days,
         )
+        webhook_deliveries = sweep_webhook_deliveries(
+            db, now, days=settings.webhook_deliveries_retention_days
+        )
         _mark_retention_done(db, now)
     log.info(
         "retention sweep done",
@@ -279,10 +304,12 @@ def run_retention_if_due(now: datetime | None = None) -> None:
             jobs_deleted=jobs,
             audit_deleted=audit,
             tokens_deleted=tokens,
+            webhook_deliveries_deleted=webhook_deliveries,
             keep_reports_days=settings.reports_retention_days,
             keep_jobs_days=settings.jobs_retention_days,
             keep_audit_days=settings.audit_retention_days,
             keep_tokens_days=settings.token_retention_days,
+            keep_webhook_deliveries_days=settings.webhook_deliveries_retention_days,
         ),
     )
 
@@ -441,6 +468,8 @@ def main() -> None:
         try:
             reap_stuck_jobs()
             tick()
+            scan_offline_hosts()
+            dispatch_pending_deliveries()
             run_retention_if_due()
             run_advisory_refresh_if_due()
             run_packages_gc_if_due()

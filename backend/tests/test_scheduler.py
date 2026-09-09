@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.models.models import Advisory, Job, Schedule, SchedulerState
+from app.models.models import Advisory, Job, Schedule, SchedulerState, WebhookDelivery
 from app.scheduler import (
     ADVISORY_REFRESH_EVERY,
     HEARTBEAT_STATE_KEY,
@@ -11,9 +11,10 @@ from app.scheduler import (
     _mark_advisory_done,
     _mark_heartbeat,
     run_advisory_refresh_if_due,
+    sweep_webhook_deliveries,
     tick,
 )
-from tests.conftest import create_host
+from tests.conftest import create_host, webhook_row
 
 
 def _due_schedule(db, host_id, *, params=None):
@@ -170,3 +171,48 @@ def test_advisory_refresh_disabled_is_a_noop(db_session, monkeypatch):
     monkeypatch.setattr("app.advisories.debian.fetch", boom)
 
     run_advisory_refresh_if_due(now=datetime.now(timezone.utc), db=db_session)
+
+
+def _delivery(db, hook_id, *, status, completed_at):
+    row = WebhookDelivery(
+        webhook_id=hook_id,
+        event_type="job.succeeded",
+        payload={"event_type": "job.succeeded"},
+        status=status,
+        attempt_count=1,
+        completed_at=completed_at,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_sweep_webhook_deliveries_removes_only_old_terminal_rows(db_session):
+    hook = webhook_row(db_session)
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=40)
+
+    keep_pending = _delivery(db_session, hook.id, status="pending", completed_at=None)
+    keep_recent = _delivery(db_session, hook.id, status="delivered", completed_at=now)
+    drop_delivered = _delivery(db_session, hook.id, status="delivered", completed_at=old)
+    drop_failed = _delivery(db_session, hook.id, status="failed", completed_at=old)
+
+    deleted = sweep_webhook_deliveries(db_session, now, days=30)
+
+    assert deleted == 2
+    remaining = {r.id for r in db_session.query(WebhookDelivery).all()}
+    assert remaining == {keep_pending.id, keep_recent.id}
+    assert drop_delivered.id not in remaining
+    assert drop_failed.id not in remaining
+
+
+def test_sweep_webhook_deliveries_disabled_when_days_zero(db_session):
+    hook = webhook_row(db_session)
+    _delivery(
+        db_session,
+        hook.id,
+        status="failed",
+        completed_at=datetime.now(timezone.utc) - timedelta(days=999),
+    )
+    assert sweep_webhook_deliveries(db_session, datetime.now(timezone.utc), days=0) == 0
+    assert db_session.query(WebhookDelivery).count() == 1
