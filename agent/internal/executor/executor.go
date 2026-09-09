@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,6 +51,11 @@ type Result struct {
 	Log            string
 	RebootRequired bool
 	Err            error // non-nil if the command could not run or was killed
+
+	// Set only when the run failed. FailureCategory is one of the apterr
+	// categories; FailureSummary is a single line lifted from the output.
+	FailureCategory string
+	FailureSummary  string
 }
 
 func aptEnv() []string {
@@ -88,7 +94,7 @@ func RunAptUpgrade(ctx context.Context) Result {
 		out.WriteString("\n[cadence] apt-get update failed; using existing lists\n")
 	}
 
-	res := runDistUpgrade(ctx, &out)
+	res, failingOutput := runDistUpgrade(ctx, &out)
 
 	if res.Err != nil {
 		out.WriteString("\n[cadence] apt failed; running dpkg --configure -a\n")
@@ -97,14 +103,54 @@ func RunAptUpgrade(ctx context.Context) Result {
 		cancel()
 	}
 
+	if res.ExitCode != 0 || res.Err != nil {
+		classifyFailure(ctx, &res, failingOutput, out.String())
+	}
+
 	res.Log = capLog(out.String())
 	res.RebootRequired = rebootcheck.Pending()
 	return res
 }
 
+// classifyFailure fills res.FailureCategory / res.FailureSummary. It classifies
+// the isolated output of the dist-upgrade attempt that failed (so an earlier
+// retry's held-lock line cannot mislabel a job that ultimately failed for
+// another reason). Only when that is inconclusive does it fall back to the full
+// captured log, which also covers a failure whose signal is in the `apt-get
+// update` phase or the `dpkg --configure -a` recovery run.
+func classifyFailure(ctx context.Context, res *Result, failingOutput, fullLog string) {
+	deadline := ctx.Err() == context.DeadlineExceeded
+	cat, summary := apterr.Classify(failingOutput, deadline)
+	if !deadline && cat == apterr.CategoryUnknown {
+		if c2, s2 := apterr.Classify(stripAnnotations(fullLog), false); c2 != apterr.CategoryUnknown {
+			cat, summary = c2, s2
+		}
+	}
+	res.FailureCategory = cat
+	res.FailureSummary = summary
+}
+
+// stripAnnotations drops the "[cadence] ..." breadcrumb lines this package
+// writes into the log, so the fallback classification sees only real apt/dpkg
+// output (one breadcrumb mentions `dpkg --configure -a` verbatim, which would
+// otherwise trip apterr's interrupted-state pattern).
+func stripAnnotations(s string) string {
+	lines := strings.Split(s, "\n")
+	kept := lines[:0]
+	for _, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "[cadence]") {
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	return strings.Join(kept, "\n")
+}
+
 // runDistUpgrade runs `apt-get -y dist-upgrade`, retrying on a held apt lock.
-// Every attempt's output is appended to out in order.
-func runDistUpgrade(ctx context.Context, out *bytes.Buffer) Result {
+// Every attempt's output is appended to out in order. The second return value
+// is the isolated output of the attempt that failed (empty on success or when
+// the context is cancelled before an attempt runs), for failure classification.
+func runDistUpgrade(ctx context.Context, out *bytes.Buffer) (Result, string) {
 	var res Result
 	last := len(aptLockRetryWaits) - 1
 	for i, wait := range aptLockRetryWaits {
@@ -113,7 +159,7 @@ func runDistUpgrade(ctx context.Context, out *bytes.Buffer) Result {
 			select {
 			case <-time.After(wait):
 			case <-ctx.Done():
-				return Result{ExitCode: -1, Err: ctx.Err()}
+				return Result{ExitCode: -1, Err: ctx.Err()}, ""
 			}
 		}
 
@@ -126,7 +172,7 @@ func runDistUpgrade(ctx context.Context, out *bytes.Buffer) Result {
 		out.Write(attempt.Bytes())
 
 		if err == nil {
-			return Result{}
+			return Result{}, ""
 		}
 
 		res = Result{Err: err, ExitCode: -1} // -1: failed to start, or killed
@@ -137,8 +183,8 @@ func runDistUpgrade(ctx context.Context, out *bytes.Buffer) Result {
 		// Only a held lock is worth another attempt; a real package failure
 		// (or an expired deadline) is final.
 		if i == last || !apterr.IsLockHeld(attempt.String()) {
-			return res
+			return res, attempt.String()
 		}
 	}
-	return res
+	return res, ""
 }

@@ -87,6 +87,11 @@ type JobResult struct {
 	ExitCode       int    `json:"exit_code"`
 	Log            string `json:"log"`
 	RebootRequired bool   `json:"reboot_required"`
+
+	// Failure classification, sent only for a failed job (roadmap item 2).
+	// omitempty keeps a success result byte-identical to older agents.
+	FailureCategory string `json:"failure_category,omitempty"`
+	FailureSummary  string `json:"failure_summary,omitempty"`
 }
 
 // SubmitJobResult reports the outcome of a job back to the server.

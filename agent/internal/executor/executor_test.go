@@ -139,6 +139,89 @@ func TestRunAptUpgradeCapsHugeOutput(t *testing.T) {
 	}
 }
 
+func TestRunAptUpgradeClassifiesTheFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		stderr  string
+		wantCat string
+		wantIn  string
+	}{
+		{
+			name:    "package failure",
+			stderr:  "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+			wantCat: "dpkg_error",
+			wantIn:  "Sub-process /usr/bin/dpkg",
+		},
+		{
+			name:    "mirror unreachable",
+			stderr:  "E: Failed to fetch http://deb.debian.org/debian/x.deb  404  Not Found",
+			wantCat: "network_or_repo",
+			wantIn:  "Failed to fetch",
+		},
+		{
+			name:    "out of space",
+			stderr:  "dpkg: unrecoverable fatal error, aborting: failed to write: No space left on device",
+			wantCat: "disk_full",
+			wantIn:  "No space left on device",
+		},
+		{
+			name:    "nothing recognisable",
+			stderr:  "E: something the patterns do not know about",
+			wantCat: "unknown",
+			wantIn:  "something the patterns do not know",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			noRetryWait(t)
+			dir := fakePATH(t)
+			fakeBin(t, dir, "apt-get",
+				`case "$*" in *dist-upgrade*) echo `+shq(tc.stderr)+` >&2; exit 100;; esac; exit 0`)
+			fakeBin(t, dir, "dpkg", `exit 0`)
+
+			res := RunAptUpgrade(context.Background())
+
+			if res.FailureCategory != tc.wantCat {
+				t.Fatalf("FailureCategory = %q, want %q (log=%q)", res.FailureCategory, tc.wantCat, res.Log)
+			}
+			if !strings.Contains(res.FailureSummary, tc.wantIn) {
+				t.Fatalf("FailureSummary = %q, want it to contain %q", res.FailureSummary, tc.wantIn)
+			}
+		})
+	}
+}
+
+// shq single-quotes s for a POSIX shell.
+func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+func TestRunAptUpgradeSuccessLeavesFailureFieldsEmpty(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `echo "$*"; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+
+	res := RunAptUpgrade(context.Background())
+
+	if res.FailureCategory != "" || res.FailureSummary != "" {
+		t.Fatalf("want empty failure fields on success, got category=%q summary=%q",
+			res.FailureCategory, res.FailureSummary)
+	}
+}
+
+func TestRunAptUpgradeClassifiesAnExpiredDeadlineAsTimeout(t *testing.T) {
+	dir := fakePATH(t)
+	fakeBin(t, dir, "apt-get", `case "$*" in *dist-upgrade*) exec sleep 10;; esac; exit 0`)
+	fakeBin(t, dir, "dpkg", `exit 0`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	res := RunAptUpgrade(ctx)
+
+	if res.FailureCategory != "timeout" {
+		t.Fatalf("FailureCategory = %q, want %q", res.FailureCategory, "timeout")
+	}
+}
+
 func TestRunAptUpgradeRepairsDpkgOnAFreshContextAfterTheDeadline(t *testing.T) {
 	dir := fakePATH(t)
 	marker := filepath.Join(t.TempDir(), "configured")
