@@ -16,7 +16,7 @@ import signal
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, exists, func, or_, select, update
+from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -25,10 +25,12 @@ from app.advisories.sync import refresh_advisories
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
+from app.core.staleness import SILENT_AFTER
 from app.db.base import SessionLocal
 from app.models.models import (
     AgentToken,
     AuditLog,
+    Host,
     HostPackage,
     Job,
     Package,
@@ -38,6 +40,7 @@ from app.models.models import (
     WebhookDelivery,
 )
 from app.webhooks.delivery import dispatch_pending_deliveries
+from app.webhooks.events import on_job_reaped
 from app.webhooks.offline import scan_offline_hosts
 
 log = logging.getLogger("cadence.scheduler")
@@ -146,8 +149,15 @@ def reap_stuck_jobs(
     own_session = db is None
     db = db or SessionLocal()
     cutoff = now - timedelta(seconds=timeout_seconds)
+    # A reaped job has no agent result to classify. Split the two no-result
+    # cases on how recently the host was last heard from: still reporting means
+    # the job itself overran ("timeout"); silent means the agent is gone
+    # ("agent_lost"). A NULL last_seen_at (host never reported) counts as silent.
+    seen_recently = (
+        select(Host.last_seen_at).where(Host.id == Job.host_id).scalar_subquery()
+    ) >= (now - SILENT_AFTER)
     try:
-        result = db.execute(
+        rows = db.execute(
             update(Job)
             .where(
                 Job.status == "running",
@@ -157,6 +167,16 @@ def reap_stuck_jobs(
             .values(
                 status="failed",
                 completed_at=now,
+                failure_category=case((seen_recently, "timeout"), else_="agent_lost"),
+                failure_summary=case(
+                    (
+                        seen_recently,
+                        f"no result after {timeout_seconds}s; host still reporting, "
+                        "the job did not return",
+                    ),
+                    else_=f"no result after {timeout_seconds}s; host silent, "
+                    "the agent is presumed lost",
+                ),
                 result={"reaped": True, "reason": "running timeout exceeded"},
                 log=func.concat(
                     func.coalesce(Job.log, ""),
@@ -164,8 +184,21 @@ def reap_stuck_jobs(
                     "marked failed by the scheduler reaper",
                 ),
             )
-        )
-        reaped = result.rowcount
+            .returning(
+                Job.id,
+                Job.host_id,
+                Job.job_type,
+                Job.requested_by,
+                Job.failure_category,
+                Job.failure_summary,
+                Job.completed_at,
+                Job.log,
+            )
+            .execution_options(synchronize_session=False)
+        ).all()
+        reaped = len(rows)
+        if rows:
+            _enqueue_reaped_job_failed(db, rows, occurred_at=now)
         db.commit()
     finally:
         if own_session:
@@ -176,6 +209,33 @@ def reap_stuck_jobs(
             extra=_f(count=reaped, timeout_seconds=timeout_seconds),
         )
     return reaped
+
+
+def _enqueue_reaped_job_failed(db: Session, rows, *, occurred_at: datetime) -> None:
+    """Stage a job.failed webhook for each job the reaper just failed. The
+    reaper is the only path that fails a job without an agent result, so it
+    carries its own webhook wiring (the agent result callback uses
+    on_job_result)."""
+    if not settings.webhooks_enabled:
+        return
+    host_ids = {r.host_id for r in rows}
+    hostnames = dict(
+        db.execute(select(Host.id, Host.hostname).where(Host.id.in_(host_ids))).all()
+    )
+    for r in rows:
+        on_job_reaped(
+            db,
+            job_id=r.id,
+            host_id=r.host_id,
+            hostname=hostnames.get(r.host_id, ""),
+            job_type=r.job_type,
+            requested_by=r.requested_by,
+            failure_category=r.failure_category,
+            failure_summary=r.failure_summary,
+            completed_at=r.completed_at,
+            log_text=r.log,
+            occurred_at=occurred_at,
+        )
 
 
 def retention_sweep(

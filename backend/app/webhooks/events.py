@@ -49,6 +49,48 @@ def on_job_result(
     )
 
 
+def on_job_reaped(
+    db: Session,
+    *,
+    job_id: object,
+    host_id: object,
+    hostname: str,
+    job_type: str,
+    requested_by: str | None,
+    failure_category: str | None,
+    failure_summary: str | None,
+    completed_at: datetime | None,
+    log_text: str | None,
+    occurred_at: datetime | None = None,
+) -> None:
+    """Enqueue job.failed for a job the scheduler reaper failed. Same payload
+    as on_job_result's failed branch, plus `reaped: true` and a null
+    `exit_code` (a reaped job ran no process to completion). Takes plain values,
+    not ORM objects: the reaper updates in bulk and never loads the rows."""
+    if not settings.webhooks_enabled:
+        return
+    occurred_at = occurred_at or datetime.now(timezone.utc)
+    enqueue_event(
+        db,
+        "job.failed",
+        {
+            "job_id": str(job_id),
+            "host_id": str(host_id),
+            "hostname": hostname,
+            "job_type": job_type,
+            "status": "failed",
+            "exit_code": None,
+            "reaped": True,
+            "requested_by": requested_by,
+            "completed_at": iso_z(completed_at) if completed_at else None,
+            "log": truncate_log(log_text or "", settings.webhook_log_max_bytes),
+            "failure_category": failure_category,
+            "failure_summary": failure_summary,
+        },
+        occurred_at=occurred_at,
+    )
+
+
 def on_report(
     db: Session,
     host: Host,
