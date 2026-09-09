@@ -119,6 +119,16 @@ def submit_job_result(
         "exit_code": payload.exit_code,
         "reboot_required": payload.reboot_required,
     }
+    # Failure classification (roadmap item 2). Only meaningful for a failed job;
+    # ignore whatever the agent sent on success. The agent already caps the
+    # summary, clip defensively in case it does not.
+    if payload.status == "failed":
+        job.failure_category = payload.failure_category
+        summary = payload.failure_summary
+        job.failure_summary = summary[:500] if summary else None
+    else:
+        job.failure_category = None
+        job.failure_summary = None
     job.completed_at = datetime.now(timezone.utc)
 
     # A completed reboot job clears the host's reboot-required flag right away

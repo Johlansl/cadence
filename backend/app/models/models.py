@@ -209,6 +209,10 @@ class Job(Base):
     requested_by: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict | None] = mapped_column(JSONB)
     log: Mapped[str | None] = mapped_column(Text)
+    # Set only when status == "failed" (migration 0014). See the migration
+    # docstring for the category set; free text on purpose, no CHECK.
+    failure_category: Mapped[str | None] = mapped_column(Text)
+    failure_summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
