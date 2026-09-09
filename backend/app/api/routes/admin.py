@@ -16,7 +16,7 @@ from app.api.deps import get_db, require_admin_key
 from app.api.pagination import before_keyset
 from app.core.config import settings
 from app.core.crypto import encrypt_token_secret
-from app.exclusions import resolve_for_job
+from app.exclusions import known_held_for_host, resolve_for_job
 from app.models.models import AgentToken, AuditLog, Host, Job
 from app.schemas.schemas import (
     AuditEntry,
@@ -163,6 +163,10 @@ def create_job(
         # key: a job's held set must never be able to drift from actual
         # policy (roadmap item 3).
         params["excluded_packages"] = resolve_for_job(db, host_id)
+        # The agent reconciles against this, not a live apt-mark showhold
+        # read, so a hold Cadence has never itself recorded is never touched
+        # (roadmap item 3 follow-up).
+        params["known_held_packages"] = known_held_for_host(db, host_id)
 
     job = Job(
         host_id=host_id,

@@ -27,7 +27,7 @@ from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
 from app.core.staleness import SILENT_AFTER
 from app.db.base import SessionLocal
-from app.exclusions import resolve_for_job
+from app.exclusions import known_held_for_host, resolve_for_job
 from app.models.models import (
     AgentToken,
     AuditLog,
@@ -98,6 +98,7 @@ def tick(now: datetime | None = None, db: Session | None = None) -> int:
             if has_active_job is None:
                 params = dict(sched.params)
                 params["excluded_packages"] = resolve_for_job(db, sched.host_id)
+                params["known_held_packages"] = known_held_for_host(db, sched.host_id)
                 db.add(
                     Job(
                         host_id=sched.host_id,

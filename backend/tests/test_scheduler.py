@@ -48,9 +48,14 @@ def test_tick_queues_a_job_and_advances(client, db_session):
     ).scalars().all()
     assert len(jobs) == 1
     assert jobs[0].requested_by == "scheduler"
-    # excluded_packages is always injected for an apt_upgrade job (roadmap
-    # item 3); empty here since no exclusion rule exists in this test.
-    assert jobs[0].params == {"reboot": "auto", "excluded_packages": []}
+    # excluded_packages / known_held_packages are always injected for an
+    # apt_upgrade job (roadmap item 3); both empty here, no exclusion rule
+    # and no prior apt_upgrade result for this host in this test.
+    assert jobs[0].params == {
+        "reboot": "auto",
+        "excluded_packages": [],
+        "known_held_packages": [],
+    }
 
     db_session.refresh(sched)
     assert sched.last_run_at == now

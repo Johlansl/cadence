@@ -1,9 +1,9 @@
 """Pattern -> exact package name resolution, and its injection into a new
-apt_upgrade job's params.excluded_packages."""
+apt_upgrade job's params.excluded_packages / params.known_held_packages."""
 
 from __future__ import annotations
 
-from app.exclusions import matching
+from app.exclusions import known_held_for_host, matching
 from tests.conftest import ADMIN_HEADERS, create_host, pkg, report_payload, signed
 
 
@@ -12,6 +12,22 @@ def _report(client, token, packages):
         "/api/v1/reports", auth=signed(token), json=report_payload(packages=packages)
     )
     assert r.status_code == 200, r.text
+
+
+def _run_job(client, host_id, token, *, held_packages=None, job_type="apt_upgrade"):
+    """Create a job, claim it, and post a result -- optionally carrying
+    held_packages, to set up known_held_for_host's "prior job" state."""
+    body = {"job_type": job_type} if job_type != "apt_upgrade" else {}
+    job_id = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json=body
+    ).json()["id"]
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+    result = {"status": "succeeded", "exit_code": 0}
+    if held_packages is not None:
+        result["held_packages"] = held_packages
+    r = client.post(f"/api/v1/jobs/{job_id}/result", auth=signed(token), json=result)
+    assert r.status_code == 200, r.text
+    return job_id
 
 
 def _exclusion(client, **over):
@@ -85,6 +101,7 @@ def test_only_applies_to_apt_upgrade(client):
 
     job = _create_job(client, host_id, job_type="reboot").json()
     assert "excluded_packages" not in job["params"]
+    assert "known_held_packages" not in job["params"]
 
 
 def test_no_matching_policy_resolves_empty(client):
@@ -138,3 +155,39 @@ def test_scheduler_created_job_also_gets_excluded_packages(client, db_session):
     jobs = r.json()
     assert len(jobs) == 1
     assert jobs[0]["params"]["excluded_packages"] == ["docker-ce"]
+
+
+# --- known_held_for_host / known_held_packages injection --------------------
+
+
+def test_known_held_for_host_with_no_prior_job_is_empty(client, db_session):
+    host_id, _ = create_host(client)
+    assert known_held_for_host(db_session, host_id) == []
+
+
+def test_known_held_for_host_reads_the_last_apt_upgrade_result(client, db_session):
+    host_id, token = create_host(client)
+    _run_job(client, host_id, token, held_packages=["docker-ce", "postgresql-14"])
+    assert known_held_for_host(db_session, host_id) == ["docker-ce", "postgresql-14"]
+
+
+def test_known_held_for_host_ignores_a_more_recent_reboot_job(client, db_session):
+    host_id, token = create_host(client)
+    _run_job(client, host_id, token, held_packages=["docker-ce"])
+    _run_job(client, host_id, token, job_type="reboot")  # newer, but not apt_upgrade
+    assert known_held_for_host(db_session, host_id) == ["docker-ce"]
+
+
+def test_known_held_for_host_defaults_to_empty_for_an_older_agent_result(client, db_session):
+    host_id, token = create_host(client)
+    _run_job(client, host_id, token, held_packages=None)  # result has no held_packages key
+    assert known_held_for_host(db_session, host_id) == []
+
+
+def test_new_job_receives_the_prior_jobs_held_packages_as_known_held(client, db_session):
+    host_id, token = create_host(client)
+    _run_job(client, host_id, token, held_packages=["docker-ce", "postgresql-14"])
+
+    r = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
+    assert r.status_code == 201, r.text
+    assert r.json()["params"]["known_held_packages"] == ["docker-ce", "postgresql-14"]

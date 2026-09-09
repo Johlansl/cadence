@@ -167,6 +167,39 @@ def test_job_result_omits_held_conflicts_key_when_not_sent(client, db_session):
     assert "held_conflicts" not in db_session.get(Job, job_id).result
 
 
+def test_job_result_stores_held_packages(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "succeeded",
+            "exit_code": 0,
+            "held_packages": ["docker-ce", "postgresql-14"],
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["result"]["held_packages"] == ["docker-ce", "postgresql-14"]
+    assert db_session.get(Job, job_id).result["held_packages"] == ["docker-ce", "postgresql-14"]
+
+
+def test_job_result_omits_held_packages_key_when_not_sent(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "succeeded", "exit_code": 0},
+    )
+    assert r.status_code == 200
+    assert "held_packages" not in db_session.get(Job, job_id).result
+
+
 def test_job_result_hidden_from_other_host(client):
     host_a, _ = create_host(client, hostname="a")
     _host_b, token_b = create_host(client, hostname="b")

@@ -4,7 +4,9 @@ Patterns are operator input (globs, package_exclusions.pattern); the server
 always resolves them to an exact list of package names before anything
 reaches the agent -- a raw pattern never crosses the wire to a host (see
 CLAUDE.md's closed-dispatch rule and docs/decisions.md "Open-source
-posture"). resolve_for_job is the only entry point job creation needs.
+posture"). Job creation needs two entry points: resolve_for_job (the wanted
+set) and known_held_for_host (the last set Cadence itself recorded holding,
+so the agent's reconciliation never touches a third-party hold).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from collections.abc import Iterable
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.models import HostPackage, Package, PackageExclusion
+from app.models.models import HostPackage, Job, Package, PackageExclusion
 
 
 def patterns_for_host(db: Session, host_id: uuid.UUID) -> list[str]:
@@ -61,3 +63,25 @@ def resolve_for_job(db: Session, host_id: uuid.UUID) -> list[str]:
         .all()
     )
     return matching(names, patterns)
+
+
+def known_held_for_host(db: Session, host_id: uuid.UUID) -> list[str]:
+    """The Cadence-managed hold set as of the most recent completed
+    apt_upgrade job for this host (its result.held_packages), recomputed at
+    read time -- same "no separate snapshot" pattern as security_updates_count
+    / excluded_count. [] if no such job exists yet, or its result predates
+    this field (an older agent): the safe default, since Cadence must never
+    touch a hold it has no record of itself applying."""
+    last = db.execute(
+        select(Job.result)
+        .where(
+            Job.host_id == host_id,
+            Job.job_type == "apt_upgrade",
+            Job.status.in_(("succeeded", "failed")),
+        )
+        .order_by(Job.completed_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if not last:
+        return []
+    return last.get("held_packages") or []

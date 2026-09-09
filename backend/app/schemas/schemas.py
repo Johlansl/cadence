@@ -346,6 +346,11 @@ class JobResultIn(BaseModel):
     # (roadmap item 3): [] means holds were reconciled and nothing was
     # affected, None means not applicable (a reboot job, or an older agent).
     held_conflicts: list[str] | None = None
+    # Sent by agent >= 0.10.1 for an apt_upgrade job (roadmap item 3 follow-up):
+    # what Cadence actually holds on the host after this run's reconciliation.
+    # None = not applicable; [] = reconciled, nothing held. Becomes the next
+    # job's known_held_packages (app.exclusions.known_held_for_host).
+    held_packages: list[str] | None = None
 
 
 class JobOut(BaseModel):

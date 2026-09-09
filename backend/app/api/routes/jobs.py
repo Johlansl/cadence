@@ -125,6 +125,11 @@ def submit_job_result(
     # is distinguishable from "checked, found nothing" ([]).
     if payload.held_conflicts is not None:
         result["held_conflicts"] = payload.held_conflicts
+    # held_packages (roadmap item 3 follow-up): same presence rule as
+    # held_conflicts. Read back as the next apt_upgrade job's
+    # known_held_packages (app.exclusions.known_held_for_host).
+    if payload.held_packages is not None:
+        result["held_packages"] = payload.held_packages
     job.result = result
     # Failure classification (roadmap item 2). Only meaningful for a failed job;
     # ignore whatever the agent sent on success. The agent already caps the
