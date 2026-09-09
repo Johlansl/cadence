@@ -140,6 +140,11 @@ signing secret, like the full URL, is only ever in the creation response. The
 test endpoint writes a real `webhook.test` outbox row delivered by the same
 dispatcher.
 
+The operator-facing guide, [docs/webhooks.md](webhooks.md), has the per-event
+payload catalogue, a copy-pasteable signature-verification receiver, and how to
+relay to Discord / Slack / Teams (which need their own message shape, not this
+generic body).
+
 ## Deployment notes
 
 - **Redeploy.** `scripts/deploy.sh` on the server is the one command: it
