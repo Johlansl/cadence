@@ -8,6 +8,26 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Outbound webhooks. A new `webhooks` section on the dashboard registers HTTP
+  endpoints that Cadence POSTs a signed JSON body to when an event fires:
+  `job.succeeded` / `job.failed` (on a job result), `host.reboot_required` (on
+  the false to true edge), `host.security_updates_available` (on a changed
+  non-zero security count), `host.offline` (a host quiet past
+  `CADENCE_WEBHOOK_OFFLINE_AFTER_SECONDS`, detected on the scheduler tick).
+  Delivery is an outbox: the event is persisted in the same transaction as the
+  change (migration `0013`: `webhooks`, `webhook_deliveries`,
+  `webhook_host_state`), then the `scheduler` service drains it with retry and
+  exponential backoff (`CADENCE_WEBHOOK_MAX_ATTEMPTS`, up to 1 h between
+  attempts) and an explicit per-attempt timeout
+  (`CADENCE_WEBHOOK_TIMEOUT_SECONDS`). Each POST carries
+  `X-Cadence-Signature` (HMAC-SHA256 over the send timestamp and the body
+  hash, keyed with the webhook secret) and `X-Cadence-Timestamp` for replay
+  rejection, the same construction as agent requests. Admin routes
+  (`POST/PATCH/DELETE /api/v1/admin/webhooks`, `POST .../{id}/test`) are
+  `X-Admin-Key`-guarded; the `GET` views are unauthenticated like the other
+  dashboard reads but the stored URL is masked and the signing secret, like
+  the full URL, is shown only once at creation. All new `CADENCE_WEBHOOK*`
+  settings are optional and the feature is inert until a webhook is configured.
 - `GET /api/v1/packages` is now keyset-paginated, matching `/hosts`,
   `/hosts/{id}/jobs`, `/hosts/{id}/reports` and `/admin/audit`: `limit`
   (default 50, max 500) plus an `after` / `after_id` cursor holding the last
