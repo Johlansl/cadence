@@ -22,6 +22,10 @@ frontend/dist/
 # go
 agent/bin/
 
+# CI job caches (GitLab: GOCACHE / GOLANGCI_LINT_CACHE / pip; frontend npm)
+/.cache/
+/.npm-cache/
+
 # agent bootstrap assets staged by scripts/publish-agent.sh
 /dist/*
 !/dist/.gitkeep
