@@ -187,6 +187,32 @@ def report_payload(**overrides) -> dict:
     return payload
 
 
+def webhook_row(
+    db,
+    *,
+    url: str = "https://example.test/hook",
+    events: tuple[str, ...] = ("job.succeeded",),
+    enabled: bool = True,
+    secret: str = "whsec-test-secret",
+    description: str | None = None,
+):
+    """Insert a webhook directly (the admin routes arrive in a later commit).
+    Returns the flushed ORM object."""
+    from app.core.crypto import encrypt_token_secret
+    from app.models.models import Webhook
+
+    hook = Webhook(
+        url=url,
+        secret_encrypted=encrypt_token_secret(secret),
+        enabled=enabled,
+        event_types=list(events),
+        description=description,
+    )
+    db.add(hook)
+    db.flush()
+    return hook
+
+
 def pkg(
     name: str,
     *,
