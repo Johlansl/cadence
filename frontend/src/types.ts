@@ -186,6 +186,25 @@ export interface PackageExclusionInput {
 
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
+// One package line in an apt_dry_run preview (roadmap item 4).
+export interface DryRunPkg {
+  name: string
+  architecture?: string
+  installed_version?: string
+  candidate_version?: string
+  is_security_update?: boolean
+}
+
+// The structured result an apt_dry_run job stores under result.dry_run.
+export interface DryRunResult {
+  updated: DryRunPkg[]
+  newly_installed: DryRunPkg[]
+  removed: DryRunPkg[]
+  kept_back: string[]
+  excluded: string[]
+  held_in_place: string[]
+}
+
 export interface Job {
   id: string
   host_id: string
@@ -197,6 +216,7 @@ export interface Job {
     exit_code?: number | null
     reboot_required?: boolean | null
     held_conflicts?: string[] | null
+    dry_run?: DryRunResult | null
   } | null
   log: string | null
   failure_category: string | null

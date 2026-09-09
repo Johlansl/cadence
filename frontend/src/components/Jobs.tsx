@@ -4,6 +4,7 @@ import { pill, type Tone } from '../lib/pill'
 import type { Job, JobStatus, RebootPolicy } from '../types'
 import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
+import { DryRunResult } from './DryRunResult'
 import { RelativeTime } from './RelativeTime'
 import { useToast } from './Toast'
 
@@ -139,6 +140,7 @@ export function Jobs({ hostId }: { hostId: string }) {
     [hostId, reboot],
   )
   const trig = useAdminKeyAction(createJob)
+  const dry = useAdminKeyAction((key) => api.dryRunHost(hostId, key))
   const clear = useAdminKeyAction((key) => api.clearHostJobs(hostId, key))
   const confirm = useConfirm()
   const toast = useToast()
@@ -148,6 +150,12 @@ export function Jobs({ hostId }: { hostId: string }) {
     if (r?.ok) toast.notify('success', 'Upgrade job queued.')
     await refresh()
   }, [trig, toast, refresh])
+
+  const dryRun = useCallback(async () => {
+    const r = await dry.run()
+    if (r?.ok) toast.notify('success', 'Dry-run queued.')
+    await refresh()
+  }, [dry, toast, refresh])
 
   const doClear = useCallback(async () => {
     if (
@@ -200,6 +208,14 @@ export function Jobs({ hostId }: { hostId: string }) {
             </label>
             <button
               type="button"
+              onClick={() => void dryRun()}
+              disabled={dry.busy || active}
+              className="rounded border border-zinc-700 px-2 py-1 text-xs font-medium text-zinc-300 hover:border-zinc-500 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {dry.busy ? 'queuing…' : 'dry run'}
+            </button>
+            <button
+              type="button"
               onClick={() => void trigger()}
               disabled={trig.busy || active}
               className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
@@ -232,7 +248,7 @@ export function Jobs({ hostId }: { hostId: string }) {
         </p>
       ) : (
         <>
-          <AdminActionFeedback actions={[trig, clear]} onKeyAccepted={() => void refresh()} />
+          <AdminActionFeedback actions={[trig, dry, clear]} onKeyAccepted={() => void refresh()} />
 
           {jobs.length === 0 ? (
             <p className="mt-2 text-xs text-zinc-600">No jobs yet.</p>
@@ -278,6 +294,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                     </div>
                     {j.status === 'failed' && j.failure_summary && (
                       <p className="mt-1 text-zinc-500">{j.failure_summary}</p>
+                    )}
+                    {j.job_type === 'apt_dry_run' && j.result?.dry_run && (
+                      <DryRunResult data={j.result.dry_run} />
                     )}
                     {j.log && (
                       <details className="mt-1">

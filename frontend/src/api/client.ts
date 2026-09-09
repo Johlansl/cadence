@@ -141,6 +141,15 @@ export const api = {
     })
   },
 
+  // A dry-run: preview what an apt_upgrade would do, changing nothing on the
+  // host (roadmap item 4). The result lands in job.result.dry_run.
+  dryRunHost(hostId: string, adminKey: string) {
+    return adminWrite<Job>(`/admin/hosts/${hostId}/jobs`, adminKey, 'POST', {
+      job_type: 'apt_dry_run',
+      requested_by: 'dashboard',
+    })
+  },
+
   patchHost(
     hostId: string,
     adminKey: string,

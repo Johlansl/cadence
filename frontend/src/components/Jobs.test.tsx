@@ -102,6 +102,60 @@ describe('Jobs', () => {
     expect(screen.queryByText('hold conflict')).not.toBeInTheDocument()
   })
 
+  it('queues an apt_dry_run job from the dry run button', async () => {
+    sessionStorage.setItem('cadence.adminKey', 'sekret')
+    const fetchMock = installFetchMock({
+      [JOBS_URL]: { body: [] },
+      [POST_URL]: { status: 201, body: job({ job_type: 'apt_dry_run', status: 'pending' }) },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+    await screen.findByText('No jobs yet.')
+
+    await userEvent.click(screen.getByRole('button', { name: /dry run/i }))
+
+    expect(await screen.findByText('Dry-run queued.')).toBeInTheDocument()
+    const [, init] = postCalls(fetchMock)[0]
+    expect(JSON.parse(String(init?.body)).job_type).toBe('apt_dry_run')
+  })
+
+  it('renders the structured preview for an apt_dry_run job', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            job_type: 'apt_dry_run',
+            status: 'succeeded',
+            result: {
+              exit_code: 0,
+              dry_run: {
+                updated: [
+                  {
+                    name: 'openssl',
+                    architecture: 'amd64',
+                    installed_version: '3.0.11-1',
+                    candidate_version: '3.0.14-1',
+                    is_security_update: true,
+                  },
+                ],
+                newly_installed: [],
+                removed: [{ name: 'obsolete-lib', installed_version: '4.5-6' }],
+                kept_back: ['docker-ce'],
+                excluded: ['linux-image-amd64'],
+                held_in_place: ['docker-ce'],
+              },
+            },
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText(/1 to upgrade/)).toBeInTheDocument()
+    expect(screen.getByText(/1 to remove/)).toBeInTheDocument()
+    expect(screen.getByText(/1 excluded by policy/)).toBeInTheDocument()
+    expect(screen.getByText(/already on hold on the host: docker-ce/)).toBeInTheDocument()
+  })
+
   it('triggers a dist-upgrade with the stored admin key and toasts', async () => {
     sessionStorage.setItem('cadence.adminKey', 'sekret')
     const fetchMock = installFetchMock({
