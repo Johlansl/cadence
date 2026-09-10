@@ -31,6 +31,9 @@ DNS) and tools that only show you the problem without fixing it. It gives you
   job; the agent reboots only when the upgrade actually left one pending.
 - **Maintenance windows**: one recurring weekly/monthly window per host,
   turned into jobs by a scheduler service.
+- **Campaigns**: roll a dist-upgrade across many hosts in ordered waves, with
+  a global concurrency cap, an observation pause between waves, and an
+  automatic stop when failures pile up.
 - **History & retention**: append-only report and job logs, pruned on a
   configurable schedule.
 
@@ -354,6 +357,30 @@ curl -s -X POST https://<site>/api/v1/admin/hosts/<id>/schedules \
 `hour`:`minute` in `timezone`. Ranges and `params.reboot` are enforced by DB
 `CHECK`s. If the host already has an active job when the window opens, that run
 is skipped (no catch-up).
+
+### Campaigns
+
+A **campaign** rolls an `apt_upgrade` across many hosts in ordered waves. Pick
+the hosts once (an explicit list or a `tag` filter), split them into `stages`
+(`[2, "25%", "rest"]`), and set `max_concurrency`, a `max_failures` budget and
+an observation window between waves. It is created as a `draft` and started
+with a separate call:
+
+```sh
+curl -s -X POST https://<site>/api/v1/admin/campaigns \
+  -H "X-Admin-Key: $CADENCE_ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"name":"march","tag":"env=prod","stages":[2,"25%","rest"],
+       "max_concurrency":5,"max_failures":3}'
+curl -s -X POST https://<site>/api/v1/admin/campaigns/<id>/activate -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
+```
+
+The `scheduler` advances every running campaign each tick: it reconciles
+finished jobs (a failed job's category maps to `skip` or `halt`), fills the
+active wave up to `max_concurrency`, holds each terminal wave for its
+observation window, and stops on a `halt` failure or once the skip count
+passes `max_failures`. `pause` / `resume` / `cancel` are the manual controls;
+the `#campaigns` dashboard section has the create form and a per-stage /
+per-host view. Full detail: [docs/campaigns.md](docs/campaigns.md).
 
 ### Database migrations
 
