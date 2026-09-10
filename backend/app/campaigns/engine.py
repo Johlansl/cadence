@@ -2,8 +2,9 @@
 
 For each `running` campaign, in its own locked transaction:
 
-  1. reconcile finished jobs into campaign_hosts state (succeeded -> done;
-     failed -> skip or halt per CAMPAIGN_DISPOSITIONS);
+  1. reconcile finished jobs into campaign_hosts state (a succeeded action is
+     done only when health is healthy/degraded; unhealthy/unknown stops the
+     rollout; failed actions skip or halt per CAMPAIGN_DISPOSITIONS);
   2. stop the campaign if a halt disposition fired, or if the skipped count
      has passed max_failures;
   3. otherwise create jobs for the active stage's not-yet-started hosts, up to
@@ -67,7 +68,7 @@ class Outcome(NamedTuple):
     kind: str  # "waiting" | "filled" | "completed" | "stopped"
     stages_completed: tuple[int, ...] = ()
     stop_reason: str | None = None
-    stop_category: str | None = None  # failure_category, when a halt disposition fired
+    stop_category: str | None = None  # failure category or health halt category
     stop_host: str | None = None  # hostname, likewise
     jobs_created: int = 0
 
@@ -136,6 +137,16 @@ def _reconcile(
             continue  # still in flight
 
         if job.status == "succeeded":
+            health = (job.result or {}).get("health_status")
+            if health not in ("healthy", "degraded"):
+                host = str(hostnames.get(ch.host_id, ch.host_id))
+                category = (
+                    "health_unhealthy" if health == "unhealthy" else "health_unknown"
+                )
+                _stop_campaign(
+                    db, c, reason=f"{category} on {host}", now=now
+                )
+                return True, completed_stages, category, host
             ch.state = "done"
         else:
             disp = CAMPAIGN_DISPOSITIONS.get(job.failure_category, "halt")

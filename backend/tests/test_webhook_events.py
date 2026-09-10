@@ -116,6 +116,61 @@ def test_job_succeeded_event_has_no_failure_keys(client, db_session):
     assert "failure_category" not in data
     assert "reaped" not in data
     assert data["held_conflicts"] is None
+    assert data["health_status"] is None
+    assert data["pre_checks"] is None
+    assert data["post_checks"] is None
+
+
+def test_job_event_carries_upgrade_health_checks(client, db_session):
+    host_id, token = create_host(client)
+    webhook_row(db_session, events=("job.succeeded",))
+    db_session.flush()
+    job_id = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={}
+    ).json()["id"]
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    pre = {
+        "status": "passed",
+        "checks": [
+            {
+                "name": "disk_space",
+                "status": "passed",
+                "summary": "sufficient disk space",
+                "details": {},
+            }
+        ],
+    }
+    post = {
+        "status": "failed",
+        "checks": [
+            {
+                "name": "failed_services",
+                "status": "failed",
+                "summary": "one service newly failed",
+                "details": {"new_services": ["nginx.service"]},
+            }
+        ],
+    }
+    response = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "succeeded",
+            "exit_code": 0,
+            "pre_checks": pre,
+            "post_checks": post,
+            "health_status": "unhealthy",
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    data = _deliveries(db_session, "job.succeeded")[0].payload["data"]
+    assert data["health_status"] == "unhealthy"
+    assert data["pre_checks"]["status"] == "passed"
+    assert data["post_checks"]["checks"][0]["details"] == {
+        "new_services": ["nginx.service"]
+    }
 
 
 def test_held_conflicts_reaches_the_webhook_on_either_outcome(client, db_session):

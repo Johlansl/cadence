@@ -58,13 +58,24 @@ def _ch(db_session, cid, host_id) -> CampaignHost:
     ).scalar_one()
 
 
-def _finish(db_session, cid, host_id, *, status="succeeded", category=None, at=NOW):
+def _finish(
+    db_session,
+    cid,
+    host_id,
+    *,
+    status="succeeded",
+    category=None,
+    health="healthy",
+    at=NOW,
+):
     ch = _ch(db_session, cid, host_id)
     job = db_session.get(Job, ch.job_id)
     job.status = status
     job.completed_at = at
     if status == "failed":
         job.failure_category = category
+    elif health is not None:
+        job.result = {"health_status": health}
     db_session.flush()
 
 
@@ -212,6 +223,58 @@ def test_unknown_failure_category_halts_fail_safe(client, db_session):
     assert _status(db_session, cid) == "stopped"
 
 
+def test_unhealthy_success_stops_the_campaign(client, db_session):
+    cid, hs = _running(
+        client, db_session, ["a", "b"], [2], max_concurrency=2, max_failures=5
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, health="unhealthy", at=NOW)
+
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+
+    campaign = db_session.get(Campaign, cid)
+    assert campaign.status == "stopped"
+    assert campaign.halt_reason == "health_unhealthy on a"
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+    assert _ch(db_session, cid, hs[1].id).state == "orphaned"
+
+
+def test_unknown_or_missing_health_stops_the_campaign_fail_safe(client, db_session):
+    for health in ("unknown", None):
+        cid, (host,) = _running(
+            client,
+            db_session,
+            [f"host-{health}"],
+            ["rest"],
+            max_failures=5,
+            name=f"campaign-{health}",
+        )
+        advance_campaigns(now=NOW, db=db_session)
+        _finish(db_session, cid, host.id, health=health, at=NOW)
+
+        advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+
+        campaign = db_session.get(Campaign, cid)
+        assert campaign.status == "stopped"
+        assert campaign.halt_reason.startswith("health_unknown on ")
+
+
+def test_degraded_health_does_not_stop_the_campaign(client, db_session):
+    cid, (host,) = _running(
+        client,
+        db_session,
+        ["a"],
+        ["rest"],
+        observation_window_seconds=0,
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, host.id, health="degraded", at=NOW)
+
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+
+    assert _status(db_session, cid) == "completed"
+
+
 def test_max_failures_boundary(client, db_session):
     cid, hs = _running(
         client, db_session, ["a", "b", "c"], [3],
@@ -308,6 +371,19 @@ def test_emits_stopped_event_with_halt_category_and_host(client, db_session):
     assert data["halt_category"] == "network_or_repo"
     assert data["halt_host"] == "a"
     assert "network_or_repo" in data["reason"]
+
+
+def test_emits_stopped_event_for_unhealthy_success(client, db_session):
+    webhook_row(db_session, events=("campaign.stopped",))
+    cid, (host,) = _running(client, db_session, ["a"], ["rest"], max_failures=5)
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, host.id, health="unhealthy", at=NOW)
+
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+
+    (event,) = _deliveries(db_session, "campaign.stopped")
+    assert event.payload["data"]["halt_category"] == "health_unhealthy"
+    assert event.payload["data"]["halt_host"] == "a"
 
 
 def test_one_campaigns_error_does_not_block_the_others(client, db_session, monkeypatch):

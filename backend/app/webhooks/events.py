@@ -31,6 +31,7 @@ def on_job_result(
         return
     occurred_at = occurred_at or datetime.now(timezone.utc)
     failed = status == "failed"
+    result = job.result or {}
     data = {
         "job_id": str(job.id),
         "host_id": str(job.host_id),
@@ -44,7 +45,12 @@ def on_job_result(
         # None when not applicable (a reboot job, or an older agent); a
         # conflict can coincide with either outcome, so this is not gated on
         # `failed` the way the failure-classification keys below are.
-        "held_conflicts": (job.result or {}).get("held_conflicts"),
+        "held_conflicts": result.get("held_conflicts"),
+        # Added in roadmap item 7 without new event names. All are null for a
+        # non-upgrade job or an older agent, preserving one stable payload.
+        "health_status": result.get("health_status"),
+        "pre_checks": result.get("pre_checks"),
+        "post_checks": result.get("post_checks"),
     }
     if failed:
         # Same three keys the reaper's job.failed carries (on_job_reaped), so a
@@ -97,6 +103,9 @@ def on_job_reaped(
             "log": truncate_log(log_text or "", settings.webhook_log_max_bytes),
             "failure_category": failure_category,
             "failure_summary": failure_summary,
+            "health_status": None,
+            "pre_checks": None,
+            "post_checks": None,
         },
         occurred_at=occurred_at,
     )
