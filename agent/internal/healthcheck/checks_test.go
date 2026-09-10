@@ -46,6 +46,8 @@ func TestNewPhaseUsesWorstStatus(t *testing.T) {
 		{name: "warning", checks: []Result{{Status: StatusPassed}, {Status: StatusWarning}}, want: StatusWarning},
 		{name: "unknown", checks: []Result{{Status: StatusWarning}, {Status: StatusUnknown}}, want: StatusUnknown},
 		{name: "failed", checks: []Result{{Status: StatusUnknown}, {Status: StatusFailed}}, want: StatusFailed},
+		{name: "skipped after failure", checks: []Result{{Status: StatusFailed}, {Status: StatusSkipped}}, want: StatusFailed},
+		{name: "all skipped", checks: []Result{{Status: StatusSkipped}}, want: StatusUnknown},
 		{name: "invalid", checks: []Result{{Status: Status("invalid")}}, want: StatusUnknown},
 	}
 	for _, tc := range tests {

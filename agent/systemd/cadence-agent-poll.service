@@ -11,8 +11,8 @@ ExecStart=/usr/local/bin/cadence-agent -poll
 
 # Does nothing when no job is pending; when one is, it runs apt-get dist-upgrade
 # and then a follow-up report. Must exceed jobTimeout + postJobReportTimeout
-# (cmd/agent/main.go = 35 min) with margin, or systemd SIGKILLs apt/dpkg.
-TimeoutStartSec=2700
+# (cmd/agent/main.go = 65 min) with margin, or systemd SIGKILLs apt/dpkg.
+TimeoutStartSec=4500
 Nice=10
 IOSchedulingClass=idle
 

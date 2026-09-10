@@ -6,6 +6,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"cadence/agent/internal/apterr"
+	"cadence/agent/internal/healthcheck"
 	"cadence/agent/internal/holds"
 	"cadence/agent/internal/procenv"
 	"cadence/agent/internal/rebootcheck"
@@ -38,6 +40,15 @@ func capLog(s string) string {
 // under a fresh context, not the upgrade's, so recovery still happens when the
 // upgrade failed *because* its own deadline expired.
 const dpkgConfigureTimeout = 10 * time.Minute
+
+const (
+	preCheckTimeout       = 10 * time.Minute
+	aptUpgradeTimeout     = 30 * time.Minute
+	postCheckTimeout      = 5 * time.Minute
+	defaultLockWait       = 120 * time.Second
+	maximumLockWait       = time.Hour
+	defaultLockPollPeriod = time.Second
+)
 
 // aptWaitDelay is how long to wait, after SIGTERM on context cancel, before
 // SIGKILL and giving up on the command's output -- so an orphaned grandchild
@@ -70,6 +81,249 @@ type Result struct {
 	// on a stale name). Becomes the server's known_held_packages for the
 	// next job. Same never-omitted convention as HeldConflicts.
 	HeldPackages []string
+
+	// PreChecks and PostChecks describe host validation separately from the
+	// apt action outcome. PostChecks is nil when the pre-check phase blocked
+	// the action. HealthStatus is derived only from completed post-checks.
+	PreChecks    *healthcheck.Phase
+	PostChecks   *healthcheck.Phase
+	HealthStatus healthcheck.HealthStatus
+}
+
+// CheckOptions controls the thresholds and injectable operating-system probes
+// used around an upgrade. Zero values select conservative defaults.
+type CheckOptions struct {
+	MinimumAvailableBytes     uint64
+	BootMinimumAvailableBytes uint64
+	LockWait                  time.Duration
+
+	Runner            healthcheck.Runner
+	DiskProbe         healthcheck.DiskProbe
+	LockProbe         healthcheck.LockProbe
+	RebootProbe       func() bool
+	LockPollingPeriod time.Duration
+}
+
+// DefaultCheckOptions returns the policy used when an older server supplies no
+// health-check settings.
+func DefaultCheckOptions() CheckOptions {
+	return CheckOptions{
+		MinimumAvailableBytes:     healthcheck.DefaultMinimumAvailableBytes,
+		BootMinimumAvailableBytes: healthcheck.DefaultBootMinimumAvailableBytes,
+		LockWait:                  defaultLockWait,
+		Runner:                    healthcheck.ExecRunner{},
+		DiskProbe:                 healthcheck.ProbeFilesystem,
+		LockProbe:                 healthcheck.ProbePackageManagerLocks,
+		RebootProbe:               rebootcheck.Pending,
+		LockPollingPeriod:         defaultLockPollPeriod,
+	}
+}
+
+// CheckOptionsFromThresholds overlays non-zero server settings on the agent
+// defaults. The lock wait is capped before conversion to time.Duration.
+func CheckOptionsFromThresholds(minimumBytes, bootMinimumBytes, lockWaitSeconds uint64) CheckOptions {
+	options := DefaultCheckOptions()
+	if minimumBytes > 0 {
+		options.MinimumAvailableBytes = minimumBytes
+	}
+	if bootMinimumBytes > 0 {
+		options.BootMinimumAvailableBytes = bootMinimumBytes
+	}
+	if lockWaitSeconds > 0 {
+		maximumSeconds := uint64(maximumLockWait / time.Second)
+		if lockWaitSeconds > maximumSeconds {
+			lockWaitSeconds = maximumSeconds
+		}
+		options.LockWait = time.Duration(lockWaitSeconds) * time.Second
+	}
+	return options
+}
+
+func (o CheckOptions) withDefaults() CheckOptions {
+	defaults := DefaultCheckOptions()
+	if o.MinimumAvailableBytes == 0 {
+		o.MinimumAvailableBytes = defaults.MinimumAvailableBytes
+	}
+	if o.BootMinimumAvailableBytes == 0 {
+		o.BootMinimumAvailableBytes = defaults.BootMinimumAvailableBytes
+	}
+	if o.LockWait <= 0 {
+		o.LockWait = defaults.LockWait
+	} else if o.LockWait > maximumLockWait {
+		o.LockWait = maximumLockWait
+	}
+	if o.Runner == nil {
+		o.Runner = defaults.Runner
+	}
+	if o.DiskProbe == nil {
+		o.DiskProbe = defaults.DiskProbe
+	}
+	if o.LockProbe == nil {
+		o.LockProbe = defaults.LockProbe
+	}
+	if o.RebootProbe == nil {
+		o.RebootProbe = defaults.RebootProbe
+	}
+	if o.LockPollingPeriod <= 0 {
+		o.LockPollingPeriod = defaults.LockPollingPeriod
+	}
+	return o
+}
+
+var errPreChecks = errors.New("upgrade blocked by pre-checks")
+
+// RunAptUpgrade validates the host, runs the apt action only when every
+// blocking pre-check passes, then validates the resulting host state. A clean
+// apt exit and post-upgrade health are deliberately independent outcomes.
+func RunAptUpgrade(ctx context.Context, excludedPackages, knownHeldPackages []string, options CheckOptions) Result {
+	options = options.withDefaults()
+
+	preCtx, preCancel := context.WithTimeout(ctx, preCheckTimeout)
+	pre := runPreChecks(preCtx, options)
+	preErr := preCtx.Err()
+	preCancel()
+	if blocking := firstBlockingCheck(pre.Checks); blocking != nil {
+		category := preCheckFailureCategory(*blocking)
+		if errors.Is(preErr, context.DeadlineExceeded) {
+			category = apterr.CategoryTimeout
+		}
+		return Result{
+			ExitCode:        -1,
+			Err:             errPreChecks,
+			FailureCategory: category,
+			FailureSummary:  blocking.Summary,
+			PreChecks:       &pre,
+			HealthStatus:    healthcheck.HealthUnknown,
+			Log: capLog(formatCheckLog("pre-check", pre) +
+				"[cadence] apt upgrade blocked by pre-checks\n"),
+		}
+	}
+
+	actionCtx, actionCancel := context.WithTimeout(ctx, aptUpgradeTimeout)
+	result := runAptUpgradeAction(actionCtx, excludedPackages, knownHeldPackages)
+	actionCancel()
+	result.PreChecks = &pre
+
+	postCtx, postCancel := context.WithTimeout(ctx, postCheckTimeout)
+	post, rebootRequired := runPostChecks(postCtx, options, failedServicesBaseline(pre.Checks))
+	postCancel()
+	result.PostChecks = &post
+	result.HealthStatus = healthcheck.HealthFromPostChecks(post.Checks)
+	result.RebootRequired = rebootRequired
+	result.Log = capLog(formatCheckLog("pre-check", pre) + result.Log + formatCheckLog("post-check", post))
+	return result
+}
+
+func runPreChecks(ctx context.Context, options CheckOptions) healthcheck.Phase {
+	targets := []healthcheck.DiskTarget{
+		{Path: "/var", MinimumAvailableBytes: options.MinimumAvailableBytes},
+		{Path: "/boot", MinimumAvailableBytes: options.BootMinimumAvailableBytes},
+		{Path: "/boot/efi", MinimumAvailableBytes: options.BootMinimumAvailableBytes},
+	}
+
+	checks := make([]healthcheck.Result, 0, 6)
+	add := func(result healthcheck.Result) bool {
+		checks = append(checks, result)
+		return result.Status == healthcheck.StatusFailed || result.Status == healthcheck.StatusUnknown
+	}
+	remaining := []string{
+		healthcheck.CheckPackageLocks,
+		healthcheck.CheckDPKGAudit,
+		healthcheck.CheckAPTDependencies,
+		healthcheck.CheckFailedServices,
+		healthcheck.CheckPackageIndexes,
+	}
+	if add(healthcheck.DiskSpace(targets, options.DiskProbe)) {
+		return phaseWithSkipped(checks, remaining)
+	}
+
+	lockCtx, lockCancel := context.WithTimeout(ctx, options.LockWait)
+	locks := healthcheck.PackageManagerLocks(lockCtx, healthcheck.DefaultLockPaths, options.LockPollingPeriod, options.LockProbe)
+	lockCancel()
+	if add(locks) {
+		return phaseWithSkipped(checks, remaining[1:])
+	}
+	if add(healthcheck.DPKGAudit(ctx, options.Runner)) {
+		return phaseWithSkipped(checks, remaining[2:])
+	}
+	if add(healthcheck.APTDependencies(ctx, options.Runner)) {
+		return phaseWithSkipped(checks, remaining[3:])
+	}
+	if add(healthcheck.FailedServices(ctx, options.Runner)) {
+		return phaseWithSkipped(checks, remaining[4:])
+	}
+	add(healthcheck.PackageIndexes(ctx, options.Runner))
+	return healthcheck.NewPhase(checks...)
+}
+
+func phaseWithSkipped(checks []healthcheck.Result, names []string) healthcheck.Phase {
+	for _, name := range names {
+		checks = append(checks, healthcheck.Result{
+			Name: name, Status: healthcheck.StatusSkipped,
+			Summary: "not run after an earlier blocking check",
+		})
+	}
+	return healthcheck.NewPhase(checks...)
+}
+
+func runPostChecks(ctx context.Context, options CheckOptions, failedServices []string) (healthcheck.Phase, bool) {
+	rebootRequired := options.RebootProbe()
+	checks := []healthcheck.Result{
+		healthcheck.DPKGAudit(ctx, options.Runner),
+		healthcheck.APTDependencies(ctx, options.Runner),
+		healthcheck.DiskSpace([]healthcheck.DiskTarget{
+			{Path: "/var", MinimumAvailableBytes: options.MinimumAvailableBytes},
+			{Path: "/boot", MinimumAvailableBytes: options.BootMinimumAvailableBytes},
+			{Path: "/boot/efi", MinimumAvailableBytes: options.BootMinimumAvailableBytes},
+		}, options.DiskProbe),
+		healthcheck.FailedServicesAfter(ctx, options.Runner, failedServices),
+		healthcheck.RebootRequired(rebootRequired),
+	}
+	return healthcheck.NewPhase(checks...), rebootRequired
+}
+
+func firstBlockingCheck(checks []healthcheck.Result) *healthcheck.Result {
+	for i := range checks {
+		if checks[i].Status == healthcheck.StatusFailed || checks[i].Status == healthcheck.StatusUnknown {
+			return &checks[i]
+		}
+	}
+	return nil
+}
+
+func preCheckFailureCategory(check healthcheck.Result) string {
+	if check.Status == healthcheck.StatusUnknown {
+		return apterr.CategoryAgentRefused
+	}
+	switch check.Name {
+	case healthcheck.CheckDiskSpace:
+		return apterr.CategoryDiskFull
+	case healthcheck.CheckPackageLocks:
+		return apterr.CategoryAptLocked
+	case healthcheck.CheckDPKGAudit, healthcheck.CheckAPTDependencies:
+		return apterr.CategoryDpkgError
+	case healthcheck.CheckPackageIndexes:
+		return apterr.CategoryNetworkOrRepo
+	default:
+		return apterr.CategoryAgentRefused
+	}
+}
+
+func failedServicesBaseline(checks []healthcheck.Result) []string {
+	for _, check := range checks {
+		if check.Name == healthcheck.CheckFailedServices {
+			return check.Details.Services
+		}
+	}
+	return nil
+}
+
+func formatCheckLog(label string, phase healthcheck.Phase) string {
+	var out strings.Builder
+	for _, check := range phase.Checks {
+		fmt.Fprintf(&out, "[cadence] %s %s: %s: %s\n", label, check.Name, check.Status, check.Summary)
+	}
+	return out.String()
 }
 
 func aptEnv() []string {
@@ -94,20 +348,14 @@ func aptCommand(ctx context.Context, out *bytes.Buffer, name string, args ...str
 	return cmd
 }
 
-// RunAptUpgrade refreshes the package lists, reconciles dpkg's hold state to
-// excludedPackages against knownHeldPackages, then runs a non-interactive
+// runAptUpgradeAction reconciles dpkg's hold state to excludedPackages against
+// knownHeldPackages, then runs a non-interactive
 // `apt-get dist-upgrade -y`, retrying while another process holds the apt
 // lock. If the upgrade still fails it runs `dpkg --configure -a` (under a
 // fresh context) so a half-applied transaction is left as consistent as
 // possible. Output from every command is captured in execution order.
-func RunAptUpgrade(ctx context.Context, excludedPackages, knownHeldPackages []string) Result {
+func runAptUpgradeAction(ctx context.Context, excludedPackages, knownHeldPackages []string) Result {
 	var out bytes.Buffer
-
-	// Refresh lists so the upgrade reflects current apt state. Non-fatal: a
-	// failure here just means we apply whatever apt already knows.
-	if err := aptCommand(ctx, &out, "apt-get", "update").Run(); err != nil {
-		out.WriteString("\n[cadence] apt-get update failed; using existing lists\n")
-	}
 
 	heldNames := reconcileHolds(ctx, &out, excludedPackages, knownHeldPackages)
 
@@ -127,7 +375,6 @@ func RunAptUpgrade(ctx context.Context, excludedPackages, knownHeldPackages []st
 	res.HeldPackages = heldNames
 
 	res.Log = capLog(out.String())
-	res.RebootRequired = rebootcheck.Pending()
 	return res
 }
 

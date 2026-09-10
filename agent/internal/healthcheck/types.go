@@ -10,6 +10,7 @@ const (
 	StatusWarning Status = "warning"
 	StatusFailed  Status = "failed"
 	StatusUnknown Status = "unknown"
+	StatusSkipped Status = "skipped"
 )
 
 // HealthStatus is the host health derived from post-upgrade checks.
@@ -74,20 +75,29 @@ func aggregateStatus(checks []Result) Status {
 		return StatusUnknown
 	}
 	worst := StatusPassed
+	observed := false
 	for _, check := range checks {
 		switch check.Status {
 		case StatusFailed:
 			return StatusFailed
 		case StatusUnknown:
+			observed = true
 			worst = StatusUnknown
 		case StatusWarning:
+			observed = true
 			if worst == StatusPassed {
 				worst = StatusWarning
 			}
 		case StatusPassed:
+			observed = true
+		case StatusSkipped:
 		default:
+			observed = true
 			worst = StatusUnknown
 		}
+	}
+	if !observed {
+		return StatusUnknown
 	}
 	return worst
 }

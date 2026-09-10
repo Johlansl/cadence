@@ -88,3 +88,28 @@ func TestJobHandoffKnownHeldPackages(t *testing.T) {
 		})
 	}
 }
+
+func TestJobHandoffHealthCheckSettings(t *testing.T) {
+	j := JobHandoff{Params: json.RawMessage(`{
+		"health_checks": {
+			"minimum_available_bytes": 1073741824,
+			"boot_minimum_available_bytes": 209715200,
+			"lock_wait_seconds": 120
+		}
+	}`)}
+
+	got := j.HealthCheckSettings()
+	want := HealthCheckSettings{
+		MinimumAvailableBytes:     1073741824,
+		BootMinimumAvailableBytes: 209715200,
+		LockWaitSeconds:           120,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("HealthCheckSettings() = %#v, want %#v", got, want)
+	}
+
+	malformed := JobHandoff{Params: json.RawMessage(`{"health_checks":{"lock_wait_seconds":"bad"}}`)}
+	if got := malformed.HealthCheckSettings(); got != (HealthCheckSettings{}) {
+		t.Fatalf("malformed settings = %#v, want zero values", got)
+	}
+}

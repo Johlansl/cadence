@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"cadence/agent/internal/healthcheck"
 	"cadence/agent/internal/report"
 )
 
@@ -126,6 +127,13 @@ type JobResult struct {
 	// NOT omitempty: null tells the server "not a dry-run, or a dry-run that
 	// failed before producing a result" apart from a real preview.
 	DryRun *report.DryRun `json:"dry_run"`
+
+	// Upgrade checks are independent from the action status. Null means that
+	// the field does not apply to this job type; a nil PostChecks on an
+	// apt_upgrade means its pre-checks blocked the action.
+	PreChecks    *healthcheck.Phase       `json:"pre_checks"`
+	PostChecks   *healthcheck.Phase       `json:"post_checks"`
+	HealthStatus healthcheck.HealthStatus `json:"health_status,omitempty"`
 }
 
 // SubmitJobResult reports the outcome of a job back to the server.

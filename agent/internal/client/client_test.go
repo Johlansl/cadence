@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"cadence/agent/internal/healthcheck"
 	"cadence/agent/internal/report"
 )
 
@@ -204,6 +205,36 @@ func TestSubmitJobResultCarriesFailureClassification(t *testing.T) {
 	}
 	if gotBody.FailureCategory != "dpkg_error" || gotBody.FailureSummary == "" {
 		t.Errorf("body = %+v", gotBody)
+	}
+}
+
+func TestSubmitJobResultCarriesUpgradeHealthSeparatelyFromStatus(t *testing.T) {
+	var gotBody JobResult
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	pre := healthcheck.NewPhase(healthcheck.Result{
+		Name: healthcheck.CheckDiskSpace, Status: healthcheck.StatusPassed, Summary: "enough space",
+	})
+	post := healthcheck.NewPhase(healthcheck.Result{
+		Name: healthcheck.CheckFailedServices, Status: healthcheck.StatusFailed, Summary: "one service newly failed",
+	})
+	err := New(srv.URL, "tok", 5*time.Second).SubmitJobResult(context.Background(), "j", JobResult{
+		Status: "succeeded", ExitCode: 0,
+		PreChecks: &pre, PostChecks: &post, HealthStatus: healthcheck.HealthUnhealthy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBody.Status != "succeeded" || gotBody.HealthStatus != healthcheck.HealthUnhealthy {
+		t.Fatalf("action and health were not kept separate: %#v", gotBody)
+	}
+	if gotBody.PreChecks == nil || gotBody.PostChecks == nil || gotBody.PostChecks.Status != healthcheck.StatusFailed {
+		t.Fatalf("check phases did not round-trip: %#v", gotBody)
 	}
 }
 

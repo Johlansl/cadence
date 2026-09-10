@@ -40,7 +40,7 @@ var agentVersion = "0.11.0"
 //	cadence-agent-poll.service  jobTimeout + postJobReportTimeout
 const (
 	reportTimeout        = 10 * time.Minute // collect + POST /reports
-	jobTimeout           = 30 * time.Minute // apt-get dist-upgrade for a job
+	jobTimeout           = 60 * time.Minute // checks + apt action + bounded dpkg recovery
 	postJobReportTimeout = 5 * time.Minute  // the fresh report sent after a job
 	dryRunTimeout        = 5 * time.Minute  // apt-get update + -s dist-upgrade
 )
@@ -114,30 +114,18 @@ func run(pollOnly bool) error {
 func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logging.Info("job received", "job_id", job.ID, "job_type", job.JobType)
 
-	// failCat / failSummary are sent only for a failed job, "" on success.
-	// heldConflicts / heldPackages are nil except on the apt_upgrade path;
-	// dryRun is nil except on the apt_dry_run path.
-	submit := func(status string, exitCode int, logText string, reboot bool,
-		failCat, failSummary string, heldConflicts, heldPackages []string,
-		dryRun *report.DryRun) error {
+	submit := func(result client.JobResult) error {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer cancel()
-		return c.SubmitJobResult(ctx, job.ID, client.JobResult{
-			Status:          status,
-			ExitCode:        exitCode,
-			Log:             logText,
-			RebootRequired:  reboot,
-			FailureCategory: failCat,
-			FailureSummary:  failSummary,
-			HeldConflicts:   heldConflicts,
-			HeldPackages:    heldPackages,
-			DryRun:          dryRun,
-		})
+		return c.SubmitJobResult(ctx, job.ID, result)
 	}
 	// refused reports a job the agent declined before running anything: the
 	// category is fixed, the reason is the message itself.
 	refused := func(msg string) error {
-		return submit("failed", 0, msg, false, apterr.CategoryAgentRefused, msg, nil, nil, nil)
+		return submit(client.JobResult{
+			Status: "failed", ExitCode: 0, Log: msg,
+			FailureCategory: apterr.CategoryAgentRefused, FailureSummary: msg,
+		})
 	}
 
 	// Dedicated reboot job (reboot_policy "prompt" / a "reboot now" from the
@@ -148,9 +136,11 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			return refused("reboot is disabled on this host (CADENCE_ENABLE_REBOOT=false)")
 		}
 		logging.Info("dedicated reboot job -> systemctl --no-block reboot", "job_id", job.ID)
-		if err := submit("succeeded", 0,
-			"[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n",
-			true, "", "", nil, nil, nil); err != nil {
+		if err := submit(client.JobResult{
+			Status: "succeeded", ExitCode: 0,
+			Log:            "[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n",
+			RebootRequired: true,
+		}); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
 		}
 		rctx, rcancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
@@ -174,8 +164,11 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		res := executor.RunAptDryRun(dctx, job.ExcludedPackages())
 		logging.Info("dry run finished", "job_id", job.ID, "status", res.Status)
 
-		if err := submit(res.Status, res.ExitCode, res.Log, false,
-			res.FailureCategory, res.FailureSummary, nil, nil, res.DryRun); err != nil {
+		if err := submit(client.JobResult{
+			Status: res.Status, ExitCode: res.ExitCode, Log: res.Log,
+			FailureCategory: res.FailureCategory, FailureSummary: res.FailureSummary,
+			DryRun: res.DryRun,
+		}); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
 		}
 		if res.Status == "failed" {
@@ -195,8 +188,14 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 	defer cancel()
 
+	settings := job.HealthCheckSettings()
+	checkOptions := executor.CheckOptionsFromThresholds(
+		settings.MinimumAvailableBytes,
+		settings.BootMinimumAvailableBytes,
+		settings.LockWaitSeconds,
+	)
 	logging.Info("running apt-get dist-upgrade", "job_id", job.ID)
-	res := executor.RunAptUpgrade(ctx, job.ExcludedPackages(), job.KnownHeldPackages())
+	res := executor.RunAptUpgrade(ctx, job.ExcludedPackages(), job.KnownHeldPackages(), checkOptions)
 
 	status := "succeeded"
 	if res.ExitCode != 0 || res.Err != nil {
@@ -204,15 +203,20 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	}
 	logging.Info("apt-get dist-upgrade finished",
 		"job_id", job.ID, "status", status, "exit_code", res.ExitCode,
-		"reboot_required", res.RebootRequired)
+		"health_status", res.HealthStatus, "reboot_required", res.RebootRequired)
 
 	// Decide about the reboot. The server already resolved the effective mode
 	// (per-job override, else host reboot_policy) into params.reboot.
 	willReboot, logSuffix := rebootDecision(status, res.RebootRequired, cfg.EnableReboot, job.RebootMode())
 	logText := res.Log + logSuffix
 
-	if err := submit(status, res.ExitCode, logText, res.RebootRequired,
-		res.FailureCategory, res.FailureSummary, res.HeldConflicts, res.HeldPackages, nil); err != nil {
+	if err := submit(client.JobResult{
+		Status: status, ExitCode: res.ExitCode, Log: logText,
+		RebootRequired:  res.RebootRequired,
+		FailureCategory: res.FailureCategory, FailureSummary: res.FailureSummary,
+		HeldConflicts: res.HeldConflicts, HeldPackages: res.HeldPackages,
+		PreChecks: res.PreChecks, PostChecks: res.PostChecks, HealthStatus: res.HealthStatus,
+	}); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}
 

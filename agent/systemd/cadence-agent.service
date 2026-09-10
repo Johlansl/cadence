@@ -12,9 +12,9 @@ ExecStart=/usr/local/bin/cadence-agent
 # A run may collect, POST a report, and then run a piggybacked apt-get
 # dist-upgrade job plus a follow-up report. Must exceed the sum of the agent's
 # own timeouts on this path (reportTimeout + jobTimeout + postJobReportTimeout
-# in cmd/agent/main.go = 45 min) with margin, or systemd SIGKILLs apt/dpkg
+# in cmd/agent/main.go = 75 min) with margin, or systemd SIGKILLs apt/dpkg
 # mid-transaction. Keep the run low priority.
-TimeoutStartSec=3600
+TimeoutStartSec=5400
 Nice=10
 IOSchedulingClass=idle
 

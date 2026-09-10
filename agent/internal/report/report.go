@@ -93,6 +93,27 @@ func (j JobHandoff) KnownHeldPackages() []string {
 	return p.KnownHeldPackages
 }
 
+// HealthCheckSettings returns optional server-provided thresholds for an
+// apt_upgrade. Zero values mean absent or malformed and are replaced by the
+// agent's safe defaults before use.
+func (j JobHandoff) HealthCheckSettings() HealthCheckSettings {
+	if len(j.Params) == 0 {
+		return HealthCheckSettings{}
+	}
+	var p struct {
+		HealthChecks HealthCheckSettings `json:"health_checks"`
+	}
+	_ = json.Unmarshal(j.Params, &p)
+	return p.HealthChecks
+}
+
+// HealthCheckSettings is the configurable subset of the pre-check policy.
+type HealthCheckSettings struct {
+	MinimumAvailableBytes     uint64 `json:"minimum_available_bytes"`
+	BootMinimumAvailableBytes uint64 `json:"boot_minimum_available_bytes"`
+	LockWaitSeconds           uint64 `json:"lock_wait_seconds"`
+}
+
 // Response is the body returned by POST /api/v1/reports. Only the piggybacked
 // job is of interest to the agent; the rest is ignored.
 type Response struct {
