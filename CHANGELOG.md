@@ -8,6 +8,19 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Tag-scoped package exclusions. A hold rule can now be scoped to a tag
+  (`scope='tag'`, new nullable `package_exclusions.tag`, migration `0017`):
+  it applies to every host carrying that tag, where `tag` is a `"key"` /
+  `"key=value"` query in the same shape as `GET /hosts?tag=` and campaign
+  targeting. The three scopes (`global`, `host`, `tag`) are additive with no
+  priority, resolved to exact package names server-side at job-creation like
+  before, so the agent and its `params.excluded_packages` are unchanged.
+  `GET /package-exclusions?host_id=` now also returns the tag rules that
+  apply to that host. Related: `PATCH /api/v1/admin/hosts/{id}` lowercases
+  tag keys and values on write (a pair that collides once lowercased is a
+  422), so storage matches the already case-insensitive tag search; existing
+  `hosts.tags` rows are not rewritten. No agent change (agent stays at
+  0.11.0).
 - Campaigns. A staged, rate-limited rollout of `apt_upgrade` jobs across a
   fixed host set: pick the hosts (an explicit list or a `tag` filter, resolved
   once at creation), split them into ordered waves (`stages`, e.g.

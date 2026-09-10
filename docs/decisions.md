@@ -394,9 +394,10 @@ Roadmap item 5. The full mechanism is in
   session per unit of work, crash-isolation around the loop. A separate
   daemon would be one more thing to supervise on a 2 GB box for no gain.
 - **Targeting is frozen at creation, never re-evaluated.** Predictability wins
-  over "live" tag membership, and it keeps campaigns independent of the
-  not-yet-built tag-as-policy work (roadmap item 6). A tag filter is just a
-  convenient way to *pick* the host set once.
+  over "live" tag membership. Tag-as-policy now exists for package exclusions
+  (roadmap item 6, resolved live at job-creation), but a campaign deliberately
+  does not consume it: a campaign's tag filter is just a convenient way to
+  *pick* the host set once, and the set stays fixed for the run.
 - **Draft then explicit activate.** One create call can touch the whole fleet.
   A mandatory review step (`draft` -> `activate`) before any job is created is
   worth the extra call; a single-host job has no such blast radius and needs
@@ -435,10 +436,13 @@ for them, but there is no code):
 **Since added:** automatic scheduling / maintenance windows (the `schedules`
 table + the `scheduler` service); package exclusion / hold lists (roadmap
 item 3: global and per-host glob patterns resolved server-side, reconciled
-into dpkg's hold state by the agent every `apt_upgrade` run); outbound
-webhooks (roadmap item 1: one generic signed JSON feed, no per-platform
-formatting); campaigns (roadmap item 5: a staged, concurrency-capped,
-stop-on-failure rollout of `apt_upgrade` jobs, driven by the scheduler; see
-"Campaigns" below and [architecture.md](architecture.md#campaigns)). The
-`apt_upgrade` rollout-batching line above is now largely covered by campaigns;
-reboot sequencing still is not.
+into dpkg's hold state by the agent every `apt_upgrade` run; roadmap item 6
+added a `tag` scope, a rule applying to every host carrying a tag, additive
+with the other two, no priority; host tag keys and values are lowercased on
+write from item 6 on, existing rows not rewritten); outbound webhooks
+(roadmap item 1: one generic signed JSON feed, no per-platform formatting);
+campaigns (roadmap item 5: a staged, concurrency-capped, stop-on-failure
+rollout of `apt_upgrade` jobs, driven by the scheduler; see "Campaigns"
+below and [architecture.md](architecture.md#campaigns)). The `apt_upgrade`
+rollout-batching line above is now largely covered by campaigns; reboot
+sequencing still is not.

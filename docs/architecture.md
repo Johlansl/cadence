@@ -105,11 +105,13 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   gets `params.excluded_packages` (same resolution as `apt_upgrade`), but not
   `params.known_held_packages`: it never reconciles, it only filters its own
   preview.
-- `package_exclusions`: operator hold rules (`scope` `global` or `host`,
-  `host_id` nullable, `pattern` a glob matched with Python's `fnmatch`).
-  Additive across scopes, no re-inclusion, no tag scope yet. Resolved to
-  exact package names against a host's known inventory at job-creation time;
-  the pattern itself never reaches the agent. The agent reconciles dpkg's
+- `package_exclusions`: operator hold rules (`scope` `global`, `host` or
+  `tag`; `host_id` nullable, `tag` nullable, `pattern` a glob matched with
+  Python's `fnmatch`). A `tag` rule applies to every host carrying that tag
+  (a `"key"` / `"key=value"` query, matched like `GET /hosts?tag=`). Additive
+  across the three scopes: a host sees the union, no re-inclusion, no
+  priority. Resolved to exact package names against a host's known inventory
+  at job-creation time; the pattern itself never reaches the agent. The agent reconciles dpkg's
   real hold state (`apt-mark hold`/`unhold`) toward `excluded_packages`,
   diffed against `known_held_packages` -- **not** a live `apt-mark showhold`
   read -- so a hold neither wanted nor previously recorded by Cadence (an
@@ -134,7 +136,8 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
 
 Extensibility is built in without over-engineering: `os_family` /
 `package_manager` leave room for non-apt package managers, `jobs.params` and
-`schedules.params` are jsonb, `hosts.tags` is groundwork for grouping.
+`schedules.params` are jsonb, and `hosts.tags` carries policy: a
+`package_exclusions` rule can be scoped to a tag rather than to one host.
 
 ## Webhooks
 
