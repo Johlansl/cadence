@@ -3,6 +3,19 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.12.1
+
+Drop `RestrictSUIDSGID=true` from `cadence-agent.service` and
+`cadence-agent-poll.service`. The directive blocked the agent process from
+creating or changing setuid/setgid files, which silently broke legitimate
+package upgrades that ship such files: `shadow` installing `newgrp` / `chage`
+setuid root, for instance, failed under the agent while the same `dpkg` run by
+hand succeeded. Reliability of the upgrade path wins over this layer of
+defence in depth here; the other sandboxing directives (`ProtectHome`,
+`PrivateTmp`, `ProtectControlGroups`, `LockPersonality`) stay. See
+`SECURITY.md`, "The agent runs as root", for the residual-risk rationale. No
+behaviour change in the agent binary itself.
+
 ## 0.12.0
 
 Pre- and post-upgrade health checks (server roadmap item 7):
