@@ -8,6 +8,28 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Campaigns. A staged, rate-limited rollout of `apt_upgrade` jobs across a
+  fixed host set: pick the hosts (an explicit list or a `tag` filter, resolved
+  once at creation), split them into ordered waves (`stages`, e.g.
+  `[2, "25%", "rest"]`), set a global `max_concurrency`, a `max_failures`
+  budget and an observation window between waves. New tables `campaigns` /
+  `campaign_hosts` and a nullable `jobs.campaign_id` (migration `0016`, which
+  also finally adds the `jobs.job_type` CHECK, closed on the three existing
+  values -- campaigns add no job type). A campaign is created in `draft`,
+  started with a separate `POST /api/v1/admin/campaigns/{id}/activate`, and
+  can be paused / resumed / cancelled; `GET /api/v1/campaigns` and
+  `/campaigns/{id}` are dashboard reads. The engine is `advance_campaigns()`
+  on the scheduler tick: it reconciles finished jobs (a failed job's
+  `failure_category` maps to `skip` or `halt` via a code table), fills the
+  active wave up to `max_concurrency` through the same job-creation path as
+  the admin route and the scheduler, holds each terminal wave for its
+  observation window before advancing, and stops the campaign on a `halt`
+  disposition or once the skip count passes `max_failures` (any still-running
+  host is then marked `orphaned`, its job left to finish on its own). Three
+  webhook events: `campaign.stage_completed`, `campaign.completed`,
+  `campaign.stopped`. New setting `CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS`
+  (default 600). No agent change (agent stays at 0.11.0). See
+  [`docs/campaigns.md`](docs/campaigns.md).
 - Dry-run. A new `apt_dry_run` job type previews what an `apt_upgrade` would
   do on a host without changing anything: the agent (>= 0.11.0) runs
   `apt-get -s dist-upgrade` and reports, in `result.dry_run`, the packages it

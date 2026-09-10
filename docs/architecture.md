@@ -13,7 +13,7 @@ The central server runs as a `docker compose` stack:
 |---|---|---|
 | `db` | `postgres:16` | fleet state, reports, jobs, schedules |
 | `backend` | built from `backend/` | FastAPI HTTP API (agent ingest + dashboard reads + admin writes) |
-| `scheduler` | same image as `backend`, `python -m app.scheduler` | turns due `schedules` into `jobs`, reaps stuck jobs, runs the daily retention sweep, refreshes the Debian security-advisory feed, records a heartbeat |
+| `scheduler` | same image as `backend`, `python -m app.scheduler` | turns due `schedules` into `jobs`, advances running campaigns, reaps stuck jobs, dispatches webhook deliveries, runs the daily retention sweep, refreshes the Debian security-advisory feed, records a heartbeat |
 | `frontend` | built from `frontend/` (`nginx:1.27-alpine` serving a Vite build) | the dashboard; nginx also proxies `/api/` to `backend` |
 | `caddy` | `caddy:2-alpine` | the single public entrypoint, TLS terminated with an internal CA; also serves the plain-HTTP agent bootstrap assets |
 
@@ -79,7 +79,9 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   agent reports it). Replaced wholesale on every report.
 - `reports`: an append-only log of each report (counters + the raw payload).
 - `jobs`: queued/running/finished actions (`apt_upgrade`, `reboot`,
-  `apt_dry_run`), with a jsonb `params` and a captured `log`. `apt_dry_run`
+  `apt_dry_run` -- a DB CHECK closes the set), with a jsonb `params`, a
+  captured `log`, and a nullable `campaign_id` (set when the campaign engine
+  created the job, NULL otherwise). `apt_dry_run`
   is a pure-read simulation: the agent runs `apt-get -s dist-upgrade` and
   reports, in `result.dry_run`, what a real `apt_upgrade` would do (packages
   it would upgrade / newly install / remove, the ones apt keeps back, the
@@ -114,6 +116,11 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   operator's, unattended-upgrades', a distro default) is never touched. A
   rule is created or deleted, not edited in place.
 - `schedules`: one maintenance window per host (`weekly` / `monthly`).
+- `campaigns` / `campaign_hosts`: a staged rollout of `apt_upgrade` jobs over
+  a fixed host set, and one row per host with its frozen `stage_index`, its
+  engine `state` (`pending` -> `running` -> `done` / `skipped`, or `orphaned`
+  when a stop / cancel left its job in flight) and the `job_id` once created.
+  See "Campaigns" below.
 - `advisories` / `advisory_packages`: Debian DSA/DLA advisories (id, CVE ids,
   URL) and the per-release source-package fixed versions the read API joins
   pending security updates against. Refreshed by the scheduler.
@@ -178,6 +185,71 @@ The operator-facing guide, [docs/webhooks.md](webhooks.md), has the per-event
 payload catalogue, a copy-pasteable signature-verification receiver, and how to
 relay to Discord / Slack / Teams (which need their own message shape, not this
 generic body).
+
+## Campaigns
+
+A campaign is a staged, rate-limited rollout of `apt_upgrade` jobs across a
+fixed set of hosts: "upgrade these 40, two first, then a quarter, then the
+rest, and stop if things break". It does not add a job type: it orchestrates
+the ordinary `apt_upgrade` jobs the agent already runs (`campaign_id` is a
+`jobs` column the agent never sees).
+
+**Targeting is resolved once, at creation.** The request carries either an
+explicit `host_ids` list or a `tag` filter (matched exactly like
+`GET /hosts?tag=`); the matched hosts are ordered by hostname, sliced into
+`campaign_hosts` rows by the `stages` list, and never re-resolved. A host that
+gains or loses the tag afterwards does not enter or leave a running campaign.
+`stages` is an ordered list of wave sizes: an integer (absolute host count),
+`"N%"` (1-100, percent of the resolved total, floored), or `"rest"` (all
+remaining, last entry only); the sizes must cover every targeted host.
+
+**Draft, then activate.** `POST /api/v1/admin/campaigns` creates the campaign
+in `draft` and writes all its `campaign_hosts` rows but does nothing else. A
+separate `POST .../activate` moves it to `running`; only then does the engine
+touch it. This is deliberate: one create call can target the whole fleet,
+unlike a job, so there is an explicit review step before anything runs.
+`pause` / `resume` / `cancel` are the other manual controls; the state set
+(`draft`, `running`, `paused`, `completed`, `stopped`, `cancelled`) has a DB
+CHECK.
+
+**The engine** is `advance_campaigns()` on the scheduler tick (not a new
+process), one locked transaction per running campaign so one bad campaign is
+isolated and a mid-pass crash loses no committed work. Each pass, for one
+campaign:
+
+- **reconcile** finished jobs into `campaign_hosts.state`: `succeeded` ->
+  `done`; `failed` -> a *disposition* from a code table
+  (`app/campaigns/engine.py` `CAMPAIGN_DISPOSITIONS`, not the schema, so it
+  changes without a migration): `apt_locked` / `dpkg_error` / `disk_full` /
+  `timeout` / `agent_lost` / `agent_refused` -> `skip` (drop the host, count
+  it toward `max_failures`); `network_or_repo` / `unknown` / anything
+  unmapped -> `halt` (stop the whole campaign now);
+- **stop** the campaign (`status = 'stopped'`, `halt_reason` recorded) on a
+  halt, or once the skip count passes `max_failures`; a one-shot
+  `finalize_campaign_hosts` then terminal-izes any still-in-flight host
+  (`done` / `skipped` from its real job outcome, else `orphaned` -- the job
+  keeps running on the agent, the campaign just stops folding it in);
+- **fill** the active stage's not-yet-started hosts with new jobs, up to a
+  global `max_concurrency` (counted over the campaign's `pending` + `running`
+  jobs), via the same `create_job_for_host` the admin route and the schedule
+  runner use, so `excluded_packages` / `known_held_packages` are injected
+  identically. A host that already has an active job is left for the next
+  tick, not failed;
+- **gate** stage advance: a stage that is fully terminal still holds the
+  engine until an observation window (`observation_window_seconds`, default
+  `CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS` = 600) has elapsed since its
+  last job finished, with no halt and `max_failures` not passed. When there
+  is no next stage, the campaign is `completed`.
+
+The current stage index and per-stage / per-host counts are recomputed from
+`campaign_hosts` at read time, not stored. The engine emits three webhook
+events through the same outbox as everything else: `campaign.stage_completed`
+(each wave as its last host finishes), `campaign.completed`, and
+`campaign.stopped` (with the halt reason, and the failure category and host
+when a disposition fired). The retention sweep keeps a terminal job while its
+campaign is still `draft` / `running` / `paused`.
+
+The operator-facing guide is [docs/campaigns.md](campaigns.md).
 
 ## Deployment notes
 

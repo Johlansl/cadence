@@ -70,9 +70,12 @@ rather than something to defer until someone asks.
   what apt itself kept back because of a hold already on the box (correlated
   the same way `held_conflicts` is on a real upgrade). So the operator sees
   both what is blocked now and what the next real run will block.
-- **`jobs.job_type` stays free `TEXT`** (no DB CHECK); the API `Literal` is the
-  only closed set. A CHECK waits until campaigns introduce more job types, so
-  it is added once rather than widened repeatedly.
+- **`jobs.job_type` has a DB CHECK** (`apt_upgrade`, `reboot`, `apt_dry_run`),
+  added by migration `0016` alongside the campaigns tables. It was deliberately
+  left free `TEXT` from `0001` until then, on the assumption campaigns would
+  add a job type; they did not (a campaign orchestrates ordinary `apt_upgrade`
+  jobs), so the CHECK simply closed on the three existing values. Widening it
+  later for a genuinely new type is a drop + recreate, like `jobs.status`.
 
 ## Authentication
 
@@ -376,6 +379,49 @@ itself mid-job, or apply an upgrade on Cadence's own say-so and take the
 scheduler / API down with it. Cadence still reports its pending updates so they
 are visible, the operator acts on them manually.
 
+## Campaigns
+
+Roadmap item 5. The full mechanism is in
+[architecture.md](architecture.md#campaigns); the decisions behind its shape:
+
+- **No new job type.** A campaign orchestrates ordinary `apt_upgrade` jobs.
+  Adding a `campaign_upgrade` type would fork the agent's execution path for
+  no benefit; the campaign lives entirely server-side, and `jobs.campaign_id`
+  (nullable) is all the linkage needed.
+- **The engine is a function on the existing scheduler tick, not a new
+  process.** It follows the pattern already established by `tick`,
+  `dispatch_pending_deliveries` and the reaper: `FOR UPDATE SKIP LOCKED`, a
+  session per unit of work, crash-isolation around the loop. A separate
+  daemon would be one more thing to supervise on a 2 GB box for no gain.
+- **Targeting is frozen at creation, never re-evaluated.** Predictability wins
+  over "live" tag membership, and it keeps campaigns independent of the
+  not-yet-built tag-as-policy work (roadmap item 6). A tag filter is just a
+  convenient way to *pick* the host set once.
+- **Draft then explicit activate.** One create call can touch the whole fleet.
+  A mandatory review step (`draft` -> `activate`) before any job is created is
+  worth the extra call; a single-host job has no such blast radius and needs
+  no equivalent.
+- **The category -> disposition table is Python, not a column.** `skip` vs
+  `halt` per `failure_category` is policy that will be tuned; keeping it in
+  `app/campaigns/engine.py` means tuning it is a code change, not a migration.
+  An unmapped or missing category is treated as `halt` (fail safe: stop and
+  let the operator look).
+- **`max_concurrency` counts `pending` + `running` campaign jobs, not just
+  `running`.** Counting only `running` would let the engine create a job for
+  every host in a stage on the first tick (none are running yet), defeating
+  the cap.
+- **A fully terminal stage still waits an observation window before the next
+  one starts** (or before the campaign completes). The point of staging is to
+  catch a bad upgrade on the canary before it hits everyone; advancing the
+  instant the last job returns would skip that pause. Default 600 s, per
+  campaign overridable, `0` allowed.
+- **`orphaned` is a real terminal state.** When a halt or cancel lands while a
+  sibling host's job is still in flight, that job keeps running on the agent
+  and its result is still stored in `jobs`; the campaign marks the host
+  `orphaned` and stops folding its outcome into the campaign counts, rather
+  than pretending the job is done or leaving the row stuck at `running`
+  forever.
+
 ## V1 scope
 
 Deliberately **out of the initial version** (the data model stays extensible
@@ -389,4 +435,10 @@ for them, but there is no code):
 **Since added:** automatic scheduling / maintenance windows (the `schedules`
 table + the `scheduler` service); package exclusion / hold lists (roadmap
 item 3: global and per-host glob patterns resolved server-side, reconciled
-into dpkg's hold state by the agent every `apt_upgrade` run).
+into dpkg's hold state by the agent every `apt_upgrade` run); outbound
+webhooks (roadmap item 1: one generic signed JSON feed, no per-platform
+formatting); campaigns (roadmap item 5: a staged, concurrency-capped,
+stop-on-failure rollout of `apt_upgrade` jobs, driven by the scheduler; see
+"Campaigns" below and [architecture.md](architecture.md#campaigns)). The
+`apt_upgrade` rollout-batching line above is now largely covered by campaigns;
+reboot sequencing still is not.
