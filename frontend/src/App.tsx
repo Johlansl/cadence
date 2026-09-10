@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from './api/client'
 import { BulkActionBar } from './components/BulkActionBar'
+import { CampaignsView } from './components/CampaignsView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ExclusionsView } from './components/ExclusionsView'
 import { FleetOverview } from './components/FleetOverview'
@@ -17,8 +18,8 @@ import type { HostDetail as HostDetailData, HostSummary } from './types'
 const POLL_MS = 30_000
 
 // The current view is mirrored in the URL hash (#host=<id>, #packages,
-// #webhooks, #exclusions) so a reload keeps the view and the link is
-// shareable.
+// #webhooks, #exclusions, #campaigns) so a reload keeps the view and the link
+// is shareable.
 function readHashHostId(): string | null {
   const m = /(?:^|[#&])host=([^&]+)/.exec(window.location.hash)
   return m ? decodeURIComponent(m[1]) : null
@@ -32,6 +33,9 @@ function readHashIsWebhooks(): boolean {
 function readHashIsExclusions(): boolean {
   return window.location.hash === '#exclusions'
 }
+function readHashIsCampaigns(): boolean {
+  return window.location.hash === '#campaigns'
+}
 function writeHash(next: string): void {
   if (window.location.hash === next) return
   const url = next || window.location.pathname + window.location.search
@@ -44,6 +48,7 @@ export default function App() {
   const [showPackages, setShowPackages] = useState<boolean>(readHashIsPackages)
   const [showWebhooks, setShowWebhooks] = useState<boolean>(readHashIsWebhooks)
   const [showExclusions, setShowExclusions] = useState<boolean>(readHashIsExclusions)
+  const [showCampaigns, setShowCampaigns] = useState<boolean>(readHashIsCampaigns)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   // Two independent failures: the host-list poll drives the global sync
   // indicator; a host-detail poll failure is shown in the detail pane only,
@@ -118,6 +123,7 @@ export default function App() {
     setShowPackages(false)
     setShowWebhooks(false)
     setShowExclusions(false)
+    setShowCampaigns(false)
     writeHash(id ? `#host=${encodeURIComponent(id)}` : '')
   }, [])
 
@@ -126,6 +132,7 @@ export default function App() {
     setShowPackages(true)
     setShowWebhooks(false)
     setShowExclusions(false)
+    setShowCampaigns(false)
     writeHash('#packages')
   }, [])
 
@@ -134,6 +141,7 @@ export default function App() {
     setShowPackages(false)
     setShowWebhooks(true)
     setShowExclusions(false)
+    setShowCampaigns(false)
     writeHash('#webhooks')
   }, [])
 
@@ -142,7 +150,17 @@ export default function App() {
     setShowPackages(false)
     setShowWebhooks(false)
     setShowExclusions(true)
+    setShowCampaigns(false)
     writeHash('#exclusions')
+  }, [])
+
+  const selectCampaigns = useCallback(() => {
+    setSelectedId(null)
+    setShowPackages(false)
+    setShowWebhooks(false)
+    setShowExclusions(false)
+    setShowCampaigns(true)
+    writeHash('#campaigns')
   }, [])
 
   // Called after a host mutation from the detail pane.
@@ -162,6 +180,7 @@ export default function App() {
       setShowPackages(readHashIsPackages())
       setShowWebhooks(readHashIsWebhooks())
       setShowExclusions(readHashIsExclusions())
+      setShowCampaigns(readHashIsCampaigns())
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
@@ -205,6 +224,15 @@ export default function App() {
             }`}
           >
             Exclusions
+          </button>
+          <button
+            type="button"
+            onClick={selectCampaigns}
+            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+              showCampaigns ? 'text-zinc-200' : 'text-zinc-500'
+            }`}
+          >
+            Campaigns
           </button>
           <OverviewChips hosts={hosts} />
         </div>
@@ -255,7 +283,9 @@ export default function App() {
           </nav>
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {showWebhooks ? (
+          {showCampaigns ? (
+            <CampaignsView />
+          ) : showWebhooks ? (
             <WebhooksView />
           ) : showExclusions ? (
             <ExclusionsView />
