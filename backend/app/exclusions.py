@@ -18,16 +18,41 @@ from collections.abc import Iterable
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.models import HostPackage, Job, Package, PackageExclusion
+from app.models.models import Host, HostPackage, Job, Package, PackageExclusion
+from app.tag_filter import tag_matches
 
 
-def patterns_for_host(db: Session, host_id: uuid.UUID) -> list[str]:
-    """Global + this host's own exclusion patterns. Additive: no re-inclusion,
-    no override (decision 3) -- a host simply sees the union."""
-    stmt = select(PackageExclusion.pattern).where(
-        or_(PackageExclusion.scope == "global", PackageExclusion.host_id == host_id)
+def patterns_for_host(
+    db: Session, host_id: uuid.UUID, *, host_tags: dict | None = None
+) -> list[str]:
+    """Every exclusion pattern that applies to this host: the global rules, its
+    own host rules, and every tag rule whose tag it carries. Additive across
+    the three scopes -- no re-inclusion, no priority (decision 3), a host
+    simply sees the union. Pass `host_tags` when the caller already holds the
+    Host row, to skip the lookup."""
+    if host_tags is None:
+        host_tags = (
+            db.execute(select(Host.tags).where(Host.id == host_id)).scalar_one_or_none()
+            or {}
+        )
+    global_and_host = list(
+        db.execute(
+            select(PackageExclusion.pattern).where(
+                or_(
+                    PackageExclusion.scope == "global",
+                    PackageExclusion.host_id == host_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
     )
-    return list(db.execute(stmt).scalars().all())
+    tag_rules = db.execute(
+        select(PackageExclusion.tag, PackageExclusion.pattern).where(
+            PackageExclusion.scope == "tag"
+        )
+    ).all()
+    return global_and_host + [p for (t, p) in tag_rules if tag_matches(t, host_tags)]
 
 
 def matching(names: Iterable[str], patterns: list[str]) -> list[str]:

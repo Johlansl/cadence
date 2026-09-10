@@ -22,6 +22,13 @@ def _exclusion(client, **over):
     return r.json()
 
 
+def _set_tags(client, host_id, tags):
+    r = client.patch(
+        f"/api/v1/admin/hosts/{host_id}", headers=ADMIN_HEADERS, json={"tags": tags}
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_get_host_excluded_count_and_per_package_flag(client):
     host_id, token = create_host(client)
     _report(
@@ -84,3 +91,34 @@ def test_list_hosts_excluded_count(client):
     assert r.status_code == 200
     counts = {row["hostname"]: row["excluded_count"] for row in r.json()}
     assert counts == {"a": 1, "b": 0}
+
+
+def test_list_hosts_excluded_count_tag_scope(client):
+    # Only a tag rule exists: the GET /hosts short-circuit must still run it,
+    # and it must match GET /hosts/{id}.
+    host_a, token_a = create_host(client, hostname="a")
+    host_b, token_b = create_host(client, hostname="b")
+    _set_tags(client, host_a, {"role": "web"})
+    _set_tags(client, host_b, {"role": "db"})
+    _report(client, token_a, [pkg("nginx", candidate="1.27")], hostname="a")
+    _report(client, token_b, [pkg("nginx", candidate="1.27")], hostname="b")
+    _exclusion(client, scope="tag", tag="role=web", pattern="nginx")
+
+    counts = {row["hostname"]: row["excluded_count"] for row in client.get("/api/v1/hosts").json()}
+    assert counts == {"a": 1, "b": 0}
+    assert client.get(f"/api/v1/hosts/{host_a}").json()["excluded_count"] == 1
+    assert client.get(f"/api/v1/hosts/{host_b}").json()["excluded_count"] == 0
+
+
+def test_get_host_excluded_flag_tag_scope(client):
+    host_id, token = create_host(client)
+    _set_tags(client, host_id, {"role": "web"})
+    _report(client, token, [pkg("nginx", candidate="1.27"), pkg("curl", candidate="8.1")])
+    _exclusion(client, scope="tag", tag="role=web", pattern="nginx")
+
+    body = client.get(f"/api/v1/hosts/{host_id}").json()
+    assert body["excluded_count"] == 1
+    assert {p["name"]: p["excluded"] for p in body["packages"]} == {
+        "nginx": True,
+        "curl": False,
+    }

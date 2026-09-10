@@ -38,6 +38,13 @@ def _exclusion(client, **over):
     return r.json()
 
 
+def _set_tags(client, host_id, tags):
+    r = client.patch(
+        f"/api/v1/admin/hosts/{host_id}", headers=ADMIN_HEADERS, json={"tags": tags}
+    )
+    assert r.status_code == 200, r.text
+
+
 def _create_job(client, host_id, **over):
     body = {}
     body.update(over)
@@ -92,6 +99,74 @@ def test_global_and_host_scopes_are_additive(client):
 
     job = _create_job(client, host_id).json()
     assert job["params"]["excluded_packages"] == ["docker-ce", "postgresql-14"]
+
+
+def test_tag_scope_is_additive_with_global_and_host(client):
+    host_id, token = create_host(client)
+    _set_tags(client, host_id, {"role": "web"})
+    _report(
+        client, token,
+        [pkg("docker-ce"), pkg("postgresql-14"), pkg("nginx"), pkg("curl")],
+    )
+    _exclusion(client, scope="global", pattern="docker-ce")
+    _exclusion(client, scope="host", host_id=host_id, pattern="postgresql-14")
+    _exclusion(client, scope="tag", tag="role=web", pattern="nginx")
+
+    job = _create_job(client, host_id).json()
+    assert job["params"]["excluded_packages"] == ["docker-ce", "nginx", "postgresql-14"]
+
+
+def test_tag_scope_does_not_leak_to_a_host_without_the_tag(client):
+    web_id, web_token = create_host(client, hostname="web")
+    db_id, db_token = create_host(client, hostname="db")
+    _set_tags(client, web_id, {"role": "web"})
+    _set_tags(client, db_id, {"role": "db"})
+    _report(client, web_token, [pkg("nginx")])
+    _report(client, db_token, [pkg("nginx")])
+    _exclusion(client, scope="tag", tag="role=web", pattern="nginx")
+
+    assert _create_job(client, web_id).json()["params"]["excluded_packages"] == ["nginx"]
+    assert _create_job(client, db_id).json()["params"]["excluded_packages"] == []
+
+
+def test_tag_scope_key_only_match(client):
+    host_id, token = create_host(client)
+    _set_tags(client, host_id, {"role": "web"})
+    _report(client, token, [pkg("nginx")])
+    _exclusion(client, scope="tag", tag="role", pattern="nginx")
+
+    assert _create_job(client, host_id).json()["params"]["excluded_packages"] == ["nginx"]
+
+
+def test_tag_scope_reaches_a_scheduler_created_job(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.models import Schedule
+    from app.scheduler import tick
+
+    host_id, token = create_host(client)
+    _set_tags(client, host_id, {"role": "web"})
+    _report(client, token, [pkg("nginx")])
+    _exclusion(client, scope="tag", tag="role=web", pattern="nginx")
+
+    db_session.add(
+        Schedule(
+            host_id=host_id,
+            enabled=True,
+            kind="weekly",
+            weekday=0,
+            hour=3,
+            minute=0,
+            timezone="UTC",
+            params={},
+            next_run_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+    )
+    db_session.commit()
+    assert tick(db=db_session) == 1
+
+    jobs = client.get(f"/api/v1/hosts/{host_id}/jobs").json()
+    assert jobs[0]["params"]["excluded_packages"] == ["nginx"]
 
 
 def test_only_applies_to_apt_upgrade(client):

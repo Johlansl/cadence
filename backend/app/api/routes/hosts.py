@@ -22,7 +22,7 @@ from app.core.staleness import LATE_AFTER
 from app.exclusions import matching, patterns_for_host
 from app.models.models import Host, HostPackage, Package, PackageExclusion
 from app.schemas.schemas import HostDetail, HostPackageOut, HostStatus, HostSummary
-from app.tag_filter import tag_filter_clause
+from app.tag_filter import tag_filter_clause, tag_matches
 
 router = APIRouter(prefix="/api/v1", tags=["hosts"])
 
@@ -58,8 +58,21 @@ def _excluded_counts(db: Session, host_ids: list[uuid.UUID]) -> dict[uuid.UUID, 
         )
     ).all():
         host_patterns.setdefault(hid, []).append(pattern)
-    if not global_patterns and not host_patterns:
+    tag_rules = db.execute(
+        select(PackageExclusion.tag, PackageExclusion.pattern).where(
+            PackageExclusion.scope == "tag"
+        )
+    ).all()
+    if not global_patterns and not host_patterns and not tag_rules:
         return {}
+
+    host_tags: dict[uuid.UUID, dict] = dict(
+        db.execute(select(Host.id, Host.tags).where(Host.id.in_(host_ids))).all()
+    )
+
+    def _patterns_for(hid: uuid.UUID) -> list[str]:
+        tagged = [p for (t, p) in tag_rules if tag_matches(t, host_tags.get(hid) or {})]
+        return global_patterns + host_patterns.get(hid, []) + tagged
 
     names_by_host: dict[uuid.UUID, list[str]] = {}
     for hid, name in db.execute(
@@ -73,7 +86,7 @@ def _excluded_counts(db: Session, host_ids: list[uuid.UUID]) -> dict[uuid.UUID, 
         names_by_host.setdefault(hid, []).append(name)
 
     return {
-        hid: len(matching(names, global_patterns + host_patterns.get(hid, [])))
+        hid: len(matching(names, _patterns_for(hid)))
         for hid, names in names_by_host.items()
     }
 
@@ -208,7 +221,12 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
     # shown per row regardless of a pending update -- a hold is meaningful
     # even before a candidate exists); excluded_count only tallies pending
     # ones, matching "N of the M available updates are excluded".
-    excluded_names = set(matching((r.name for r in pkg_rows), patterns_for_host(db, host.id)))
+    excluded_names = set(
+        matching(
+            (r.name for r in pkg_rows),
+            patterns_for_host(db, host.id, host_tags=host.tags or {}),
+        )
+    )
     excluded_count = sum(
         1 for r in pkg_rows if r.candidate_version is not None and r.name in excluded_names
     )
