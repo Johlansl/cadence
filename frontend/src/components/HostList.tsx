@@ -1,5 +1,6 @@
 import type { HostSummary } from '../types'
 import { Freshness } from './Freshness'
+import { HealthBadge } from './HealthBadge'
 import { StatusBadge } from './StatusBadge'
 import { TagChips } from './TagChips'
 
@@ -56,7 +57,10 @@ export function HostList({
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate font-mono text-sm text-zinc-100">{h.hostname}</span>
-                <StatusBadge status={h.status} />
+                <span className="flex shrink-0 items-center gap-1">
+                  <HealthBadge status={h.health_status} />
+                  <StatusBadge status={h.status} />
+                </span>
               </div>
 
               <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">

@@ -102,6 +102,94 @@ describe('Jobs', () => {
     expect(screen.queryByText('hold conflict')).not.toBeInTheDocument()
   })
 
+  it('keeps action success distinct from unhealthy post-checks', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            status: 'succeeded',
+            result: {
+              exit_code: 0,
+              health_status: 'unhealthy',
+              pre_checks: {
+                status: 'passed',
+                checks: [
+                  {
+                    name: 'disk_space',
+                    status: 'passed',
+                    summary: 'Enough disk space is available.',
+                    details: {
+                      filesystems: [
+                        {
+                          paths: ['/'],
+                          available_bytes: 2147483648,
+                          minimum_available_bytes: 1073741824,
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+              post_checks: {
+                status: 'failed',
+                checks: [
+                  {
+                    name: 'failed_services',
+                    status: 'failed',
+                    summary: 'A service failed after the upgrade.',
+                    details: { new_services: ['nginx.service'] },
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText('succeeded')).toBeInTheDocument()
+    expect(screen.getByText('health: unhealthy')).toBeInTheDocument()
+    expect(screen.getByText('Before upgrade')).toBeInTheDocument()
+    expect(screen.getByText('After upgrade')).toBeInTheDocument()
+    expect(screen.getByText('newly failed: nginx.service')).toBeInTheDocument()
+    expect(screen.getByText('/: 2.0 GiB available, 1.0 GiB required')).toBeInTheDocument()
+  })
+
+  it('explains when blocking pre-checks prevent post-checks', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            status: 'failed',
+            failure_category: 'apt_locked',
+            result: {
+              exit_code: -1,
+              health_status: 'unknown',
+              pre_checks: {
+                status: 'failed',
+                checks: [
+                  {
+                    name: 'package_manager_locks',
+                    status: 'failed',
+                    summary: 'A package manager lock is held.',
+                    details: { locks: [{ path: '/var/lib/dpkg/lock', pid: 42 }] },
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(
+      await screen.findByText('Not run because a pre-check blocked the upgrade.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('/var/lib/dpkg/lock (PID 42)')).toBeInTheDocument()
+  })
+
   it('queues an apt_dry_run job from the dry run button', async () => {
     sessionStorage.setItem('cadence.adminKey', 'sekret')
     const fetchMock = installFetchMock({

@@ -5,6 +5,8 @@ import type { Job, JobStatus, RebootPolicy } from '../types'
 import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { DryRunResult } from './DryRunResult'
+import { HealthBadge } from './HealthBadge'
+import { HealthChecks } from './HealthChecks'
 import { RelativeTime } from './RelativeTime'
 import { useToast } from './Toast'
 
@@ -262,6 +264,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                   >
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-zinc-400">
                       <JobBadge status={j.status} />
+                      {j.result?.health_status && (
+                        <HealthBadge status={j.result.health_status} includeLabel />
+                      )}
                       {j.status === 'failed' && j.failure_category && (
                         <FailureBadge category={j.failure_category} summary={j.failure_summary} />
                       )}
@@ -297,6 +302,9 @@ export function Jobs({ hostId }: { hostId: string }) {
                     )}
                     {j.job_type === 'apt_dry_run' && j.result?.dry_run && (
                       <DryRunResult data={j.result.dry_run} />
+                    )}
+                    {j.result?.pre_checks && (
+                      <HealthChecks pre={j.result.pre_checks} post={j.result.post_checks} />
                     )}
                     {j.log && (
                       <details className="mt-1">

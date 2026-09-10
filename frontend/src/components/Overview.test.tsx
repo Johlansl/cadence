@@ -26,6 +26,8 @@ function host(over: Partial<HostSummary> = {}): HostSummary {
     updates_available_count: 0,
     security_updates_count: 0,
     excluded_count: 0,
+    health_status: 'unknown',
+    health_checked_at: null,
     ...over,
   }
 }
@@ -45,6 +47,18 @@ describe('summarize', () => {
     expect(c.security).toBe(1)
     expect(c.updates).toBe(1)
     expect(c.silent).toBe(1)
+  })
+
+  it('counts current health for active hosts only', () => {
+    const c = summarize([
+      host({ health_status: 'unhealthy' }),
+      host({ health_status: 'degraded' }),
+      host({ health_status: 'unknown' }),
+      host({ is_active: false, health_status: 'unhealthy' }),
+    ])
+    expect(c.unhealthy).toBe(1)
+    expect(c.degraded).toBe(1)
+    expect(c.unknownHealth).toBe(1)
   })
 })
 

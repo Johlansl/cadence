@@ -1,5 +1,7 @@
 export type HostStatus = 'up_to_date' | 'updates_available' | 'security_updates_available'
 
+export type HostHealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+
 export type RebootPolicy = 'auto' | 'never' | 'prompt'
 
 export interface HostSummary {
@@ -23,6 +25,8 @@ export interface HostSummary {
   updates_available_count: number
   security_updates_count: number
   excluded_count: number
+  health_status: HostHealthStatus
+  health_checked_at: string | null
 }
 
 export interface FleetSummary {
@@ -210,6 +214,52 @@ export interface DryRunResult {
   held_in_place: string[]
 }
 
+export type HealthCheckName =
+  | 'disk_space'
+  | 'package_manager_locks'
+  | 'dpkg_audit'
+  | 'apt_dependencies'
+  | 'package_indexes'
+  | 'failed_services'
+  | 'reboot_required'
+
+export type HealthCheckStatus = 'passed' | 'warning' | 'failed' | 'unknown' | 'skipped'
+export type HealthPhaseStatus = Exclude<HealthCheckStatus, 'skipped'>
+
+export interface HealthCheckFilesystem {
+  paths: string[]
+  available_bytes: number
+  minimum_available_bytes: number
+}
+
+export interface HealthCheckLock {
+  path: string
+  pid?: number | null
+}
+
+export interface HealthCheckDetails {
+  filesystems?: HealthCheckFilesystem[]
+  locks?: HealthCheckLock[]
+  problems?: string[]
+  services?: string[]
+  new_services?: string[]
+  existing_services?: string[]
+  strict_mode?: boolean | null
+  required?: boolean | null
+}
+
+export interface HealthCheck {
+  name: HealthCheckName
+  status: HealthCheckStatus
+  summary: string
+  details: HealthCheckDetails
+}
+
+export interface HealthCheckPhase {
+  status: HealthPhaseStatus
+  checks: HealthCheck[]
+}
+
 export interface Job {
   id: string
   host_id: string
@@ -221,7 +271,11 @@ export interface Job {
     exit_code?: number | null
     reboot_required?: boolean | null
     held_conflicts?: string[] | null
+    held_packages?: string[] | null
     dry_run?: DryRunResult | null
+    pre_checks?: HealthCheckPhase | null
+    post_checks?: HealthCheckPhase | null
+    health_status?: HostHealthStatus | null
   } | null
   log: string | null
   failure_category: string | null

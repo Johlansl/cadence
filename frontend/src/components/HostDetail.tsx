@@ -5,9 +5,11 @@ import type { HostDetail as HostDetailData, RebootPolicy } from '../types'
 import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { Freshness } from './Freshness'
+import { HealthBadge } from './HealthBadge'
 import { HostHistory } from './HostHistory'
 import { Jobs } from './Jobs'
 import { PackageTable } from './PackageTable'
+import { RelativeTime } from './RelativeTime'
 import { Schedule } from './Schedule'
 import { StatusBadge } from './StatusBadge'
 import { TagChips } from './TagChips'
@@ -342,6 +344,7 @@ export function HostDetail({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="font-mono text-lg text-zinc-100">{host.hostname}</h2>
+            <HealthBadge status={host.health_status} includeLabel />
             <StatusBadge status={host.status} />
             {!host.is_active && (
               <span className="rounded bg-zinc-700/40 px-1.5 py-0.5 text-xs font-medium text-zinc-400 ring-1 ring-zinc-600">
@@ -376,6 +379,15 @@ export function HostDetail({
           <Meta label="FQDN">{host.fqdn ?? '-'}</Meta>
           <Meta label="Last report">
             <Freshness iso={host.last_seen_at} />
+          </Meta>
+          <Meta label="Health checked">
+            {host.health_checked_at ? (
+              <span title={host.health_checked_at}>
+                <RelativeTime iso={host.health_checked_at} />
+              </span>
+            ) : (
+              'never'
+            )}
           </Meta>
           <RebootPolicyControl hostId={host.id} value={host.reboot_policy} />
           <Meta label="Updates">

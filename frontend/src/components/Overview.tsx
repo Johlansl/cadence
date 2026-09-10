@@ -7,6 +7,9 @@ interface Counts {
   upToDate: number
   updates: number
   security: number
+  unhealthy: number
+  degraded: number
+  unknownHealth: number
   reboot: number
   silent: number // no report in > 15 min (staleness 'stale')
   late: number // 5-15 min
@@ -20,6 +23,9 @@ export function summarize(hosts: HostSummary[]): Counts {
     upToDate: 0,
     updates: 0,
     security: 0,
+    unhealthy: 0,
+    degraded: 0,
+    unknownHealth: 0,
     reboot: 0,
     silent: 0,
     late: 0,
@@ -29,6 +35,9 @@ export function summarize(hosts: HostSummary[]): Counts {
     else if (h.status === 'updates_available') c.updates++
     else c.upToDate++
     if (h.reboot_required) c.reboot++
+    if (h.health_status === 'unhealthy') c.unhealthy++
+    else if (h.health_status === 'degraded') c.degraded++
+    else if (h.health_status === 'unknown') c.unknownHealth++
     const s = staleness(h.last_seen_at)
     if (s === 'stale') c.silent++
     else if (s === 'late') c.late++
@@ -45,6 +54,9 @@ export function OverviewChips({ hosts }: { hosts: HostSummary[] }) {
         {c.total} host{c.total === 1 ? '' : 's'}
       </span>
       {c.security > 0 && <span className="text-red-400">{c.security} security</span>}
+      {c.unhealthy > 0 && <span className="text-red-400">{c.unhealthy} unhealthy</span>}
+      {c.degraded > 0 && <span className="text-amber-400">{c.degraded} degraded</span>}
+      {c.unknownHealth > 0 && <span>{c.unknownHealth} health unknown</span>}
       {c.updates > 0 && <span className="text-amber-400">{c.updates} updates</span>}
       {c.upToDate > 0 && <span className="text-emerald-500">{c.upToDate} up to date</span>}
       {c.reboot > 0 && <span className="text-orange-400">{c.reboot} reboot</span>}

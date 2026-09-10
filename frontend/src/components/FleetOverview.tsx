@@ -5,6 +5,7 @@ import { relativeTime, staleness } from '../lib/time'
 import { useNow } from '../lib/useNow'
 import type { FleetSummary, HostSummary } from '../types'
 import { Freshness } from './Freshness'
+import { HealthBadge } from './HealthBadge'
 import { StatusBadge } from './StatusBadge'
 
 function Tile({
@@ -29,12 +30,15 @@ function Tile({
   )
 }
 
-// Highest concern first: security > reboot pending > plain updates > overdue.
+// Host health leads package state because it can halt a rollout.
 function attentionRank(h: HostSummary): number {
-  if (h.status === 'security_updates_available') return 0
-  if (h.reboot_required) return 1
-  if (h.status === 'updates_available') return 2
-  if (staleness(h.last_seen_at) !== 'fresh') return 3
+  if (h.health_status === 'unhealthy') return 0
+  if (h.status === 'security_updates_available') return 1
+  if (h.health_status === 'degraded') return 2
+  if (h.reboot_required) return 3
+  if (h.status === 'updates_available') return 4
+  if (h.health_status === 'unknown') return 5
+  if (staleness(h.last_seen_at) !== 'fresh') return 6
   return 99
 }
 
@@ -68,12 +72,16 @@ export function FleetOverview({
     .sort((a, b) => attentionRank(a) - attentionRank(b) || a.hostname.localeCompare(b.hostname))
 
   const s = summary
+  const activeHosts = hosts.filter((h) => h.is_active)
+  const unhealthy = activeHosts.filter((h) => h.health_status === 'unhealthy').length
+  const degraded = activeHosts.filter((h) => h.health_status === 'degraded').length
+  const unknown = activeHosts.filter((h) => h.health_status === 'unknown').length
 
   return (
     <div className="space-y-4 overflow-auto p-6">
       <h2 className="text-sm uppercase tracking-widest text-zinc-400">Fleet overview</h2>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
         <Tile
           label="Hosts"
           value={s ? s.active_hosts : hosts.filter((h) => h.is_active).length}
@@ -86,6 +94,12 @@ export function FleetOverview({
             s ? `${s.security_updates} package${s.security_updates === 1 ? '' : 's'}` : undefined
           }
           tone={s && s.security_updates_available > 0 ? 'danger' : undefined}
+        />
+        <Tile
+          label="Health"
+          value={unhealthy}
+          sub={`${degraded} degraded, ${unknown} unknown`}
+          tone={unhealthy > 0 ? 'danger' : degraded > 0 || unknown > 0 ? 'warn' : 'ok'}
         />
         <Tile
           label="Needs updates"
@@ -129,6 +143,7 @@ export function FleetOverview({
                 >
                   <span className="truncate font-mono text-zinc-200">{h.hostname}</span>
                   <span className="flex shrink-0 items-center gap-2 text-xs">
+                    <HealthBadge status={h.health_status} />
                     <StatusBadge status={h.status} />
                     {h.reboot_required && <span className={TONE_TEXT.reboot}>reboot</span>}
                     <span className="text-zinc-600">
