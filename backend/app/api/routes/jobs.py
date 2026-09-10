@@ -112,6 +112,14 @@ def submit_job_result(
             http_status.HTTP_409_CONFLICT,
             f"job is not running (status={job.status})",
         )
+    if job.job_type != "apt_upgrade" and any(
+        value is not None
+        for value in (payload.pre_checks, payload.post_checks, payload.health_status)
+    ):
+        raise HTTPException(
+            http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "health checks only apply to apt_upgrade jobs",
+        )
 
     job.status = payload.status
     job.log = payload.log
@@ -135,6 +143,16 @@ def submit_job_result(
     # a None is distinguishable from a dry-run that produced an empty preview.
     if payload.dry_run is not None:
         result["dry_run"] = payload.dry_run.model_dump()
+    if payload.pre_checks is not None:
+        result["pre_checks"] = payload.pre_checks.model_dump(
+            exclude_none=True, exclude_unset=True
+        )
+    if payload.post_checks is not None:
+        result["post_checks"] = payload.post_checks.model_dump(
+            exclude_none=True, exclude_unset=True
+        )
+    if payload.health_status is not None:
+        result["health_status"] = payload.health_status
     job.result = result
     # Failure classification (roadmap item 2). Only meaningful for a failed job;
     # ignore whatever the agent sent on success. The agent already caps the

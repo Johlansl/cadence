@@ -16,6 +16,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.exclusions import known_held_for_host, resolve_for_job
 from app.models.models import Job
 
@@ -38,8 +39,9 @@ def create_job_for_host(
 
     For an `apt_upgrade` or `apt_dry_run` job the server-resolved
     `params.excluded_packages` is injected, and for `apt_upgrade` also
-    `params.known_held_packages`; both always overwrite whatever the caller
-    passed under those keys. The Job is added and flushed (so `job.id` is
+    `params.known_held_packages` and the server's health-check thresholds;
+    all always overwrite whatever the caller passed under those keys. The Job
+    is added and flushed (so `job.id` is
     populated) but not committed, and no audit row is written -- the caller
     owns both. The host is assumed to exist (FK-guaranteed for the scheduler
     and engine callers; the route checks it first).
@@ -57,6 +59,11 @@ def create_job_for_host(
         params["excluded_packages"] = resolve_for_job(db, host_id)
     if job_type == "apt_upgrade":
         params["known_held_packages"] = known_held_for_host(db, host_id)
+        params["health_checks"] = {
+            "minimum_available_bytes": settings.upgrade_minimum_available_bytes,
+            "boot_minimum_available_bytes": settings.upgrade_boot_minimum_available_bytes,
+            "lock_wait_seconds": settings.upgrade_lock_wait_seconds,
+        }
 
     job = Job(
         host_id=host_id,

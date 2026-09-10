@@ -6,7 +6,7 @@ import enum
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -377,6 +377,92 @@ class DryRunResultIn(BaseModel):
     held_in_place: list[str] = Field(default_factory=list)
 
 
+HealthCheckName = Literal[
+    "disk_space",
+    "package_manager_locks",
+    "dpkg_audit",
+    "apt_dependencies",
+    "package_indexes",
+    "failed_services",
+    "reboot_required",
+]
+HealthCheckStatus = Literal["passed", "warning", "failed", "unknown", "skipped"]
+HealthPhaseStatus = Literal["passed", "warning", "failed", "unknown"]
+HostHealthStatus = Literal["healthy", "degraded", "unhealthy", "unknown"]
+EvidenceLine = Annotated[str, Field(max_length=500)]
+ServiceName = Annotated[str, Field(min_length=1, max_length=256)]
+FilesystemPath = Annotated[str, Field(min_length=1, max_length=512)]
+
+
+class FilesystemCheckIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paths: list[FilesystemPath] = Field(min_length=1, max_length=3)
+    available_bytes: int = Field(ge=0)
+    minimum_available_bytes: int = Field(ge=1)
+
+
+class PackageLockCheckIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: FilesystemPath
+    pid: int | None = Field(default=None, ge=0)
+
+
+class HealthCheckDetailsIn(BaseModel):
+    """Bounded evidence emitted by one agent check."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filesystems: list[FilesystemCheckIn] = Field(default_factory=list, max_length=10)
+    locks: list[PackageLockCheckIn] = Field(default_factory=list, max_length=10)
+    problems: list[EvidenceLine] = Field(default_factory=list, max_length=100)
+    services: list[ServiceName] = Field(default_factory=list, max_length=100)
+    new_services: list[ServiceName] = Field(default_factory=list, max_length=100)
+    existing_services: list[ServiceName] = Field(default_factory=list, max_length=100)
+    strict_mode: bool | None = None
+    required: bool | None = None
+
+
+class HealthCheckIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: HealthCheckName
+    status: HealthCheckStatus
+    summary: str = Field(min_length=1, max_length=500)
+    details: HealthCheckDetailsIn = Field(default_factory=HealthCheckDetailsIn)
+
+
+def _aggregate_check_status(checks: list[HealthCheckIn]) -> str:
+    statuses = {check.status for check in checks}
+    if "failed" in statuses:
+        return "failed"
+    if "unknown" in statuses or not statuses.difference({"skipped"}):
+        return "unknown"
+    if "warning" in statuses:
+        return "warning"
+    return "passed"
+
+
+class HealthCheckPhaseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: HealthPhaseStatus
+    checks: list[HealthCheckIn] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def _consistent_status_and_unique_names(self) -> HealthCheckPhaseIn:
+        names = [check.name for check in self.checks]
+        if len(names) != len(set(names)):
+            raise ValueError("health-check names must be unique within a phase")
+        aggregate = _aggregate_check_status(self.checks)
+        if self.status != aggregate:
+            raise ValueError(
+                f"health-check phase status must be {aggregate!r} for its checks"
+            )
+        return self
+
+
 class JobResultIn(BaseModel):
     """Posted by the agent once it has run the job."""
 
@@ -401,6 +487,39 @@ class JobResultIn(BaseModel):
     # (roadmap item 4). None = not a dry-run, or a dry-run that failed before
     # producing a preview. Stored under job.result['dry_run'].
     dry_run: DryRunResultIn | None = None
+    # Sent by agent >= 0.12.0 for apt_upgrade. Action status above remains
+    # independent: apt may succeed while post-check health is unhealthy.
+    pre_checks: HealthCheckPhaseIn | None = None
+    post_checks: HealthCheckPhaseIn | None = None
+    health_status: HostHealthStatus | None = None
+
+    @model_validator(mode="after")
+    def _consistent_health_status(self) -> JobResultIn:
+        if self.post_checks is not None:
+            expected = {
+                "passed": "healthy",
+                "warning": "degraded",
+                "failed": "unhealthy",
+                "unknown": "unknown",
+            }[self.post_checks.status]
+            if self.health_status != expected:
+                raise ValueError(
+                    f"health_status must be {expected!r} for the post-check phase"
+                )
+            if self.pre_checks is None:
+                raise ValueError("pre_checks are required when post_checks are present")
+            if self.pre_checks.status not in ("passed", "warning"):
+                raise ValueError("post_checks require non-blocking pre_checks")
+        elif self.pre_checks is not None:
+            if self.pre_checks.status not in ("failed", "unknown"):
+                raise ValueError("post_checks are required after non-blocking pre_checks")
+            if self.health_status != "unknown":
+                raise ValueError(
+                    "health_status must be 'unknown' when pre-checks block the action"
+                )
+        elif self.pre_checks is None and self.health_status is not None:
+            raise ValueError("health_status requires pre_checks")
+        return self
 
 
 class JobOut(BaseModel):

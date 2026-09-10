@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.config import settings
 from app.job_creation import create_job_for_host
 from app.models.models import (
     Campaign,
@@ -20,6 +21,14 @@ from app.models.models import (
     Package,
     PackageExclusion,
 )
+
+
+def _health_checks() -> dict:
+    return {
+        "minimum_available_bytes": settings.upgrade_minimum_available_bytes,
+        "boot_minimum_available_bytes": settings.upgrade_boot_minimum_available_bytes,
+        "lock_wait_seconds": settings.upgrade_lock_wait_seconds,
+    }
 
 
 def _host(db_session, hostname: str = "vm-jc") -> Host:
@@ -38,7 +47,11 @@ def test_apt_upgrade_injects_both_held_lists_and_flushes_an_id(db_session):
     assert job.id is not None
     assert job.job_type == "apt_upgrade"
     assert job.status == "pending"
-    assert job.params == {"excluded_packages": [], "known_held_packages": []}
+    assert job.params == {
+        "excluded_packages": [],
+        "known_held_packages": [],
+        "health_checks": _health_checks(),
+    }
     assert job.requested_by is None
     assert job.campaign_id is None
 
@@ -60,17 +73,22 @@ def test_reboot_job_gets_neither_held_list(db_session):
     assert job.params == {}
 
 
-def test_caller_params_are_kept_but_excluded_packages_is_overwritten(db_session):
+def test_caller_params_are_kept_but_server_values_are_overwritten(db_session):
     host = _host(db_session)
 
     job = create_job_for_host(
         db_session,
         host_id=host.id,
-        params={"reboot": "auto", "excluded_packages": ["made-up"]},
+        params={
+            "reboot": "auto",
+            "excluded_packages": ["made-up"],
+            "health_checks": {"lock_wait_seconds": 1},
+        },
     )
 
     assert job.params["reboot"] == "auto"
     assert job.params["excluded_packages"] == []  # server-resolved, caller ignored
+    assert job.params["health_checks"] == _health_checks()
 
 
 def test_excluded_packages_reflects_a_matching_exclusion_rule(db_session):

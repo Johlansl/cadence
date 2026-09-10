@@ -55,6 +55,11 @@ def test_tick_queues_a_job_and_advances(client, db_session):
         "reboot": "auto",
         "excluded_packages": [],
         "known_held_packages": [],
+        "health_checks": {
+            "minimum_available_bytes": settings.upgrade_minimum_available_bytes,
+            "boot_minimum_available_bytes": settings.upgrade_boot_minimum_available_bytes,
+            "lock_wait_seconds": settings.upgrade_lock_wait_seconds,
+        },
     }
 
     db_session.refresh(sched)

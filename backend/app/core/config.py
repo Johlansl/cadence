@@ -67,6 +67,14 @@ def _positive_int(var: str, default: int) -> int:
     return value
 
 
+def _bounded_positive_int(var: str, default: int, maximum: int) -> int:
+    """A positive integer with an inclusive upper safety bound."""
+    value = _positive_int(var, default)
+    if value > maximum:
+        raise RuntimeError(f"{var} must be <= {maximum}")
+    return value
+
+
 def _non_negative_int(var: str, default: int) -> int:
     """A non-negative integer env var. 0 has a per-setting meaning (keep
     forever / feature disabled). Read by the scheduler."""
@@ -173,6 +181,20 @@ class Settings:
         # that host. 0 = disabled. Default 2h.
         self.job_running_timeout_seconds: int = _non_negative_int(
             "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS", 7200
+        )
+
+        # Server-pinned thresholds handed to every apt_upgrade agent. Keeping
+        # these values in job.params makes each run reproducible in the audit
+        # trail. Agents retain the same defaults for compatibility with jobs
+        # created by an older backend.
+        self.upgrade_minimum_available_bytes: int = _positive_int(
+            "CADENCE_UPGRADE_MINIMUM_AVAILABLE_BYTES", 1024 * 1024 * 1024
+        )
+        self.upgrade_boot_minimum_available_bytes: int = _positive_int(
+            "CADENCE_UPGRADE_BOOT_MINIMUM_AVAILABLE_BYTES", 200 * 1024 * 1024
+        )
+        self.upgrade_lock_wait_seconds: int = _bounded_positive_int(
+            "CADENCE_UPGRADE_LOCK_WAIT_SECONDS", 120, 3600
         )
 
         # POST /api/v1/reports payload caps. A report body is stored verbatim
