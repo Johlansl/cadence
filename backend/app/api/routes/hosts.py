@@ -103,6 +103,8 @@ def _summary_fields(host: Host) -> dict:
         "package_manager": host.package_manager,
         "agent_version": host.agent_version,
         "reboot_required": host.reboot_required,
+        "health_status": host.health_status,
+        "health_checked_at": host.health_checked_at,
         "reboot_policy": host.reboot_policy,
         "is_active": host.is_active,
         "tags": host.tags or {},

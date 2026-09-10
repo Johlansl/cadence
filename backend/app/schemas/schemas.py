@@ -240,6 +240,9 @@ class HostStatus(str, enum.Enum):
     security_updates_available = "security_updates_available"
 
 
+HostHealthStatus = Literal["healthy", "degraded", "unhealthy", "unknown"]
+
+
 class HostSummary(BaseModel):
     id: uuid.UUID
     hostname: str
@@ -251,6 +254,8 @@ class HostSummary(BaseModel):
     package_manager: str
     agent_version: str | None
     reboot_required: bool
+    health_status: HostHealthStatus
+    health_checked_at: datetime | None
     is_active: bool
     tags: dict[str, str]
     last_seen_at: datetime | None
@@ -388,7 +393,6 @@ HealthCheckName = Literal[
 ]
 HealthCheckStatus = Literal["passed", "warning", "failed", "unknown", "skipped"]
 HealthPhaseStatus = Literal["passed", "warning", "failed", "unknown"]
-HostHealthStatus = Literal["healthy", "degraded", "unhealthy", "unknown"]
 EvidenceLine = Annotated[str, Field(max_length=500)]
 ServiceName = Annotated[str, Field(min_length=1, max_length=256)]
 FilesystemPath = Annotated[str, Field(min_length=1, max_length=512)]

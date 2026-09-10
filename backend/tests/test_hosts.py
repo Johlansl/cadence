@@ -43,3 +43,12 @@ def test_host_detail_lists_packages(client):
 
 def test_hosts_list_empty(client):
     assert client.get("/api/v1/hosts").json() == []
+
+
+def test_new_host_health_is_unknown_until_checked(client):
+    host_id, _ = create_host(client)
+
+    host = client.get(f"/api/v1/hosts/{host_id}").json()
+
+    assert host["health_status"] == "unknown"
+    assert host["health_checked_at"] is None

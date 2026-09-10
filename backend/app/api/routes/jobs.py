@@ -166,6 +166,13 @@ def submit_job_result(
         job.failure_summary = None
     job.completed_at = datetime.now(timezone.utc)
 
+    # Project only the latest agent-supplied health result onto the host. Old
+    # agents omit it, in which case the previous projection remains valid.
+    if payload.health_status is not None:
+        host.health_status = payload.health_status
+        host.health_checked_at = job.completed_at
+        host.updated_at = job.completed_at
+
     # A completed reboot job clears the host's reboot-required flag right away
     # (the /run/reboot-required file is gone after the reboot). If the reboot
     # somehow did not happen, the next report re-sets it.

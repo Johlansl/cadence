@@ -241,6 +241,9 @@ def test_upgrade_result_stores_action_and_unhealthy_post_checks_separately(
     assert stored.result["health_status"] == "unhealthy"
     assert stored.result["pre_checks"]["status"] == "passed"
     assert stored.result["post_checks"]["checks"][0]["name"] == "failed_services"
+    host = db_session.get(Host, host_id)
+    assert host.health_status == "unhealthy"
+    assert host.health_checked_at == stored.completed_at
 
 
 def test_upgrade_result_stores_a_pre_check_block_without_post_checks(client, db_session):
@@ -265,6 +268,9 @@ def test_upgrade_result_stores_a_pre_check_block_without_post_checks(client, db_
     assert result["pre_checks"]["status"] == "failed"
     assert "post_checks" not in result
     assert result["health_status"] == "unknown"
+    host = db_session.get(Host, host_id)
+    assert host.health_status == "unknown"
+    assert host.health_checked_at == db_session.get(Job, job_id).completed_at
 
 
 def test_upgrade_result_rejects_inconsistent_health(client, db_session):
