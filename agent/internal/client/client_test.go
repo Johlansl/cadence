@@ -56,6 +56,9 @@ func TestSendReportParsesJob(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		verifySignedHeaders(t, r, "tok", body)
+		if strings.Contains(string(body), "claim_job") {
+			t.Errorf("a regular report must omit claim_job: %s", body)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"host_id":"h","job":{"id":"job-1","job_type":"apt_upgrade","params":{}}}`)
 	}))
@@ -67,6 +70,29 @@ func TestSendReportParsesJob(t *testing.T) {
 	}
 	if job == nil || job.ID != "job-1" || job.JobType != "apt_upgrade" {
 		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestSendPostJobReportDisablesJobClaim(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		verifySignedHeaders(t, r, "tok", body)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(w, `{"host_id":"h","job":null}`)
+	}))
+	defer srv.Close()
+
+	err := New(srv.URL, "tok", 5*time.Second).SendPostJobReport(
+		context.Background(), report.Report{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim, ok := got["claim_job"].(bool); !ok || claim {
+		t.Fatalf("claim_job = %#v, want false", got["claim_job"])
 	}
 }
 

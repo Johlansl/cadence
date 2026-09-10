@@ -34,9 +34,24 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 	}
 }
 
-// SendReport POSTs the report to {baseURL}/api/v1/reports and returns the
-// piggybacked job, if the server handed one back (nil otherwise).
+// SendReport POSTs a regular report to {baseURL}/api/v1/reports and returns
+// the piggybacked job, if the server handed one back (nil otherwise).
 func (c *Client) SendReport(ctx context.Context, r report.Report) (*report.JobHandoff, error) {
+	return c.sendReport(ctx, r)
+}
+
+// SendPostJobReport POSTs the fresh inventory collected after an apt job. It
+// explicitly disables job claiming: the caller ignores the response because
+// this one-shot run is finishing, so claiming another job here would strand it
+// in running until the scheduler reaper intervened.
+func (c *Client) SendPostJobReport(ctx context.Context, r report.Report) error {
+	claimJob := false
+	r.ClaimJob = &claimJob
+	_, err := c.sendReport(ctx, r)
+	return err
+}
+
+func (c *Client) sendReport(ctx context.Context, r report.Report) (*report.JobHandoff, error) {
 	body, err := json.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("encoding report: %w", err)

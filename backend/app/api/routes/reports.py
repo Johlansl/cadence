@@ -180,8 +180,9 @@ def create_report(
     )
 
     # 6. Piggyback: hand the oldest pending job (if any) to the agent and mark
-    #    it running. One job per report; the agent runs them serially.
-    job = claim_pending_job(db, host, now)
+    #    it running. A post-job inventory explicitly opts out because that
+    #    one-shot run is about to exit and would ignore a second handoff.
+    job = claim_pending_job(db, host, now) if report_in.claim_job else None
     handoff = (
         JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
         if job is not None

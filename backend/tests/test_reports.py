@@ -245,3 +245,21 @@ def test_report_piggybacks_pending_job(client, db_session):
     job = db_session.get(Job, job_id)
     assert job.status == "running"
     assert job.started_at is not None
+
+
+def test_post_job_report_does_not_claim_pending_job(client, db_session):
+    host_id, token = create_host(client)
+    jr = client.post(f"/api/v1/admin/hosts/{host_id}/jobs", headers=ADMIN_HEADERS, json={})
+    job_id = jr.json()["id"]
+
+    r = client.post(
+        "/api/v1/reports",
+        auth=signed(token),
+        json=report_payload(claim_job=False),
+    )
+
+    assert r.status_code == 200
+    assert r.json()["job"] is None
+    job = db_session.get(Job, job_id)
+    assert job.status == "pending"
+    assert job.started_at is None

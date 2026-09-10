@@ -32,6 +32,11 @@ type Report struct {
 	PackageManager string    `json:"package_manager"`
 	RebootRequired bool      `json:"reboot_required"`
 	Packages       []Package `json:"packages"`
+	// ClaimJob is normally omitted, which lets the server preserve its default
+	// of handing back one pending job. A post-job inventory report sets it to
+	// false so it cannot claim a second job that this one-shot run will not
+	// execute.
+	ClaimJob *bool `json:"claim_job,omitempty"`
 }
 
 // JobHandoff is a job the server wants this host to run, delivered in the

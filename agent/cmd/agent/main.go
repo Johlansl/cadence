@@ -270,7 +270,7 @@ func reportAfterJob(cfg config.Config, c *client.Client) {
 		logging.Warn("post-job report: collect failed", "err", err)
 		return
 	}
-	if _, err := c.SendReport(ctx, rep); err != nil {
+	if err := c.SendPostJobReport(ctx, rep); err != nil {
 		logging.Warn("post-job report: send failed", "err", err)
 		return
 	}

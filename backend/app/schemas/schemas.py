@@ -181,6 +181,10 @@ class ReportIn(BaseModel):
     package_manager: str | None = "apt"
     reboot_required: bool = False
     packages: list[ReportPackage] = Field(default_factory=list)
+    # A report sent after completing an apt job must not claim another job: the
+    # one-shot agent is about to exit and will not execute the returned handoff.
+    # Omitted by older agents and regular reports, where claiming stays enabled.
+    claim_job: bool = True
 
     @field_validator("packages")
     @classmethod
