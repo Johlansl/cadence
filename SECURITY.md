@@ -153,7 +153,27 @@ Encrypt setup requires editing the `Caddyfile`.
 
 Required for `apt-get` / `dpkg`. The `systemd` units apply light sandboxing;
 they do not (and mostly cannot, given apt writes to `/usr`, `/boot`, `/etc`)
-use the stricter `ProtectSystem` / capability-bounding directives.
+use the stricter `ProtectSystem` / capability-bounding directives. What is kept
+is `ProtectHome`, `PrivateTmp`, `ProtectControlGroups` and `LockPersonality`.
+
+`RestrictSUIDSGID=true` used to be in that list and was removed in agent
+`0.12.1`. It stopped the agent process from creating or changing setuid/setgid
+files, which meant a routine upgrade of any package that ships one (`shadow`
+installing `newgrp` / `chage` setuid root, `sudo`, `mount`, `ping`, ...) failed
+under the agent unit while succeeding for the same `dpkg` run by hand. That
+protection was aimed at a narrow case: the agent binary itself being exploited
+*during* a `dpkg` run and using the elevated moment to drop a setuid backdoor.
+The residual risk after removing it is exactly that case, and it is judged
+acceptable for now because the agent already runs as root for the duration of
+the upgrade (a compromised agent has many equivalent options, setuid or not),
+the code is stdlib-only with no network input it acts on (communication is
+outbound-only, the server never pushes), and the alternative, an upgrade tool
+that breaks upgrades silently, is worse for the operator than the marginal
+hardening was worth. The primary defence against a compromised *server* is
+unchanged: it is the outbound-only model, not this directive. If a future
+change narrows what the agent executes (for example a dedicated non-root helper
+for the non-apt work), reinstating `RestrictSUIDSGID` on that part should be
+reconsidered.
 
 ### `POST /api/v1/reports` payload limits
 

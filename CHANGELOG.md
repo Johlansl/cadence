@@ -8,6 +8,12 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Agent `0.12.1`: `RestrictSUIDSGID=true` dropped from both `systemd` units. It
+  was silently breaking upgrades of packages that ship setuid/setgid files
+  (`shadow` -> `newgrp` / `chage`, `sudo`, `mount`, ...). Reliability of the
+  upgrade path over a narrow layer of defence in depth; rationale and residual
+  risk in [`SECURITY.md`](SECURITY.md) "The agent runs as root". Roll the fleet
+  to `0.12.1` before relying on setuid-shipping upgrades succeeding.
 - Pre- and post-upgrade health checks (roadmap item 7). Agent `0.12.0`+
   validates disk space, package-manager locks, dpkg and apt state, strict
   package-index refresh and a failed-service baseline before each
