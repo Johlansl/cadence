@@ -69,8 +69,10 @@ class HostUpdate(BaseModel):
 
     reboot_policy: RebootMode | None = None
     is_active: bool | None = None
-    # Free-form {key: value} labels. Groundwork for host groups in a later
-    # version; today the dashboard only displays and filters on them.
+    # Free-form {key: value} labels. A tag can also carry policy: a
+    # package_exclusions rule may be scoped to a tag (roadmap item 6). Keys and
+    # values are lowercased on write so storage matches the case-insensitive
+    # search everywhere else; existing rows are not rewritten.
     tags: dict[str, str] | None = None
 
     @field_validator("tags")
@@ -80,12 +82,19 @@ class HostUpdate(BaseModel):
             return v
         if len(v) > 20:
             raise ValueError("at most 20 tags per host")
+        # Length limits are checked on the string as sent; str.lower() is
+        # length-preserving for every ASCII tag character.
+        lowered: dict[str, str] = {}
         for key, value in v.items():
             if not key or len(key) > 40:
                 raise ValueError("tag keys must be 1-40 characters")
             if len(value) > 80:
                 raise ValueError("tag values must be at most 80 characters")
-        return v
+            lk = key.lower()
+            if lk in lowered:
+                raise ValueError(f"tag key '{lk}' given twice (case-insensitively)")
+            lowered[lk] = value.lower()
+        return lowered
 
 
 class HostPatched(BaseModel):

@@ -45,3 +45,28 @@ def test_tags_validation(client):
             f"/api/v1/admin/hosts/{host_id}", headers=ADMIN_HEADERS, json={"tags": bad}
         )
         assert r.status_code == 422, (bad, r.text)
+
+
+def test_tags_lowercased_on_write(client):
+    host_id, _ = create_host(client)
+    r = client.patch(
+        f"/api/v1/admin/hosts/{host_id}",
+        headers=ADMIN_HEADERS,
+        json={"tags": {"Env": "Prod", "ROLE": "Web"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["tags"] == {"env": "prod", "role": "web"}
+    assert client.get(f"/api/v1/hosts/{host_id}").json()["tags"] == {
+        "env": "prod",
+        "role": "web",
+    }
+
+
+def test_tags_reject_case_collision(client):
+    host_id, _ = create_host(client)
+    r = client.patch(
+        f"/api/v1/admin/hosts/{host_id}",
+        headers=ADMIN_HEADERS,
+        json={"tags": {"Env": "a", "env": "b"}},
+    )
+    assert r.status_code == 422, r.text
