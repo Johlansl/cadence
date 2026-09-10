@@ -273,5 +273,13 @@ class Settings:
             "CADENCE_WEBHOOK_LOG_MAX_BYTES", 4096
         )
 
+        # Default observation window between campaign stages (roadmap item 5):
+        # a stage advances only once all its jobs are terminal AND this many
+        # seconds have elapsed with no halt. Overridable per campaign in the
+        # create request. 0 = advance as soon as the stage's jobs finish.
+        self.campaign_observation_window_seconds: int = _non_negative_int(
+            "CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS", 600
+        )
+
 
 settings = Settings()

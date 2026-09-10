@@ -622,3 +622,113 @@ class AuditEntry(BaseModel):
     client: str | None
     request_id: str | None
     detail: dict | None
+
+
+# --- campaigns -------------------------------------------------------------
+
+CampaignStatus = Literal[
+    "draft", "running", "paused", "completed", "stopped", "cancelled"
+]
+CampaignHostState = Literal["pending", "running", "done", "skipped", "orphaned"]
+
+# A stage size: "N%" with N in 1..100.
+_STAGE_PCT_RE = re.compile(r"^([1-9]|[1-9][0-9]|100)%$")
+
+
+class CampaignCreate(BaseModel):
+    """Create a campaign in status 'draft'. Targeting is resolved once, here:
+    pass exactly one of `host_ids` (explicit) or `tag` (a "key" / "key=value"
+    filter, matched like `GET /hosts?tag=`). `stages` is an ordered list of
+    wave sizes -- a positive integer (absolute host count), "N%" (1-100,
+    percent of the resolved total, floored), or "rest" (all remaining, last
+    entry only). `observation_window_seconds` falls back to
+    CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS when omitted."""
+
+    name: str = Field(min_length=1, max_length=200)
+    stages: list = Field(min_length=1)
+    max_concurrency: int = Field(ge=1)
+    max_failures: int = Field(ge=0)
+    observation_window_seconds: int | None = Field(default=None, ge=0)
+    host_ids: list[uuid.UUID] = Field(default_factory=list)
+    tag: str | None = None
+
+    @field_validator("stages")
+    @classmethod
+    def _stages(cls, v: list) -> list:
+        for i, spec in enumerate(v):
+            if spec == "rest":
+                if i != len(v) - 1:
+                    raise ValueError('"rest" is only valid as the last stage')
+            elif isinstance(spec, bool) or not isinstance(spec, (int, str)):
+                raise ValueError(f"invalid stage entry: {spec!r}")
+            elif isinstance(spec, int):
+                if spec < 1:
+                    raise ValueError("a numeric stage must be >= 1")
+            elif not _STAGE_PCT_RE.match(spec):
+                raise ValueError(
+                    f"invalid stage entry {spec!r}: use an integer, "
+                    '"N%" (1-100), or "rest"'
+                )
+        if len([s for s in v if s == "rest"]) > 1:
+            raise ValueError('at most one "rest" stage')
+        return v
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> "CampaignCreate":
+        has_ids = len(self.host_ids) > 0
+        has_tag = self.tag is not None and self.tag.strip() != ""
+        if has_ids == has_tag:
+            raise ValueError("provide exactly one of host_ids or tag")
+        return self
+
+
+class CampaignOut(BaseModel):
+    """A campaign for the list view. The counts and `current_stage_index` are
+    recomputed from campaign_hosts at read time."""
+
+    id: uuid.UUID
+    name: str
+    job_type: str
+    stages: list
+    max_concurrency: int
+    max_failures: int
+    observation_window_seconds: int
+    status: CampaignStatus
+    halt_reason: str | None
+    requested_by: str | None
+    hosts_total: int
+    hosts_done: int
+    hosts_skipped: int
+    hosts_orphaned: int
+    current_stage_index: int | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    updated_at: datetime
+
+
+class CampaignHostOut(BaseModel):
+    host_id: uuid.UUID
+    hostname: str
+    stage_index: int
+    state: CampaignHostState
+    skip_reason: str | None
+    job_id: uuid.UUID | None
+
+
+class CampaignStageDetail(BaseModel):
+    index: int
+    size_spec: int | str
+    hosts_total: int
+    pending: int
+    running: int
+    done: int
+    skipped: int
+    orphaned: int
+
+
+class CampaignDetailOut(CampaignOut):
+    """A campaign plus its per-stage rollup and per-host rows."""
+
+    stages_detail: list[CampaignStageDetail]
+    hosts: list[CampaignHostOut]
