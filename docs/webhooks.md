@@ -129,6 +129,9 @@ want real upgrades. The structured preview lives on the job record
     "reaped": false,
     "failure_category": "dpkg_error",
     "failure_summary": "E: Sub-process /usr/bin/dpkg returned an error code (1)",
+    "health_status": null,
+    "pre_checks": null,
+    "post_checks": null,
     "requested_by": "scheduler",
     "completed_at": "2026-01-15T09:42:11.480902Z",
     "log": "Reading package lists...\nBuilding dependency tree...\n\n[cadence] ... 5123 bytes of log elided ...\n\nE: Sub-process /usr/bin/dpkg returned an error code (1)\n"
@@ -145,6 +148,12 @@ want real upgrades. The structured preview lives on the job record
   head and tail are kept and the middle is replaced by a
   `[cadence] ... N bytes of log elided ...` marker. Set the variable to `0` to
   send the whole log.
+- `health_status`, `pre_checks` and `post_checks` carry the structured
+  `apt_upgrade` health result from agent `0.12.0` or newer. They are independent
+  from `status`: a `job.succeeded` event can carry `health_status:
+  "unhealthy"`. All three are `null` for an older agent, another job type, or
+  a job failed by the scheduler reaper. See
+  [health-checks.md](health-checks.md) for the check schema and severity rules.
 
 **`job.failed` only** (absent from `job.succeeded`):
 

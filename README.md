@@ -27,6 +27,10 @@ DNS) and tools that only show you the problem without fixing it. It gives you
   the agent runs it within ~1 minute and posts the log back. A "dry run"
   button previews what the upgrade would change (packages upgraded, installed,
   removed, kept back) without touching the host.
+- **Upgrade health checks**: validate disk, dpkg, apt repositories and package
+  locks before an upgrade, then verify dpkg, apt, failed services, disk and the
+  reboot signal afterwards. The dashboard keeps apt's result separate from the
+  resulting host health.
 - **Reboots**: per-host policy (`never` / `auto` / `prompt`), overridable per
   job; the agent reboots only when the upgrade actually left one pending.
 - **Maintenance windows**: one recurring weekly/monthly window per host,
@@ -286,6 +290,9 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
 | `CADENCE_AUDIT_RETENTION_DAYS` | `365` | daily prune of the admin audit trail (`audit_log`); `0` = keep forever |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
+| `CADENCE_UPGRADE_MINIMUM_AVAILABLE_BYTES` | `1073741824` (1 GiB) | minimum free space for the filesystem backing `/var` before and after an upgrade |
+| `CADENCE_UPGRADE_BOOT_MINIMUM_AVAILABLE_BYTES` | `209715200` (200 MiB) | minimum free space for filesystems backing `/boot` and `/boot/efi`; missing paths are ignored |
+| `CADENCE_UPGRADE_LOCK_WAIT_SECONDS` | `120` | how long a pre-check waits for apt/dpkg advisory locks to clear; maximum 3600 |
 | `CADENCE_WEBHOOKS_ENABLED` | `true` | master switch for outbound webhooks (inert until one is configured on the dashboard); `false` hard-disables enqueue + dispatch. See [Webhooks](#webhooks) and [docs/webhooks.md](docs/webhooks.md) |
 | `CADENCE_WEBHOOK_TIMEOUT_SECONDS` / `CADENCE_WEBHOOK_MAX_ATTEMPTS` | `10` / `6` | per-attempt HTTP timeout; delivery attempts before a row is parked `failed` (backoff 60 s ... 1 h) |
 | `CADENCE_WEBHOOK_DISPATCH_BATCH` | `20` | pending deliveries drained per scheduler tick |
@@ -316,13 +323,23 @@ All configuration is environment variables. Server variables live in `.env`
 dashboard --POST /admin/hosts/{id}/jobs (X-Admin-Key)--> job: pending
 agent     --POST /agent/next-job (every ~1 min)-------->  claims it, job: running
           (or delivered on the response to POST /reports)
+agent     runs blocking pre-checks-------------------->  disk, locks, dpkg, apt, services
 agent     runs apt-get dist-upgrade -y (non-interactive)
-agent     --POST /jobs/{id}/result-------------------->  job: succeeded | failed  (+ log)
+agent     runs post-checks---------------------------->  host health
+agent     --POST /jobs/{id}/result-------------------->  action result + health + log
 ```
 
 One active job per host (`409` otherwise). The dashboard prompts for the
 `X-Admin-Key` once per session. Impatient? `systemctl start
 cadence-agent.service` on the host runs a report (and any pending job) now.
+
+A failed or unavailable blocking pre-check prevents apt from running. Once the
+pre-check phase passes, post-checks run even if the action fails. Consequently,
+job status (`succeeded` / `failed`) says whether the requested action completed,
+while host health (`healthy` / `degraded` / `unhealthy` / `unknown`) says what
+the agent could establish about the machine afterwards. Full check order,
+severity and compatibility notes:
+[docs/health-checks.md](docs/health-checks.md).
 
 ### Reboots
 
@@ -375,12 +392,19 @@ curl -s -X POST https://<site>/api/v1/admin/campaigns/<id>/activate -H "X-Admin-
 ```
 
 The `scheduler` advances every running campaign each tick: it reconciles
-finished jobs (a failed job's category maps to `skip` or `halt`), fills the
-active wave up to `max_concurrency`, holds each terminal wave for its
-observation window, and stops on a `halt` failure or once the skip count
-passes `max_failures`. `pause` / `resume` / `cancel` are the manual controls;
-the `#campaigns` dashboard section has the create form and a per-stage /
-per-host view. Full detail: [docs/campaigns.md](docs/campaigns.md).
+finished jobs (a failed job's category maps to `skip` or `halt`; a successful
+job must also report `healthy` or `degraded`), fills the active wave up to
+`max_concurrency`, holds each terminal wave for its observation window, and
+stops on a halt condition or once the skip count passes `max_failures`.
+`pause` / `resume` / `cancel` are the manual controls; the `#campaigns`
+dashboard section has the create form and a per-stage / per-host view. Full
+detail: [docs/campaigns.md](docs/campaigns.md).
+
+Every target host must be on agent `0.12.0` or newer before you `activate` a
+campaign. A successful job from an older agent carries no health result, which
+the reconcile step reads as `health_unknown` and the campaign stops at that
+host. Roll the fleet forward first ([Upgrading the agent
+fleet](#upgrading-the-agent-fleet)); manual and scheduled jobs are unaffected.
 
 ### Database migrations
 

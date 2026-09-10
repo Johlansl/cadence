@@ -76,6 +76,51 @@ rather than something to defer until someone asks.
   add a job type; they did not (a campaign orchestrates ordinary `apt_upgrade`
   jobs), so the CHECK simply closed on the three existing values. Widening it
   later for a genuinely new type is a drop + recreate, like `jobs.status`.
+- **Health checks belong to `apt_upgrade`, not a new job type.** They protect
+  every real upgrade regardless of whether it came from the dashboard, a
+  schedule or a campaign. A separate check job would still leave a race before
+  apt starts and would let some creation paths bypass the guard.
+- **Action status and host health are separate.** `jobs.status` says whether
+  the requested apt action completed. `result.health_status` says what the
+  post-checks established about the machine. Thus `succeeded` plus
+  `unhealthy` is valid and visible; changing the action to failed would hide
+  the distinction this feature exists to provide.
+- **Pre-check failures block; warnings do not.** Unavailable disk, lock, dpkg,
+  apt or service-baseline evidence is not safe enough to start. Existing
+  failed services and the compatibility fallback for old apt strict mode are
+  warnings, preserving service-baseline comparison without making unrelated
+  pre-existing damage an upgrade blocker.
+- **Post-checks observe but do not repair.** The agent does not run fix-broken,
+  restart units or clean filesystems. Newly failed services make health
+  `unhealthy`; pre-existing failures and a pending reboot make it `degraded`.
+  This keeps remediation explicit and avoids an upgrade job silently changing
+  more than apt requested.
+- **The host stores a projection, the job stores evidence.** Only
+  `health_status` and `health_checked_at` are columns used by fleet and
+  campaign decisions. Ordered check detail remains in `jobs.result`, avoiding
+  a table per probe while keeping the exact run auditable. Existing hosts start
+  `unknown`; historical results are not guessed.
+- **Campaigns fail closed on missing health.** A successful job advances only
+  with `healthy` or `degraded`. `unhealthy` stops with `health_unhealthy`, and
+  missing, unknown or unrecognized health stops with `health_unknown`. This
+  means campaign targets must run agent `0.12.0`+ after the server upgrade;
+  manual and scheduled jobs remain compatible with older agents.
+- **Rollout order for this change: the whole fleet moves to agent `0.12.0`
+  before any campaign is activated.** After the server is upgraded, a campaign
+  job that lands on a host still on `0.11.0` comes back `succeeded` with no
+  `health_status`, which the fail-closed gate above reads as `health_unknown`
+  and stops the campaign at its first host. The deploy itself needs no fleet
+  change (manual and scheduled jobs keep working against older agents); it is
+  only a precondition for campaigns. Repeated in the README "Campaigns"
+  section so an operator sees it at activation time.
+- **Not fixed here: the dedicated `reboot` job reports `succeeded` before
+  `systemctl` runs.** The agent submits the job result and only then issues
+  the reboot, and the server clears `host.reboot_required` on that result, so
+  a reboot that fails to start leaves the flag briefly wrong. Severity is low:
+  the agent exits non-zero and the next report re-sets `reboot_required` from
+  `/run/reboot-required`, so the state self-corrects within one cycle. It is
+  on the dedicated-reboot path, not the `apt_upgrade` health path this change
+  is about, so it is deliberately deferred rather than fixed mid-change.
 
 ## Authentication
 

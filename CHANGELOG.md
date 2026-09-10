@@ -8,6 +8,27 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Pre- and post-upgrade health checks (roadmap item 7). Agent `0.12.0`+
+  validates disk space, package-manager locks, dpkg and apt state, strict
+  package-index refresh and a failed-service baseline before each
+  `apt_upgrade`; a failed or unavailable blocking check prevents apt from
+  running. After every attempted upgrade it checks dpkg, apt and disk again,
+  diffs failed services and records the reboot signal. Ordered, bounded
+  evidence is stored in `jobs.result.pre_checks` / `post_checks`; action status
+  stays separate from derived host health (`healthy`, `degraded`, `unhealthy`,
+  `unknown`). Migration `0018` adds the current `hosts.health_status` /
+  `health_checked_at` projection without historical backfill. The dashboard
+  shows both outcomes and expandable evidence; existing job webhooks gain the
+  three health fields without new event types. Campaigns now advance after a
+  successful action only for `healthy` / `degraded`, and stop on unhealthy or
+  missing health, so campaign targets must be upgraded to agent `0.12.0` first.
+  New server settings pin per-job thresholds:
+  `CADENCE_UPGRADE_MINIMUM_AVAILABLE_BYTES` (1 GiB),
+  `CADENCE_UPGRADE_BOOT_MINIMUM_AVAILABLE_BYTES` (200 MiB), and
+  `CADENCE_UPGRADE_LOCK_WAIT_SECONDS` (120, max 3600). Older agents remain
+  accepted for manual and scheduled jobs; their results leave host health
+  unchanged. Also fixes the agent claiming a second job during the immediate
+  post-job inventory report.
 - Tag-scoped package exclusions. A hold rule can now be scoped to a tag
   (`scope='tag'`, new nullable `package_exclusions.tag`, migration `0017`):
   it applies to every host carrying that tag, where `tag` is a `"key"` /

@@ -107,7 +107,11 @@ Any illegal transition is a `409`.
 For every `running` campaign, once per scheduler pass:
 
 1. **Reconcile.** Every host whose job finished:
-   - `succeeded` -> `done`;
+   - `succeeded` plus health `healthy` or `degraded` -> `done`;
+   - `succeeded` plus `unhealthy` -> stop the campaign immediately with
+     `health_unhealthy`;
+   - `succeeded` plus missing, `unknown` or unrecognized health -> stop the
+     campaign immediately with `health_unknown`;
    - `failed` -> a **disposition** decided by the job's `failure_category`:
 
      | `failure_category` | disposition |
@@ -131,6 +135,10 @@ For every `running` campaign, once per scheduler pass:
 
 The disposition table lives in code (`app/campaigns/engine.py`), not the
 database, so it can be tuned without a migration.
+
+The health gate requires agent `0.12.0` or newer. An older agent's successful
+job has no `health_status`, so the campaign stops with `health_unknown` rather
+than advancing without evidence. Upgrade every target agent before activation.
 
 ## Read status
 
@@ -174,5 +182,5 @@ There is no `campaign.activated` event: you just made that call.
   exclusion rules apply unchanged.
 - The retention sweep will not delete a finished job while its campaign is
   still `draft` / `running` / `paused`.
-- The agent is unchanged: a campaign job is an ordinary `apt_upgrade`. No
-  agent upgrade is needed to use campaigns.
+- A campaign job remains an ordinary `apt_upgrade`, but the health gate now
+  requires agent `0.12.0` or newer on every target.

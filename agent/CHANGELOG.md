@@ -3,6 +3,33 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.12.0
+
+Pre- and post-upgrade health checks (server roadmap item 7):
+
+- Before an `apt_upgrade`, the agent verifies free space on the filesystems
+  backing `/var`, `/boot` and `/boot/efi`, waits for apt/dpkg advisory locks,
+  runs `dpkg --audit` and `apt-get check`, records the existing failed systemd
+  services, and refreshes package indexes with strict error handling. A failed
+  or unavailable blocking check stops the upgrade and maps to the existing job
+  failure categories. The checks do not repair packages or restart services.
+- Once the pre-check phase passes, post-checks run after the upgrade action
+  path even when that action fails. They repeat the dpkg, apt and disk checks,
+  compare failed services with the baseline, and record whether a reboot is
+  required. The job action outcome and the host health outcome are separate:
+  apt can succeed while the host is `unhealthy`, or fail while post-check
+  evidence is still available.
+- The structured `pre_checks`, `post_checks` and derived `health_status`
+  (`healthy`, `degraded`, `unhealthy`, `unknown`) are submitted with the job
+  result. Check evidence is bounded and the command environment remains
+  stripped of every `CADENCE_*` secret.
+- Disk and lock thresholds come from the job when a current server supplies
+  them. Jobs created by an older server use the same local defaults: 1 GiB for
+  `/var`, 200 MiB for boot filesystems, and a 120 second lock wait.
+- Job execution now has a 60 minute overall deadline and the systemd unit
+  limits were raised accordingly so the pre-check, action, post-check and
+  follow-up report sequence cannot be killed prematurely.
+
 ## 0.11.0
 
 Dry-run (server roadmap item 4): a new `apt_dry_run` job type that previews

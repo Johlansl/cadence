@@ -68,7 +68,8 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
 
 - `hosts`: one row per monitored host: identity, OS, `package_manager`,
   `tags` (jsonb), `reboot_policy` (`auto` / `never` / `prompt`), `is_active`,
-  `last_seen_at`.
+  `last_seen_at`, and the latest post-upgrade `health_status` /
+  `health_checked_at` projection. Full check evidence stays on the job.
 - `agent_tokens`: per-host tokens (SHA-256 hash as the lookup key, a
   Fernet-encrypted copy for HMAC verification, optional `expires_at` /
   `revoked_at`, `last_used_at`). Several may be active for roll-forward
@@ -98,6 +99,10 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   package names the server resolved from `package_exclusions` for that host;
   `params.known_held_packages` is the Cadence-managed hold set the server
   last recorded (the previous `apt_upgrade` job's `result.held_packages`).
+  Every new `apt_upgrade` also carries server-pinned health-check thresholds
+  in `params.health_checks`. Agent `0.12.0`+ stores ordered `pre_checks` and
+  `post_checks` evidence plus a derived `health_status` in the result; action
+  status remains independent from health.
   A successful or failed result's `result.held_conflicts` names any held
   package apt showed real evidence of skipping or blocking on that run;
   `result.held_packages` is what Cadence actually holds after reconciliation,
@@ -138,6 +143,32 @@ Extensibility is built in without over-engineering: `os_family` /
 `package_manager` leave room for non-apt package managers, `jobs.params` and
 `schedules.params` are jsonb, and `hosts.tags` carries policy: a
 `package_exclusions` rule can be scoped to a tag rather than to one host.
+
+## Upgrade health checks
+
+Agent `0.12.0`+ wraps each `apt_upgrade` in two bounded phases. Before the
+action it checks disk space, waits for package-manager advisory locks, audits
+dpkg, checks apt dependencies, snapshots failed systemd services, and refreshes
+package indexes with strict error reporting. A failed or unavailable blocking
+check prevents the action and the remaining checks are marked `skipped`.
+
+After any attempted dist-upgrade, successful or failed, it repeats the dpkg,
+apt and disk checks, compares failed services against the baseline, and records
+the reboot signal. Each check has `passed`, `warning`, `failed`, `unknown` or
+`skipped`; a completed phase aggregates to the first four. Post-phase status
+maps directly to `healthy`, `degraded`, `unhealthy` or `unknown`.
+
+The server validates the bounded evidence and stores it under `jobs.result`.
+It updates the host projection only when a health-aware agent supplies a
+result, so an older agent cannot erase a previously established state.
+Migration `0018` adds the two host columns and deliberately initializes
+existing rows to `unknown` without reconstructing history.
+
+Every job-creation path injects the same thresholds from server configuration
+into `params.health_checks`: 1 GiB for `/var`, 200 MiB for boot filesystems and
+a 120 second package-lock wait by default. The agent has identical fallbacks
+for jobs from an older server. See the operator guide,
+[health-checks.md](health-checks.md), for the exact order and severity rules.
 
 ## Webhooks
 
