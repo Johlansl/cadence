@@ -94,6 +94,49 @@ def test_sweep_keeps_pending_and_recent_jobs(client, db_session):
     assert remaining == {"succeeded", "pending", "running"}
 
 
+def test_sweep_keeps_old_jobs_while_their_campaign_is_live(client, db_session):
+    from app.models.models import Campaign
+
+    host_id, _ = create_host(client)
+
+    def _campaign(status):
+        c = Campaign(
+            name="c",
+            stages=[1],
+            max_concurrency=1,
+            max_failures=0,
+            observation_window_seconds=0,
+            status=status,
+        )
+        db_session.add(c)
+        db_session.flush()
+        return c
+
+    live = _campaign("running")
+    finished = _campaign("completed")
+    old = dict(
+        job_type="apt_upgrade",
+        status="succeeded",
+        completed_at=NOW - timedelta(days=200),
+    )
+    j_live = Job(host_id=host_id, campaign_id=live.id, **old)
+    j_finished = Job(host_id=host_id, campaign_id=finished.id, **old)
+    j_plain = Job(host_id=host_id, **old)
+    db_session.add_all([j_live, j_finished, j_plain])
+    db_session.flush()
+
+    _, jobs, _, _ = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=90, audit_days=0, tokens_days=0
+    )
+    assert jobs == 2  # the finished-campaign job and the plain job
+    remaining = set(
+        db_session.execute(
+            select(Job.id).where(Job.host_id == host_id)
+        ).scalars()
+    )
+    assert remaining == {j_live.id}
+
+
 def test_sweep_disabled_with_zero(client, db_session):
     host_id, _ = create_host(client)
     _report(db_session, host_id, age_days=999)

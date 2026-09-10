@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.advisories import debian
 from app.advisories.sync import refresh_advisories
+from app.campaigns.engine import advance_campaigns
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
@@ -31,6 +32,7 @@ from app.job_creation import create_job_for_host
 from app.models.models import (
     AgentToken,
     AuditLog,
+    Campaign,
     Host,
     HostPackage,
     Job,
@@ -259,11 +261,17 @@ def retention_sweep(
         ).rowcount
     if jobs_days > 0:
         cutoff = now - timedelta(days=jobs_days)
+        # Keep a job while its campaign is still live: campaign_hosts.job_id
+        # references it and the engine reconciles state from job.status.
+        live_campaign = select(Campaign.id).where(
+            Campaign.status.in_(("draft", "running", "paused"))
+        )
         jobs_deleted = db.execute(
             delete(Job).where(
                 Job.status.in_(("succeeded", "failed")),
                 Job.completed_at.is_not(None),
                 Job.completed_at < cutoff,
+                or_(Job.campaign_id.is_(None), Job.campaign_id.not_in(live_campaign)),
             )
         ).rowcount
     if audit_days > 0:
@@ -525,6 +533,7 @@ def main() -> None:
         try:
             reap_stuck_jobs()
             tick()
+            advance_campaigns()
             scan_offline_hosts()
             dispatch_pending_deliveries()
             run_retention_if_due()
