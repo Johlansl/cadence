@@ -213,6 +213,12 @@ class Job(Base):
     # docstring for the category set; free text on purpose, no CHECK.
     failure_category: Mapped[str | None] = mapped_column(Text)
     failure_summary: Mapped[str | None] = mapped_column(Text)
+    # Set for a job the campaign engine created for one of a campaign's hosts
+    # (roadmap item 5, migration 0016); NULL for every manually or
+    # scheduler-created job. The agent never sees this.
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("campaigns.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -389,6 +395,77 @@ class WebhookHostState(Base):
     security_updates_notified: Mapped[int | None] = mapped_column(Integer)
     offline_notified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Campaign(Base):
+    """A staged, rate-limited rollout of apt_upgrade jobs across a fixed set of
+    hosts (roadmap item 5). `stages` is an ordered JSON array of wave sizes
+    (int = absolute host count, "N%" = percent of the resolved total, "rest" =
+    all remaining, last only); the hosts are sliced into campaign_hosts rows at
+    creation and never re-resolved. The scheduler's advance_campaigns() drives
+    it. `status` and `campaign_hosts.state` both carry a DB CHECK (migration
+    0016). `job_type` is fixed to 'apt_upgrade' in v1 (CHECK); the column is
+    kept for a later widening. `halt_reason` is set only when status='stopped'.
+    The current stage index and the stage-ready timestamp are recomputed at
+    read time from campaign_hosts / jobs, not stored."""
+
+    __tablename__ = "campaigns"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    job_type: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'apt_upgrade'")
+    )
+    stages: Mapped[list] = mapped_column(JSONB, nullable=False)
+    max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_failures: Mapped[int] = mapped_column(Integer, nullable=False)
+    observation_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'draft'")
+    )
+    halt_reason: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CampaignHost(Base):
+    """One host's membership in a campaign: its frozen stage assignment plus the
+    engine's per-host bookkeeping. `state`: pending -> running -> done | skipped,
+    plus 'orphaned' (terminal) for a host whose job was still in flight or not
+    yet created when the campaign was halted / cancelled -- the job runs to
+    completion on the agent and its result is still recorded in `jobs`, the
+    campaign just stops folding it in. `skip_reason` is the job's
+    failure_category when state='skipped'. `job_id` is filled once the engine
+    creates the host's job. See migration 0016."""
+
+    __tablename__ = "campaign_hosts"
+
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("campaigns.id", ondelete="CASCADE"), primary_key=True
+    )
+    host_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), primary_key=True
+    )
+    stage_index: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    state: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'pending'")
+    )
+    skip_reason: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("jobs.id", ondelete="SET NULL")
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
