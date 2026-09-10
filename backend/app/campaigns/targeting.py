@@ -1,20 +1,21 @@
 """Resolve a campaign's target hosts once, at creation.
 
-Either an explicit `host_ids` list or a `tag` filter (the same "key" /
-"key=value" matcher as `GET /hosts?tag=`, app.api.routes.hosts). The result is
-a hostname-ordered list; the campaign's per-host stage assignment is frozen
-from it and never recomputed, so a host that gains or loses the tag later does
-not enter or leave a running campaign.
+Either an explicit `host_ids` list or a `tag` filter (the shared "key" /
+"key=value" matcher, `app.tag_filter.tag_filter_clause`, same as
+`GET /hosts?tag=`). The result is a hostname-ordered list; the campaign's
+per-host stage assignment is frozen from it and never recomputed, so a host
+that gains or loses the tag later does not enter or leave a running campaign.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.models import Host
+from app.tag_filter import tag_filter_clause
 
 
 def resolve_targets(
@@ -32,20 +33,8 @@ def resolve_targets(
             raise ValueError(f"unknown host id(s): {', '.join(missing)}")
         return list(rows)
 
-    t = (tag or "").strip().lower()
-    kv = func.jsonb_each_text(Host.tags).table_valued("key", "value")
-    if "=" in t:
-        key, value = t.split("=", 1)
-        match = and_(func.lower(kv.c.key) == key, func.lower(kv.c.value) == value)
-    else:
-        like = f"%{t}%"
-        match = or_(func.lower(kv.c.key).like(like), func.lower(kv.c.value).like(like))
     return list(
-        db.execute(
-            ordered.where(exists(select(1).select_from(kv).where(match)))
-        )
-        .scalars()
-        .all()
+        db.execute(ordered.where(tag_filter_clause(tag or ""))).scalars().all()
     )
 
 

@@ -12,7 +12,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.advisories.match import advisories_for, codename_for, source_for
@@ -22,6 +22,7 @@ from app.core.staleness import LATE_AFTER
 from app.exclusions import matching, patterns_for_host
 from app.models.models import Host, HostPackage, Package, PackageExclusion
 from app.schemas.schemas import HostDetail, HostPackageOut, HostStatus, HostSummary
+from app.tag_filter import tag_filter_clause
 
 router = APIRouter(prefix="/api/v1", tags=["hosts"])
 
@@ -147,15 +148,7 @@ def list_hosts(
             or_(Host.last_seen_at.is_(None), Host.last_seen_at <= cutoff)
         )
     if tag:
-        t = tag.strip().lower()
-        kv = func.jsonb_each_text(Host.tags).table_valued("key", "value")
-        if "=" in t:
-            k, v = t.split("=", 1)
-            match = and_(func.lower(kv.c.key) == k, func.lower(kv.c.value) == v)
-        else:
-            like = f"%{t}%"
-            match = or_(func.lower(kv.c.key).like(like), func.lower(kv.c.value).like(like))
-        stmt = stmt.where(exists(select(1).select_from(kv).where(match)))
+        stmt = stmt.where(tag_filter_clause(tag))
     if status == "security":
         stmt = stmt.having(security > 0)
     elif status == "updates":
