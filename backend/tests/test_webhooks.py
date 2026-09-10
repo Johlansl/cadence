@@ -33,6 +33,11 @@ def test_create_validation(client):
     assert _create(client, url="not a url").status_code == 422
     assert _create(client, event_types=[]).status_code == 422
     assert _create(client, event_types=["job.bogus"]).status_code == 422
+    # campaign events are subscribable (roadmap item 5)
+    assert _create(
+        client,
+        event_types=["campaign.stage_completed", "campaign.completed", "campaign.stopped"],
+    ).status_code == 201
     # auth
     assert client.post(
         "/api/v1/admin/webhooks", json={"url": "https://x.test", "event_types": ["job.failed"]}

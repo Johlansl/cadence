@@ -32,6 +32,7 @@ from app.campaigns.lifecycle import finalize_campaign_hosts
 from app.db.base import SessionLocal
 from app.job_creation import create_job_for_host
 from app.models.models import Campaign, CampaignHost, Host, Job
+from app.webhooks.enqueue import enqueue_event
 
 log = logging.getLogger("cadence.campaigns")
 
@@ -60,12 +61,14 @@ _ACTIVE = ("pending", "running")
 
 
 class Outcome(NamedTuple):
-    """What one campaign's advance did this tick, for logging now and (A5) for
-    translating into webhook events."""
+    """What one campaign's advance did this tick -- logged, and translated into
+    webhook events by _emit_events."""
 
     kind: str  # "waiting" | "filled" | "completed" | "stopped"
     stages_completed: tuple[int, ...] = ()
     stop_reason: str | None = None
+    stop_category: str | None = None  # failure_category, when a halt disposition fired
+    stop_host: str | None = None  # hostname, likewise
     jobs_created: int = 0
 
 
@@ -121,9 +124,9 @@ def _reconcile(
     jobs: dict[uuid.UUID, Job],
     hostnames: dict[uuid.UUID, str],
     now: datetime,
-) -> tuple[bool, list[int]]:
-    """Fold finished jobs into campaign_hosts state. Returns
-    (halted, stages_that_became_fully_terminal_this_tick)."""
+) -> tuple[bool, list[int], str | None, str | None]:
+    """Fold finished jobs into campaign_hosts state. Returns (halted,
+    stages_that_became_fully_terminal_this_tick, halt_category, halt_host)."""
     completed_stages: list[int] = []
     for ch in ch_rows:
         if ch.state not in _ACTIVE or ch.job_id is None:
@@ -140,18 +143,19 @@ def _reconcile(
                 ch.state = "skipped"
                 ch.skip_reason = job.failure_category or "unknown"
             else:
-                host = hostnames.get(ch.host_id, ch.host_id)
+                host = str(hostnames.get(ch.host_id, ch.host_id))
+                category = job.failure_category or "unknown"
                 _stop_campaign(
-                    db, c, reason=f"{job.failure_category or 'unknown'} on {host}", now=now
+                    db, c, reason=f"{category} on {host}", now=now
                 )
-                return True, completed_stages
+                return True, completed_stages, category, host
         ch.updated_at = now
 
         stage_rows = [r for r in ch_rows if r.stage_index == ch.stage_index]
         if all(r.state not in _ACTIVE for r in stage_rows):
             completed_stages.append(ch.stage_index)
 
-    return False, completed_stages
+    return False, completed_stages, None, None
 
 
 def _fill_stage(
@@ -199,6 +203,102 @@ def _fill_stage(
     return created
 
 
+def _step(
+    db: Session,
+    c: Campaign,
+    ch_rows: list[CampaignHost],
+    jobs: dict[uuid.UUID, Job],
+    hostnames: dict[uuid.UUID, str],
+    now: datetime,
+) -> Outcome:
+    halted, completed_stages, halt_category, halt_host = _reconcile(
+        db, c, ch_rows, jobs, hostnames, now
+    )
+    if halted:
+        return Outcome(
+            "stopped",
+            tuple(completed_stages),
+            stop_reason=c.halt_reason,
+            stop_category=halt_category,
+            stop_host=halt_host,
+        )
+
+    skipped = sum(1 for r in ch_rows if r.state == "skipped")
+    if skipped > c.max_failures:
+        _stop_campaign(db, c, reason="max_failures exceeded", now=now)
+        return Outcome(
+            "stopped", tuple(completed_stages), stop_reason="max_failures exceeded"
+        )
+
+    stage = _active_stage(ch_rows, jobs, c, now)
+    if stage is None:
+        c.status = "completed"
+        c.completed_at = now
+        c.updated_at = now
+        return Outcome("completed", tuple(completed_stages))
+
+    created = _fill_stage(db, c, stage, ch_rows, hostnames, now)
+    c.updated_at = now
+    return Outcome(
+        "filled" if created else "waiting", tuple(completed_stages), jobs_created=created
+    )
+
+
+def _counts(rows: list[CampaignHost]) -> dict:
+    states = [r.state for r in rows]
+    return {
+        "hosts_total": len(states),
+        "hosts_done": states.count("done"),
+        "hosts_skipped": states.count("skipped"),
+        "hosts_orphaned": states.count("orphaned"),
+    }
+
+
+def _emit_events(
+    db: Session,
+    c: Campaign,
+    ch_rows: list[CampaignHost],
+    outcome: Outcome,
+    now: datetime,
+) -> None:
+    """Stage the webhook deliveries for this tick's transitions, in the same
+    transaction as the state change (enqueue_event does not commit). Counts come
+    from the post-mutation ch_rows, not a re-query (autoflush is off). Inert
+    when webhooks are off or nothing subscribes."""
+    base = {"campaign_id": str(c.id), "name": c.name}
+
+    for idx in outcome.stages_completed:
+        stage_rows = [r for r in ch_rows if r.stage_index == idx]
+        enqueue_event(
+            db,
+            "campaign.stage_completed",
+            {**base, "stage_index": idx, **_counts(stage_rows)},
+            occurred_at=now,
+        )
+
+    if outcome.kind == "completed":
+        enqueue_event(
+            db,
+            "campaign.completed",
+            {**base, "status": "completed", **_counts(ch_rows)},
+            occurred_at=now,
+        )
+    elif outcome.kind == "stopped":
+        enqueue_event(
+            db,
+            "campaign.stopped",
+            {
+                **base,
+                "status": "stopped",
+                "reason": outcome.stop_reason,
+                "halt_category": outcome.stop_category,
+                "halt_host": outcome.stop_host,
+                **_counts(ch_rows),
+            },
+            occurred_at=now,
+        )
+
+
 def _advance_one(db: Session, c: Campaign, now: datetime) -> Outcome:
     ch_rows = (
         db.execute(select(CampaignHost).where(CampaignHost.campaign_id == c.id))
@@ -224,31 +324,9 @@ def _advance_one(db: Session, c: Campaign, now: datetime) -> Outcome:
         ).all()
     )
 
-    halted, completed_stages = _reconcile(db, c, ch_rows, jobs, hostnames, now)
-    if halted:
-        return Outcome(
-            "stopped", tuple(completed_stages), stop_reason=c.halt_reason
-        )
-
-    skipped = sum(1 for r in ch_rows if r.state == "skipped")
-    if skipped > c.max_failures:
-        _stop_campaign(db, c, reason="max_failures exceeded", now=now)
-        return Outcome(
-            "stopped", tuple(completed_stages), stop_reason="max_failures exceeded"
-        )
-
-    stage = _active_stage(ch_rows, jobs, c, now)
-    if stage is None:
-        c.status = "completed"
-        c.completed_at = now
-        c.updated_at = now
-        return Outcome("completed", tuple(completed_stages))
-
-    created = _fill_stage(db, c, stage, ch_rows, hostnames, now)
-    c.updated_at = now
-    return Outcome(
-        "filled" if created else "waiting", tuple(completed_stages), jobs_created=created
-    )
+    outcome = _step(db, c, ch_rows, jobs, hostnames, now)
+    _emit_events(db, c, ch_rows, outcome, now)
+    return outcome
 
 
 def advance_campaigns(now: datetime | None = None, db: Session | None = None) -> int:

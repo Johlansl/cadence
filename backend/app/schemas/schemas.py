@@ -34,14 +34,17 @@ PolicyScope = Literal["global", "host"]
 
 # Event names a webhook can subscribe to. 'webhook.test' is deliberately not
 # here: it is never subscribable, only ever sent to one explicitly targeted
-# endpoint. Campaign events will be added later; the DB column stays free text
-# so that needs no migration.
+# endpoint. The DB column (webhooks.event_types) is free text, so adding a name
+# needs no migration.
 WebhookEventType = Literal[
     "job.succeeded",
     "job.failed",
     "host.offline",
     "host.reboot_required",
     "host.security_updates_available",
+    "campaign.stage_completed",
+    "campaign.completed",
+    "campaign.stopped",
 ]
 
 

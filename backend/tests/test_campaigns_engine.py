@@ -14,8 +14,8 @@ from sqlalchemy import select
 
 from app.campaigns import engine
 from app.campaigns.engine import advance_campaigns
-from app.models.models import Campaign, CampaignHost, Host, Job
-from tests.conftest import ADMIN_HEADERS
+from app.models.models import Campaign, CampaignHost, Host, Job, WebhookDelivery
+from tests.conftest import ADMIN_HEADERS, webhook_row
 
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
 
@@ -262,6 +262,52 @@ def test_paused_campaign_is_not_touched(client, db_session):
 
     assert _ch(db_session, cid, a.id).state == "running"  # not reconciled while paused
     assert _status(db_session, cid) == "paused"
+
+
+def _deliveries(db_session, event_type):
+    return (
+        db_session.execute(
+            select(WebhookDelivery).where(WebhookDelivery.event_type == event_type)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def test_emits_stage_completed_and_completed_events(client, db_session):
+    webhook_row(
+        db_session,
+        events=("campaign.stage_completed", "campaign.completed", "campaign.stopped"),
+    )
+    cid, hs = _running(
+        client, db_session, ["a", "b"], [1, "rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    _finish(db_session, cid, hs[1].id, at=NOW + timedelta(seconds=1))
+    advance_campaigns(now=NOW + timedelta(seconds=2), db=db_session)
+
+    stage_evts = _deliveries(db_session, "campaign.stage_completed")
+    assert sorted(d.payload["data"]["stage_index"] for d in stage_evts) == [0, 1]
+    completed = _deliveries(db_session, "campaign.completed")
+    assert len(completed) == 1
+    assert completed[0].payload["data"]["hosts_done"] == 2
+    assert _deliveries(db_session, "campaign.stopped") == []
+
+
+def test_emits_stopped_event_with_halt_category_and_host(client, db_session):
+    webhook_row(db_session, events=("campaign.stopped",))
+    cid, (a,) = _running(client, db_session, ["a"], ["rest"], max_failures=5)
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, a.id, status="failed", category="network_or_repo", at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+
+    (evt,) = _deliveries(db_session, "campaign.stopped")
+    data = evt.payload["data"]
+    assert data["halt_category"] == "network_or_repo"
+    assert data["halt_host"] == "a"
+    assert "network_or_repo" in data["reason"]
 
 
 def test_one_campaigns_error_does_not_block_the_others(client, db_session, monkeypatch):

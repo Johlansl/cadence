@@ -25,6 +25,9 @@ WEBHOOK_EVENT_TYPES: tuple[str, ...] = (
     "host.offline",
     "host.reboot_required",
     "host.security_updates_available",
+    "campaign.stage_completed",
+    "campaign.completed",
+    "campaign.stopped",
 )
 TEST_EVENT_TYPE = "webhook.test"
 
