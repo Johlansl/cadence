@@ -1,9 +1,11 @@
 """Migration 0016 (campaigns): up/down/up round-trip, and every table CHECK.
 
 The round-trip builds its own throwaway database (like test_prestart.py) and
-drives alembic to head, back to 0015, and up again. The CHECK tests run against
-the rolled-back cadence_test session; each expected rejection is wrapped in a
-SAVEPOINT so the session stays usable for the next assertion.
+drives alembic to 0016, back to 0015, and up to 0016 again (pinned to 0016,
+not "head", so a later migration does not change what this file tests). The
+CHECK tests run against the rolled-back cadence_test session; each expected
+rejection is wrapped in a SAVEPOINT so the session stays usable for the next
+assertion.
 """
 
 from __future__ import annotations
@@ -76,7 +78,7 @@ def test_0016_up_down_up_round_trip(throwaway_db):
 
     cfg = _alembic_config()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0016")
     assert _reflect(throwaway_db) == {
         "campaigns": True,
         "campaign_hosts": True,
@@ -94,7 +96,7 @@ def test_0016_up_down_up_round_trip(throwaway_db):
         "revision": "0015",
     }
 
-    command.upgrade(cfg, "head")  # re-upgrading a downgraded DB must be clean
+    command.upgrade(cfg, "0016")  # re-upgrading a downgraded DB must be clean
     assert _reflect(throwaway_db)["revision"] == "0016"
 
 

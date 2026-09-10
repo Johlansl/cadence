@@ -295,11 +295,13 @@ class SchedulerState(Base):
 class PackageExclusion(Base):
     """An operator rule: never auto-upgrade packages matching `pattern` (a
     glob). `scope='global'` applies to every host; `scope='host'` applies to
-    `host_id` only. Additive across scopes, no re-inclusion, no tag scope yet
-    (roadmap item 6). The server resolves `pattern` to exact package names
-    against the host's known inventory at job-creation time; the pattern
-    itself never reaches the agent. See migration 0015. Create/delete only,
-    no in-place edit."""
+    `host_id` only; `scope='tag'` applies to every host carrying `tag` (a
+    "key" / "key=value" query, matched like `GET /hosts?tag=`), roadmap item
+    6. Additive across the three scopes: a host sees the union, no re-inclusion,
+    no priority. Exactly one selector column is set per scope (DB CHECK). The
+    server resolves `pattern` to exact package names against the host's known
+    inventory at job-creation time; the pattern itself never reaches the agent.
+    See migrations 0015 and 0017. Create/delete only, no in-place edit."""
 
     __tablename__ = "package_exclusions"
 
@@ -310,6 +312,8 @@ class PackageExclusion(Base):
     host_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("hosts.id", ondelete="CASCADE")
     )
+    # Set iff scope='tag'. A "key" or "key=value" query (see app.tag_filter).
+    tag: Mapped[str | None] = mapped_column(Text)
     pattern: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

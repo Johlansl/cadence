@@ -59,6 +59,7 @@ def create_exclusion(
     row = PackageExclusion(
         scope=payload.scope,
         host_id=payload.host_id,
+        tag=payload.tag,
         pattern=payload.pattern,
         description=payload.description,
     )
@@ -73,6 +74,7 @@ def create_exclusion(
         detail={
             "scope": row.scope,
             "host_id": str(row.host_id) if row.host_id else None,
+            "tag": row.tag,
             "pattern": row.pattern,
         },
     )
@@ -100,6 +102,7 @@ def delete_exclusion(
         detail={
             "scope": row.scope,
             "host_id": str(row.host_id) if row.host_id else None,
+            "tag": row.tag,
             "pattern": row.pattern,
         },
     )

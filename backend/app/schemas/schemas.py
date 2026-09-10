@@ -27,10 +27,10 @@ RebootMode = Literal["auto", "never", "prompt"]
 # only when campaigns (item 5) add job types.
 JobType = Literal["apt_upgrade", "reboot", "apt_dry_run"]
 
-# Scope of a package_exclusions rule: every host, or one named host. A
-# genuinely small, closed set (unlike JobType/failure category), gets a DB
-# CHECK (migration 0015). No tag scope yet -- roadmap item 6.
-PolicyScope = Literal["global", "host"]
+# Scope of a package_exclusions rule: every host, one named host, or every
+# host carrying a tag (roadmap item 6). A genuinely small, closed set (unlike
+# JobType/failure category), gets a DB CHECK (migrations 0015, 0017).
+PolicyScope = Literal["global", "host", "tag"]
 
 # Event names a webhook can subscribe to. 'webhook.test' is deliberately not
 # here: it is never subscribable, only ever sent to one explicitly targeted
@@ -506,11 +506,14 @@ _PATTERN_RE = re.compile(r"^[A-Za-z0-9+.*?_-]+$")
 
 
 class PackageExclusionCreate(BaseModel):
-    """A new hold rule. `host_id` is required iff scope='host', forbidden
-    otherwise -- validated here (early 422) and again by the DB CHECK."""
+    """A new hold rule. Exactly one selector is set for the scope: `host_id`
+    iff scope='host', `tag` iff scope='tag', neither iff scope='global' --
+    validated here (early 422) and again by the DB CHECK. `tag` is a "key" /
+    "key=value" query, stored lowercased to match host-tag storage."""
 
     scope: PolicyScope
     host_id: uuid.UUID | None = None
+    tag: str | None = Field(default=None, max_length=121)
     pattern: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=200)
 
@@ -525,12 +528,34 @@ class PackageExclusionCreate(BaseModel):
             )
         return v
 
+    @field_validator("tag")
+    @classmethod
+    def _tag(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("tag must not be empty")
+        if "=" in v:
+            key, value = v.split("=", 1)
+            if not key or not value:
+                raise ValueError('tag "key=value" needs a non-empty key and value')
+        return v
+
     @model_validator(mode="after")
     def _scope_host(self) -> "PackageExclusionCreate":
-        if self.scope == "global" and self.host_id is not None:
-            raise ValueError("host_id must not be set when scope='global'")
-        if self.scope == "host" and self.host_id is None:
-            raise ValueError("host_id is required when scope='host'")
+        if self.scope == "global" and (self.host_id is not None or self.tag is not None):
+            raise ValueError("host_id and tag must not be set when scope='global'")
+        if self.scope == "host":
+            if self.host_id is None:
+                raise ValueError("host_id is required when scope='host'")
+            if self.tag is not None:
+                raise ValueError("tag must not be set when scope='host'")
+        if self.scope == "tag":
+            if self.tag is None:
+                raise ValueError("tag is required when scope='tag'")
+            if self.host_id is not None:
+                raise ValueError("host_id must not be set when scope='tag'")
         return self
 
 
@@ -540,6 +565,7 @@ class PackageExclusionOut(BaseModel):
     id: uuid.UUID
     scope: PolicyScope
     host_id: uuid.UUID | None
+    tag: str | None
     pattern: str
     description: str | None
     created_at: datetime
