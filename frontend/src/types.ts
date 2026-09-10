@@ -132,6 +132,9 @@ export type WebhookEvent =
   | 'host.offline'
   | 'host.reboot_required'
   | 'host.security_updates_available'
+  | 'campaign.stage_completed'
+  | 'campaign.completed'
+  | 'campaign.stopped'
 
 export interface Webhook {
   id: string
@@ -224,4 +227,73 @@ export interface Job {
   created_at: string
   started_at: string | null
   completed_at: string | null
+}
+
+// --- campaigns (roadmap item 5) ---
+
+export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed' | 'stopped' | 'cancelled'
+
+export type CampaignHostState = 'pending' | 'running' | 'done' | 'skipped' | 'orphaned'
+
+// A wave size: a positive integer (absolute), "N%" (percent of the target
+// count), or "rest" (all remaining, last only).
+export type StageSize = number | string
+
+export interface Campaign {
+  id: string
+  name: string
+  job_type: string
+  stages: StageSize[]
+  max_concurrency: number
+  max_failures: number
+  observation_window_seconds: number
+  status: CampaignStatus
+  halt_reason: string | null
+  requested_by: string | null
+  hosts_total: number
+  hosts_done: number
+  hosts_skipped: number
+  hosts_orphaned: number
+  current_stage_index: number | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  updated_at: string
+}
+
+export interface CampaignStageDetail {
+  index: number
+  size_spec: StageSize
+  hosts_total: number
+  pending: number
+  running: number
+  done: number
+  skipped: number
+  orphaned: number
+}
+
+export interface CampaignHost {
+  host_id: string
+  hostname: string
+  stage_index: number
+  state: CampaignHostState
+  skip_reason: string | null
+  job_id: string | null
+}
+
+export interface CampaignDetail extends Campaign {
+  stages_detail: CampaignStageDetail[]
+  hosts: CampaignHost[]
+}
+
+// Exactly one of host_ids / tag is sent; observation_window_seconds omitted
+// means "use the server default".
+export interface CampaignInput {
+  name: string
+  stages: StageSize[]
+  max_concurrency: number
+  max_failures: number
+  observation_window_seconds?: number | null
+  host_ids?: string[]
+  tag?: string | null
 }

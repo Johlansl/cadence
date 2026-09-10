@@ -55,3 +55,57 @@ describe('adminWrite error handling', () => {
     expect(r.detail).toBe('Request failed (500).')
   })
 })
+
+describe('campaign endpoints', () => {
+  it('createCampaign POSTs the body with the admin key', async () => {
+    const fn = installFetchMock({
+      'POST /api/v1/admin/campaigns': { status: 201, body: { id: 'c1', status: 'draft' } },
+    })
+
+    const r = await api.createCampaign('adm', {
+      name: 'march',
+      stages: [1, 'rest'],
+      max_concurrency: 2,
+      max_failures: 1,
+      tag: 'env=prod',
+    })
+
+    expect(r.ok).toBe(true)
+    const [, init] = fn.mock.calls[0]
+    expect(new Headers(init?.headers).get('X-Admin-Key')).toBe('adm')
+    expect(JSON.parse(init?.body as string)).toEqual({
+      name: 'march',
+      stages: [1, 'rest'],
+      max_concurrency: 2,
+      max_failures: 1,
+      tag: 'env=prod',
+    })
+  })
+
+  it('campaignAction hits /admin/campaigns/{id}/{action}', async () => {
+    const fn = installFetchMock({
+      'POST *': { status: 200, body: { id: 'c1', status: 'running' } },
+    })
+
+    await api.campaignAction('c1', 'adm', 'activate')
+    await api.campaignAction('c1', 'adm', 'cancel')
+
+    expect(String(fn.mock.calls[0][0])).toBe('/api/v1/admin/campaigns/c1/activate')
+    expect(String(fn.mock.calls[1][0])).toBe('/api/v1/admin/campaigns/c1/cancel')
+  })
+
+  it('listCampaigns / getCampaign are plain GETs', async () => {
+    const fn = installFetchMock({
+      'GET /api/v1/campaigns': { body: [] },
+      'GET /api/v1/campaigns/c1': { body: { id: 'c1' } },
+    })
+
+    await api.listCampaigns()
+    await api.getCampaign('c1')
+
+    expect(fn.mock.calls.map((c) => String(c[0]))).toEqual([
+      '/api/v1/campaigns',
+      '/api/v1/campaigns/c1',
+    ])
+  })
+})

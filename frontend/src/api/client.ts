@@ -1,4 +1,7 @@
 import type {
+  Campaign,
+  CampaignDetail,
+  CampaignInput,
   FleetSummary,
   HostDetail,
   HostSummary,
@@ -225,5 +228,17 @@ export const api = {
       'DELETE',
       undefined,
     )
+  },
+
+  listCampaigns: () => getJSON<Campaign[]>('/campaigns'),
+  getCampaign: (id: string) => getJSON<CampaignDetail>(`/campaigns/${id}`),
+
+  createCampaign(adminKey: string, body: CampaignInput) {
+    return adminWrite<CampaignDetail>('/admin/campaigns', adminKey, 'POST', body)
+  },
+
+  // draft -> running; also pause / resume / cancel. Body-less POSTs.
+  campaignAction(id: string, adminKey: string, action: 'activate' | 'pause' | 'resume' | 'cancel') {
+    return adminWrite<CampaignDetail>(`/admin/campaigns/${id}/${action}`, adminKey, 'POST', {})
   },
 }
