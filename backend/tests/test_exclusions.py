@@ -99,6 +99,28 @@ def test_list_scoped_to_a_host_includes_global(client):
     assert {row["pattern"] for row in r.json()} == {"docker-ce", "postgresql-14", "nvidia*"}
 
 
+def test_list_scoped_to_a_host_includes_matching_tag_rules(client):
+    host_id, _ = create_host(client)
+    client.patch(
+        f"/api/v1/admin/hosts/{host_id}",
+        headers=ADMIN_HEADERS,
+        json={"tags": {"role": "web"}},
+    )
+    _create(client, pattern="docker-ce")  # global
+    _create(client, scope="tag", tag="role=web", pattern="nginx")  # applies
+    _create(client, scope="tag", tag="role=db", pattern="postgresql-14")  # does not
+
+    patterns = {
+        row["pattern"]
+        for row in client.get(f"/api/v1/package-exclusions?host_id={host_id}").json()
+    }
+    assert patterns == {"docker-ce", "nginx"}
+
+    # unfiltered still shows every rule
+    patterns = {row["pattern"] for row in client.get("/api/v1/package-exclusions").json()}
+    assert patterns == {"docker-ce", "nginx", "postgresql-14"}
+
+
 def test_get_single_and_404(client):
     eid = _create(client).json()["id"]
     assert client.get(f"/api/v1/package-exclusions/{eid}").status_code == 200

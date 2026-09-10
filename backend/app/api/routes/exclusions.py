@@ -19,6 +19,7 @@ from app.api.audit import record_audit
 from app.api.deps import get_db, require_admin_key
 from app.models.models import Host, PackageExclusion
 from app.schemas.schemas import PackageExclusionCreate, PackageExclusionOut
+from app.tag_filter import tag_matches
 
 router = APIRouter(prefix="/api/v1", tags=["exclusions"])
 admin_router = APIRouter(
@@ -31,11 +32,26 @@ def list_exclusions(
     host_id: uuid.UUID | None = None, db: Session = Depends(get_db)
 ) -> list[PackageExclusion]:
     stmt = select(PackageExclusion).order_by(PackageExclusion.created_at)
-    if host_id is not None:
-        stmt = stmt.where(
-            (PackageExclusion.scope == "global") | (PackageExclusion.host_id == host_id)
+    if host_id is None:
+        return list(db.execute(stmt).scalars().all())
+
+    # Filtered to one host: the same set app.exclusions.patterns_for_host
+    # resolves -- global rules, this host's own rules, and every tag rule
+    # whose tag the host carries. An unknown host_id simply has no tags.
+    host = db.get(Host, host_id)
+    host_tags = (host.tags or {}) if host is not None else {}
+    rows = db.execute(
+        stmt.where(
+            (PackageExclusion.scope == "global")
+            | (PackageExclusion.host_id == host_id)
+            | (PackageExclusion.scope == "tag")
         )
-    return list(db.execute(stmt).scalars().all())
+    ).scalars().all()
+    return [
+        row
+        for row in rows
+        if row.scope != "tag" or tag_matches(row.tag or "", host_tags)
+    ]
 
 
 @router.get("/package-exclusions/{exclusion_id}", response_model=PackageExclusionOut)
