@@ -16,7 +16,7 @@ from app.api.deps import get_db, require_admin_key
 from app.api.pagination import before_keyset
 from app.core.config import settings
 from app.core.crypto import encrypt_token_secret
-from app.exclusions import known_held_for_host, resolve_for_job
+from app.job_creation import create_job_for_host
 from app.models.models import AgentToken, AuditLog, Host, Job
 from app.schemas.schemas import (
     AuditEntry,
@@ -144,41 +144,22 @@ def create_job(
     if db.get(Host, host_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
 
-    # One active job per host: the agent runs them serially and the dashboard
-    # button is disabled while one is in flight.
-    active = db.execute(
-        select(Job.id)
-        .where(Job.host_id == host_id, Job.status.in_(("pending", "running")))
-        .limit(1)
-    ).first()
-    if active is not None:
+    # Shared path (also used by the scheduler and the campaign engine): the
+    # "one active job per host" check and the server-resolved
+    # excluded_packages / known_held_packages injection. None == the host
+    # already has a pending or running job.
+    job = create_job_for_host(
+        db,
+        host_id=host_id,
+        job_type=payload.job_type,
+        params=payload.params,
+        requested_by=payload.requested_by,
+    )
+    if job is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "a job is already pending or running for this host",
         )
-
-    params = dict(payload.params)
-    if payload.job_type in ("apt_upgrade", "apt_dry_run"):
-        # Server-resolved, always wins over whatever the caller sent for this
-        # key: a job's held set must never be able to drift from actual
-        # policy (roadmap item 3). A dry-run gets the same list so its preview
-        # reflects the current exclusion policy (roadmap item 4).
-        params["excluded_packages"] = resolve_for_job(db, host_id)
-    if payload.job_type == "apt_upgrade":
-        # The agent reconciles against this, not a live apt-mark showhold
-        # read, so a hold Cadence has never itself recorded is never touched
-        # (roadmap item 3 follow-up). A dry-run never reconciles, so it does
-        # not need this.
-        params["known_held_packages"] = known_held_for_host(db, host_id)
-
-    job = Job(
-        host_id=host_id,
-        job_type=payload.job_type,
-        params=params,
-        requested_by=payload.requested_by,
-    )
-    db.add(job)
-    db.flush()  # populate job.id for the audit row
     record_audit(
         db, request, "job.create", target_type="job", target_id=job.id,
         detail={

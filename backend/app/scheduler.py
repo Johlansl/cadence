@@ -27,7 +27,7 @@ from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
 from app.core.staleness import SILENT_AFTER
 from app.db.base import SessionLocal
-from app.exclusions import known_held_for_host, resolve_for_job
+from app.job_creation import create_job_for_host
 from app.models.models import (
     AgentToken,
     AuditLog,
@@ -90,23 +90,16 @@ def tick(now: datetime | None = None, db: Session | None = None) -> int:
             .all()
         )
         for sched in due:
-            has_active_job = db.execute(
-                select(Job.id)
-                .where(Job.host_id == sched.host_id, Job.status.in_(("pending", "running")))
-                .limit(1)
-            ).first()
-            if has_active_job is None:
-                params = dict(sched.params)
-                params["excluded_packages"] = resolve_for_job(db, sched.host_id)
-                params["known_held_packages"] = known_held_for_host(db, sched.host_id)
-                db.add(
-                    Job(
-                        host_id=sched.host_id,
-                        job_type="apt_upgrade",
-                        params=params,
-                        requested_by="scheduler",
-                    )
-                )
+            # Shared job-creation path: same active-job check and
+            # excluded_packages / known_held_packages injection as the admin
+            # route. None == the host already has a pending/running job.
+            job = create_job_for_host(
+                db,
+                host_id=sched.host_id,
+                params=dict(sched.params),
+                requested_by="scheduler",
+            )
+            if job is not None:
                 sched.last_run_at = now
                 queued += 1
                 log.info(
