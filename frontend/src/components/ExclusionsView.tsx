@@ -52,7 +52,8 @@ export function ExclusionsView() {
         Packages matching a rule here are never touched by an apt_upgrade job: Cadence holds them
         (dpkg <span className="font-mono text-[11px]">apt-mark hold</span>) and re-aligns dpkg's
         hold state to these rules on every run. Global rules apply everywhere; host rules apply to
-        one host, in addition to any global rule.
+        one host; tag rules apply to every host carrying that tag. All three add up, on top of each
+        other.
       </p>
 
       <CreateForm hosts={hosts} onCreated={refresh} />
@@ -79,6 +80,7 @@ export function ExclusionsView() {
 function CreateForm({ hosts, onCreated }: { hosts: HostSummary[]; onCreated: () => void }) {
   const [scope, setScope] = useState<PolicyScope>('global')
   const [hostId, setHostId] = useState('')
+  const [tag, setTag] = useState('')
   const [pattern, setPattern] = useState('')
   const [description, setDescription] = useState('')
   const toast = useToast()
@@ -87,6 +89,7 @@ function CreateForm({ hosts, onCreated }: { hosts: HostSummary[]; onCreated: () 
     api.createExclusion(key, {
       scope,
       host_id: scope === 'host' ? hostId : null,
+      tag: scope === 'tag' ? tag.trim() : null,
       pattern: pattern.trim(),
       description: description.trim() || null,
     }),
@@ -97,13 +100,18 @@ function CreateForm({ hosts, onCreated }: { hosts: HostSummary[]; onCreated: () 
     if (r?.ok) {
       setPattern('')
       setDescription('')
+      setTag('')
       toast.notify('success', 'Exclusion rule created.')
       onCreated()
     }
   }
 
   const canSubmit =
-    pattern.trim().length > 0 && (scope === 'global' || hostId !== '') && !creator.busy
+    pattern.trim().length > 0 &&
+    (scope === 'global' ||
+      (scope === 'host' && hostId !== '') ||
+      (scope === 'tag' && tag.trim() !== '')) &&
+    !creator.busy
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
@@ -119,6 +127,7 @@ function CreateForm({ hosts, onCreated }: { hosts: HostSummary[]; onCreated: () 
           >
             <option value="global">global (every host)</option>
             <option value="host">one host</option>
+            <option value="tag">hosts with a tag</option>
           </select>
           {scope === 'host' && (
             <select
@@ -134,6 +143,16 @@ function CreateForm({ hosts, onCreated }: { hosts: HostSummary[]; onCreated: () 
                 </option>
               ))}
             </select>
+          )}
+          {scope === 'tag' && (
+            <input
+              type="text"
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              placeholder='"role=web" or "web"'
+              aria-label="Tag"
+              className={`${field} font-mono`}
+            />
           )}
         </div>
         <input
@@ -204,8 +223,20 @@ function ExclusionRow({
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 bg-zinc-900/40 px-3 py-1.5">
         <span className="truncate font-mono text-xs text-zinc-200">{exclusion.pattern}</span>
         <div className="flex items-center gap-2">
-          <span className={pill(exclusion.scope === 'global' ? 'info' : 'neutral')}>
-            {exclusion.scope === 'global' ? 'global' : hostname}
+          <span
+            className={pill(
+              exclusion.scope === 'global'
+                ? 'info'
+                : exclusion.scope === 'tag'
+                  ? 'warn'
+                  : 'neutral',
+            )}
+          >
+            {exclusion.scope === 'global'
+              ? 'global'
+              : exclusion.scope === 'tag'
+                ? `tag: ${exclusion.tag}`
+                : hostname}
           </span>
           <button
             type="button"

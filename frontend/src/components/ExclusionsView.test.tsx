@@ -10,6 +10,7 @@ function exclusion(over: Partial<PackageExclusion> = {}): PackageExclusion {
     id: 'ex1',
     scope: 'global',
     host_id: null,
+    tag: null,
     pattern: 'linux-image*',
     description: null,
     created_at: '2026-09-01T00:00:00Z',
@@ -70,6 +71,21 @@ describe('ExclusionsView', () => {
     expect(screen.getByText('vm-japp')).toBeInTheDocument() // host-scoped row shows the hostname
   })
 
+  it('lists a tag-scoped rule', async () => {
+    installFetchMock({
+      [LIST]: {
+        body: [
+          exclusion({ id: 'ex3', scope: 'tag', host_id: null, tag: 'role=web', pattern: 'nginx*' }),
+        ],
+      },
+      [HOSTS]: { body: [] },
+    })
+    renderWithProviders(<ExclusionsView />)
+
+    expect(await screen.findByText('nginx*')).toBeInTheDocument()
+    expect(screen.getByText('tag: role=web')).toBeInTheDocument()
+  })
+
   it('shows the empty state', async () => {
     installFetchMock({ [LIST]: { body: [] }, [HOSTS]: { body: [] } })
     renderWithProviders(<ExclusionsView />)
@@ -114,6 +130,38 @@ describe('ExclusionsView', () => {
 
     await userEvent.selectOptions(await screen.findByLabelText('Host'), 'h1')
     expect(screen.getByRole('button', { name: 'create' })).toBeEnabled()
+  })
+
+  it('creates a tag-scoped rule', async () => {
+    sessionStorage.setItem('cadence.adminKey', 'sekret')
+    const fetchMock = installFetchMock({
+      [LIST]: { body: [] },
+      [HOSTS]: { body: [] },
+      'POST /api/v1/admin/package-exclusions': {
+        status: 201,
+        body: exclusion({ scope: 'tag', tag: 'role=web', pattern: 'nginx*' }),
+      },
+    })
+    renderWithProviders(<ExclusionsView />)
+    await screen.findByText('No exclusion rules configured.')
+
+    await userEvent.type(screen.getByLabelText('Pattern'), 'nginx*')
+    await userEvent.selectOptions(screen.getByLabelText('Scope'), 'tag')
+    const createBtn = screen.getByRole('button', { name: 'create' })
+    expect(createBtn).toBeDisabled()
+
+    await userEvent.type(await screen.findByLabelText('Tag'), 'role=web')
+    expect(createBtn).toBeEnabled()
+    await userEvent.click(createBtn)
+
+    expect(await screen.findByText('Exclusion rule created.')).toBeInTheDocument()
+    const [, init] = fetchMock.mock.calls.find(([, i]) => i?.method === 'POST')!
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      scope: 'tag',
+      host_id: null,
+      tag: 'role=web',
+      pattern: 'nginx*',
+    })
   })
 
   it('deletes a rule after confirmation', async () => {

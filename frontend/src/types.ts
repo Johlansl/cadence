@@ -169,12 +169,13 @@ export interface WebhookCreated {
   created_at: string
 }
 
-export type PolicyScope = 'global' | 'host'
+export type PolicyScope = 'global' | 'host' | 'tag'
 
 export interface PackageExclusion {
   id: string
   scope: PolicyScope
   host_id: string | null
+  tag: string | null
   pattern: string
   description: string | null
   created_at: string
@@ -183,6 +184,7 @@ export interface PackageExclusion {
 export interface PackageExclusionInput {
   scope: PolicyScope
   host_id: string | null
+  tag: string | null
   pattern: string
   description: string | null
 }
