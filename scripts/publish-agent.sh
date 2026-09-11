@@ -1,13 +1,14 @@
 #!/bin/sh
-# Build the agent and stage everything the one-liner installer serves.
+# Build the agent and stage everything the authenticated installer fetches.
 #
 # Run on the central server, from a checkout of this repo, with the stack up
 # (the CA is read from the running caddy container).
 #
 #   scripts/publish-agent.sh
 #
-# Populates ./dist (mounted read-only into caddy at /srv/dist), which Caddy
-# serves over plain HTTP at:
+# Populates ./dist (mounted read-only into caddy at /srv/dist). Caddy serves
+# only /agent/ca.crt over HTTP; the installer and all other paths require HTTPS.
+# Staged paths:
 #   /install.sh
 #   /agent/cadence-agent   /agent/cadence-agent.sha256
 #   /agent/cadence-agent.minisig   (only if a signing key is configured)
@@ -96,4 +97,5 @@ docker compose exec -T caddy \
 	cat /data/caddy/pki/authorities/local/root.crt >"$dist/agent/ca.crt"
 
 echo "publish-agent.sh: staged agent $version + CA + units in $dist"
-echo "  test: curl -fsSL http://\${CADENCE_SITE_ADDRESS:-cadence.lan}/install.sh | head"
+echo "  CA bootstrap: http://\${CADENCE_SITE_ADDRESS:-cadence.lan}/agent/ca.crt"
+echo "  remaining assets: https://\${CADENCE_SITE_ADDRESS:-cadence.lan}/"

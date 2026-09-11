@@ -137,47 +137,47 @@ this overlay.
 
 ## Add a monitored host
 
-**1. Register it** (on the server, reads `CADENCE_ADMIN_KEY` from `.env`):
+**1. Stage the agent assets** (once per server, re-run after each agent release):
+
+```sh
+scripts/publish-agent.sh
+```
+
+This publishes the CA at the one intentionally unauthenticated path and every
+executable artifact over HTTPS only.
+
+**2. Create an enrollment code** (on the server, reads `CADENCE_ADMIN_KEY`
+from `.env`):
 
 ```sh
 scripts/provision-host.sh vm-web-01 "web frontend"
 ```
 
-This creates the host, prints the one-time token, and prints the exact install
-command for the host. To do it by hand:
+The code expires after 30 minutes by default, is shown once, and is consumed by
+its first successful use. It contains both a 192-bit secret and the SHA-256
+fingerprint of the exact server CA file the new host must trust. To migrate an
+existing host without replacing its database identity:
 
 ```sh
-curl -s -X POST https://<site>/api/v1/admin/hosts \
-  -H "X-Admin-Key: $CADENCE_ADMIN_KEY" -H 'Content-Type: application/json' \
-  -d '{"hostname":"vm-web-01","description":"web frontend"}'
-# -> {"id":"...","hostname":"vm-web-01","token":"..."}   keep the token
+scripts/provision-host.sh --host-id <existing-host-uuid> vm-web-01
 ```
 
-**2. Stage the agent assets** (once per server, re-run after each agent release):
+**3. Run the trusted bootstrap on the host.** Copy
+`scripts/agent-bootstrap.sh` from the server checkout through an authenticated
+channel such as `scp`; never fetch the bootstrap script itself over HTTP. Then:
 
 ```sh
-scripts/publish-agent.sh          # builds the agent into ./dist, served by Caddy over HTTP
+sudo CADENCE_DASHBOARD_URL=https://<site> ./agent-bootstrap.sh
 ```
 
-**3. Install on the host**, as root, `provision-host.sh` prints this line:
-
-```sh
-curl -fsSL http://<site>/install.sh | sudo CADENCE_TOKEN=<token> sh
-```
-
-The installer trusts the internal CA, installs a reboot-required helper if one
-is available, drops the binary and `systemd` units, writes
-`/etc/cadence/agent.env` (mode 0600), and enables all three timers. The installer and
-binary are fetched over plain HTTP (the host doesn't trust the CA yet) and the
-binary is checksum-verified, see [SECURITY.md](SECURITY.md) for the trust
-model. The existing token in `agent.env` is preserved on re-run, so the same
-command upgrades an already-installed agent.
-
-**Manual install** (no `curl | sh`): trust the CA (below), build the static
-binary (`cd agent && CGO_ENABLED=0 go build -trimpath -o bin/cadence-agent
-./cmd/agent`), copy `bin/cadence-agent` + `agent/systemd/` to the host, run
-`sudo systemd/install.sh`, then edit `/etc/cadence/agent.env`
-(`CADENCE_SERVER_URL`, `CADENCE_TOKEN`).
+Enter the enrollment code only at its prompt. The prelude downloads
+`/agent/ca.crt` over HTTP, hashes its exact bytes, and stops on any mismatch.
+Only after a match does it download the installer, binary, checksum, optional
+minisign signature and systemd units over HTTPS rooted in that CA. The agent
+creates its private ECDSA key locally, receives a 90-day client certificate,
+stores the HMAC token and versioned certificate files under `/etc/cadence`, and
+switches post-enrollment traffic to `https://<site>:8443`. All three timers are
+then enabled.
 
 Verify:
 
@@ -223,29 +223,29 @@ sudo cp cadence-ca.crt /usr/local/share/ca-certificates/
 sudo update-ca-certificates
 ```
 
-The one-liner installer does this for you.
+The fingerprint-pinned bootstrap does this for you.
 
 ### Signed agent releases
 
-The installer fetches the agent over plain HTTP and checks a SHA-256 sum, that
-catches a truncated download but not tampering. `scripts/publish-agent.sh`
+The installer fetches the agent over authenticated HTTPS and also checks a
+SHA-256 sum to catch truncation or staging mistakes. `scripts/publish-agent.sh`
 [minisign](https://jedisct1.github.io/minisign/)-signs every release
 (`cadence-agent.minisig` beside the binary); with `agent/minisign.pub`
 committed it refuses to publish unsigned.
 
-For tamper-evidence at install time, install `minisign` on the host first
-(`apt-get install -y minisign` on Debian/Ubuntu) and pass the public key,
-**out of band**, not over the install channel, to the installer:
+For an additional release-signing check, install `minisign` on the host first
+(`apt-get install -y minisign` on Debian/Ubuntu), transfer the public key out of
+band and set it while running the trusted bootstrap:
 
 ```sh
-curl -fsSL http://cadence.lan/install.sh \
-  | sudo CADENCE_TOKEN=<token> CADENCE_MINISIGN_PUB="$(cat agent/minisign.pub)" sh
+sudo CADENCE_DASHBOARD_URL=https://cadence.lan \
+  CADENCE_MINISIGN_PUB="$(cat agent/minisign.pub)" ./agent-bootstrap.sh
 ```
 
 A missing or invalid signature then aborts the install; if `minisign` is not
-installed the installer stops and tells you to install it. Without
-`CADENCE_MINISIGN_PUB` the installer uses the SHA-256 check only, the default,
-no `minisign` needed, sufficient for the trusted-LAN target.
+installed the installer stops and tells you to install it. Minisign is an
+extra release-authenticity layer; server authentication already comes from the
+CA fingerprint carried in the enrollment code.
 
 Back up the (passwordless) signing key with `scripts/backup-signing-key.sh`, it
 writes a passphrase-protected copy that `scripts/backup.sh` then includes in

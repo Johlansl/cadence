@@ -115,23 +115,28 @@ equivalent too). A signed request's timestamp window
 not full replay protection: a request captured inside that window could be
 resent once, verbatim, before it expires. No nonce/replay tracking yet.
 
-### Agent bootstrap is trust-on-first-use over plain HTTP
+### Agent bootstrap pins trust before executing downloaded code
 
-`scripts/agent-install.sh` (the `curl … | sudo sh` one-liner) fetches the agent
-binary, its SHA-256 checksum, **and** the internal CA certificate over the same
-**unauthenticated HTTP** channel (they have to be reachable before the host
-trusts the CA). The checksum only guards against transport corruption, not
-tampering: an attacker who can MITM that request can replace all three. This is
-acceptable on a trusted LAN, the documented target, and risky anywhere else.
-For a hostile network, transfer the CA and binary out of band and verify a
-fingerprint you obtained separately.
+An enrollment code is manually transferred to the target host. Its single
+string contains both a 192-bit authentication secret and the SHA-256
+fingerprint of the exact Caddy server-CA file. It expires after 30 minutes by
+default and the backend consumes it atomically on the first successful use.
 
-The binary is tamper-evident: `scripts/publish-agent.sh` minisign-signs every
-release (see [README](README.md#signed-agent-releases)). Pass the public key,
-`agent/minisign.pub`, distributed **out of band**, not over the install channel,
-to the installer as `CADENCE_MINISIGN_PUB`, and a bad or missing signature
-aborts the install. Without it the installer uses the SHA-256 check only (the
-LAN-target default). The CA certificate is still TOFU either way.
+`scripts/agent-bootstrap.sh` must itself arrive through an authenticated
+channel, such as `scp` from the server checkout or the authenticated dashboard.
+It downloads only `/agent/ca.crt` over unauthenticated HTTP, verifies its exact
+bytes against the fingerprint in the code, and aborts on a mismatch. The
+installer, agent binary, checksum, optional minisign signature and systemd
+units are fetched only afterwards, over HTTPS rooted in that verified CA. The
+enrollment secret is therefore never sent before the server has been
+authenticated, and no script obtained over HTTP gets to decide whether the
+fingerprint check runs.
+
+The agent generates its ECDSA P-256 private key locally and sends only a CSR.
+The returned 90-day certificate authenticates the TLS transport on the
+dedicated agent port; the existing per-request HMAC remains required as an
+independent application-authentication layer. Minisign remains available as an
+additional release-signing check, not as the root of first-contact trust.
 
 The pre-built binaries, the `.deb` packages and the container images attached to
 each GitHub Release (`agent-v*` / `v*` tags) are a separate channel and are
