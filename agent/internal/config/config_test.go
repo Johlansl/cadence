@@ -10,8 +10,46 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		"CADENCE_SERVER_URL", "CADENCE_TOKEN", "CADENCE_RUN_APT_UPDATE",
 		"CADENCE_ENABLE_UPGRADES", "CADENCE_ENABLE_REBOOT", "CADENCE_HTTP_TIMEOUT_SECONDS",
+		"CADENCE_CLIENT_CERT_FILE", "CADENCE_CLIENT_KEY_FILE", "CADENCE_SERVER_CA_FILE",
 	} {
 		t.Setenv(k, "")
+	}
+}
+
+func TestLoadClientTLS(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("CADENCE_SERVER_URL", "https://cadence.lan:8443")
+	t.Setenv("CADENCE_TOKEN", "t")
+	t.Setenv("CADENCE_CLIENT_CERT_FILE", "/etc/cadence/client.crt")
+	t.Setenv("CADENCE_CLIENT_KEY_FILE", "/etc/cadence/client.key")
+	t.Setenv("CADENCE_SERVER_CA_FILE", "/etc/cadence/server-ca.crt")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClientCertFile == "" || cfg.ClientKeyFile == "" || cfg.ServerCAFile == "" {
+		t.Fatalf("client TLS paths not loaded: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsPartialOrPlaintextClientTLS(t *testing.T) {
+	for name, values := range map[string][2]string{
+		"partial":   {"https://cadence.lan:8443", ""},
+		"plaintext": {"http://cadence.lan:8443", "/key"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			serverURL, keyFile := values[0], values[1]
+			clearEnv(t)
+			t.Setenv("CADENCE_SERVER_URL", serverURL)
+			t.Setenv("CADENCE_TOKEN", "t")
+			t.Setenv("CADENCE_CLIENT_CERT_FILE", "/cert")
+			t.Setenv("CADENCE_CLIENT_KEY_FILE", keyFile)
+			t.Setenv("CADENCE_SERVER_CA_FILE", "/ca")
+			if _, err := Load(); err == nil {
+				t.Fatal("expected client TLS configuration error")
+			}
+		})
 	}
 }
 

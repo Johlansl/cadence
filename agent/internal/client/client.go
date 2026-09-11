@@ -8,12 +8,15 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -33,6 +36,35 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 		token:   token,
 		hc:      &http.Client{Timeout: timeout},
 	}
+}
+
+// NewMTLS adds transport authentication to the existing per-request HMAC.
+// Both layers remain mandatory: this changes only the HTTP transport used by
+// do(), not the signed-request format.
+func NewMTLS(baseURL, token, certFile, keyFile, caFile string, timeout time.Duration) (*Client, error) {
+	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("loading client TLS certificate: %w", err)
+	}
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading server CA: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("server CA file contains no certificate")
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		RootCAs:      roots,
+		MinVersion:   tls.VersionTLS12,
+	}
+	return &Client{
+		baseURL: baseURL,
+		token:   token,
+		hc:      &http.Client{Timeout: timeout, Transport: transport},
+	}, nil
 }
 
 // SendReport POSTs a regular report to {baseURL}/api/v1/reports and returns

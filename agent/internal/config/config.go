@@ -15,6 +15,9 @@ import (
 type Config struct {
 	ServerURL      string        // CADENCE_SERVER_URL, trailing slash stripped
 	Token          string        // CADENCE_TOKEN
+	ClientCertFile string        // CADENCE_CLIENT_CERT_FILE (optional legacy compatibility)
+	ClientKeyFile  string        // CADENCE_CLIENT_KEY_FILE
+	ServerCAFile   string        // CADENCE_SERVER_CA_FILE
 	RunAptUpdate   bool          // CADENCE_RUN_APT_UPDATE (default false)
 	EnableUpgrades bool          // CADENCE_ENABLE_UPGRADES (default true)
 	EnableReboot   bool          // CADENCE_ENABLE_REBOOT (default true); kill-switch, wins over policy
@@ -42,6 +45,26 @@ func Load() (Config, error) {
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required environment variable(s): %s",
 			strings.Join(missing, ", "))
+	}
+
+	cfg.ClientCertFile = strings.TrimSpace(os.Getenv("CADENCE_CLIENT_CERT_FILE"))
+	cfg.ClientKeyFile = strings.TrimSpace(os.Getenv("CADENCE_CLIENT_KEY_FILE"))
+	cfg.ServerCAFile = strings.TrimSpace(os.Getenv("CADENCE_SERVER_CA_FILE"))
+	tlsValues := []string{cfg.ClientCertFile, cfg.ClientKeyFile, cfg.ServerCAFile}
+	tlsSet := 0
+	for _, value := range tlsValues {
+		if value != "" {
+			tlsSet++
+		}
+	}
+	if tlsSet != 0 && tlsSet != len(tlsValues) {
+		return Config{}, fmt.Errorf("CADENCE_CLIENT_CERT_FILE, CADENCE_CLIENT_KEY_FILE and CADENCE_SERVER_CA_FILE must be set together")
+	}
+	if tlsSet > 0 {
+		u, _ := url.Parse(cfg.ServerURL)
+		if u.Scheme != "https" {
+			return Config{}, fmt.Errorf("CADENCE_SERVER_URL must use https when client TLS credentials are configured")
+		}
 	}
 
 	if v := strings.TrimSpace(os.Getenv("CADENCE_RUN_APT_UPDATE")); v != "" {

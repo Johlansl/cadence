@@ -1,4 +1,4 @@
-// Command agent has three one-shot modes, all driven by systemd timers:
+// Command agent has four one-shot modes. Three are driven by systemd timers:
 //
 //	cadence-agent                    collect package/OS state, POST a report,
 //	                                 and run a job if one is piggybacked
@@ -7,6 +7,8 @@
 //	cadence-agent -health-check-boot ask the server to create-and-claim a
 //	                                 health_check job for this boot and run it
 //	                                 if one is returned
+//	cadence-agent -enroll ...        exchange a manually entered, one-time code
+//	                                 for HMAC and mTLS credentials
 //
 // Communication stays outbound-only; -poll and -health-check-boot are short
 // polls, not long polls. -poll and -health-check-boot are mutually exclusive.
@@ -16,6 +18,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -24,6 +27,7 @@ import (
 	"cadence/agent/internal/client"
 	"cadence/agent/internal/collector"
 	"cadence/agent/internal/config"
+	"cadence/agent/internal/enrollment"
 	"cadence/agent/internal/executor"
 	"cadence/agent/internal/logging"
 	"cadence/agent/internal/reboot"
@@ -34,7 +38,7 @@ import (
 // builds override it with the git tag via
 // -ldflags "-X main.agentVersion=<version>" (see scripts/publish-agent.sh).
 // Keep this literal in step with the newest agent/CHANGELOG.md heading.
-var agentVersion = "0.13.0"
+var agentVersion = "0.14.0"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole
@@ -58,6 +62,10 @@ func main() {
 		"check for a pending job and run it, without collecting or reporting packages")
 	healthCheckBoot := flag.Bool("health-check-boot", false,
 		"ask the server to create-and-claim a health_check job for this boot and run it if one is returned")
+	enroll := flag.Bool("enroll", false, "enroll this host using a code read from standard input")
+	enrollServer := flag.String("enroll-server", "", "HTTPS dashboard URL used only for enrollment")
+	enrollCA := flag.String("enroll-ca", "", "fingerprint-verified server CA file")
+	enrollDirectory := flag.String("enroll-directory", "/etc/cadence", "credential output directory")
 	showVersion := flag.Bool("version", false, "print the agent version and exit")
 	flag.Parse()
 
@@ -65,9 +73,22 @@ func main() {
 		fmt.Println(agentVersion)
 		return
 	}
-	if *pollOnly && *healthCheckBoot {
-		logging.Error("agent run failed", "err", "-poll and -health-check-boot are mutually exclusive")
+	modeCount := 0
+	for _, selected := range []bool{*pollOnly, *healthCheckBoot, *enroll} {
+		if selected {
+			modeCount++
+		}
+	}
+	if modeCount > 1 {
+		logging.Error("agent run failed", "err", "-poll, -health-check-boot and -enroll are mutually exclusive")
 		os.Exit(1)
+	}
+	if *enroll {
+		if err := runEnrollment(*enrollServer, *enrollCA, *enrollDirectory); err != nil {
+			logging.Error("enrollment failed", "err", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if err := run(*pollOnly, *healthCheckBoot); err != nil {
@@ -76,12 +97,51 @@ func main() {
 	}
 }
 
+func runEnrollment(serverURL, caFile, directory string) error {
+	if serverURL == "" || caFile == "" {
+		return fmt.Errorf("-enroll-server and -enroll-ca are required with -enroll")
+	}
+	fmt.Fprint(os.Stderr, "Enrollment code: ")
+	input, err := io.ReadAll(io.LimitReader(os.Stdin, 512))
+	if err != nil {
+		return fmt.Errorf("reading enrollment code: %w", err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("reading hostname: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	result, err := enrollment.Enroll(ctx, serverURL, caFile, string(input), hostname, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	if err := enrollment.WriteCredentials(directory, caFile, result); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "enrolled host %s; credentials written to %s\n", result.HostID, directory)
+	return nil
+}
+
 func run(pollOnly, healthCheckBoot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	c := client.New(cfg.ServerURL, cfg.Token, cfg.HTTPTimeout)
+	if cfg.ClientCertFile != "" {
+		c, err = client.NewMTLS(
+			cfg.ServerURL,
+			cfg.Token,
+			cfg.ClientCertFile,
+			cfg.ClientKeyFile,
+			cfg.ServerCAFile,
+			cfg.HTTPTimeout,
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	if healthCheckBoot {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)

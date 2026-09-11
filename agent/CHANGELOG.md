@@ -3,6 +3,21 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.14.0
+
+Secure enrollment and mTLS transport authentication:
+
+- `-enroll` reads a short-lived, single-use enrollment code from standard
+  input, creates an ECDSA P-256 private key locally, and submits only its CSR
+  over TLS rooted in the already fingerprint-verified server CA.
+- The returned certificate/key pair uses versioned filenames; `agent.env` is
+  switched last so an interrupted credential write cannot select a mismatched
+  pair. Existing upgrade, reboot and timeout settings are retained.
+- Normal requests present the enrolled client certificate on the dedicated
+  agent listener while retaining the existing per-request HMAC signatures.
+- An existing configuration with no client certificate remains valid for the
+  explicitly controlled legacy-listener migration window.
+
 ## 0.13.0
 
 A standalone `health_check` job: reruns the same read-only checks as an
