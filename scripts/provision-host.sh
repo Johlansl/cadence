@@ -92,5 +92,7 @@ Or by hand -- paste into /etc/cadence/agent.env (chmod 0600, root):
 then trust the CA, install update-notifier-common, drop the agent binary +
 units, and enable the timers (README "Install an agent").
 
-This token is shown once; it is not recoverable.
+This token is returned only once by the API. It is not retrievable through the
+API, but an operator with database access and CADENCE_TOKEN_ENCRYPTION_KEY can
+recover its encrypted copy.
 EOF

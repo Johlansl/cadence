@@ -167,7 +167,7 @@ curl -fsSL http://<site>/install.sh | sudo CADENCE_TOKEN=<token> sh
 
 The installer trusts the internal CA, installs a reboot-required helper if one
 is available, drops the binary and `systemd` units, writes
-`/etc/cadence/agent.env` (mode 0600), and enables both timers. The installer and
+`/etc/cadence/agent.env` (mode 0600), and enables all three timers. The installer and
 binary are fetched over plain HTTP (the host doesn't trust the CA yet) and the
 binary is checksum-verified, see [SECURITY.md](SECURITY.md) for the trust
 model. The existing token in `agent.env` is preserved on re-run, so the same

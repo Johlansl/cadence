@@ -7,7 +7,7 @@
 # `tls internal` below and add an ACME email.
 
 # Basic-auth gate on the dashboard and the read/admin API. On by default. The
-# agent endpoints authenticate with a per-host Bearer token, not these
+# agent endpoints authenticate with per-host signed HMAC requests, not these
 # credentials, so they are exempt.
 (on) {
 	@dashboard not path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
