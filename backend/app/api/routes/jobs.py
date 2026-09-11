@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_host, get_db
 from app.api.pagination import before_keyset
+from app.job_creation import create_job_for_host
 from app.models.models import Host, Job
 from app.schemas.schemas import JobHandoff, JobOut, JobResultIn, NextJob
 from app.webhooks.events import on_job_result
@@ -57,6 +58,36 @@ def claim_next_job(
     now = datetime.now(timezone.utc)
     job = claim_pending_job(db, host, now)
     host.last_seen_at = now  # a poll is also a liveness signal
+    handoff = (
+        JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
+        if job is not None
+        else None
+    )
+    db.commit()
+    return NextJob(job=handoff)
+
+
+@router.post("/agent/health-check-job", response_model=NextJob)
+def claim_health_check_job(
+    host: Host = Depends(get_current_host), db: Session = Depends(get_db)
+) -> NextJob:
+    """Atomically create and hand back a health_check job for the calling
+    host: the boot-triggered health check (agent -health-check-boot) asks
+    once, in one round trip, instead of a create-then-poll pair. Goes
+    through the same create_job_for_host every other job path uses, so the
+    one-active-job-per-host invariant and the params.health_checks
+    threshold injection apply the same way as any other job. If the host
+    already has another job pending or running, this returns no job (same
+    shape as an empty /agent/next-job poll); the regular
+    cadence-agent-poll.timer picks up whatever that job actually is."""
+    now = datetime.now(timezone.utc)
+    job = create_job_for_host(
+        db, host_id=host.id, job_type="health_check", requested_by="boot"
+    )
+    if job is not None:
+        job.status = "running"
+        job.started_at = now
+    host.last_seen_at = now  # this call is also a liveness signal
     handoff = (
         JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
         if job is not None

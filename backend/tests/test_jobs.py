@@ -28,6 +28,39 @@ def test_next_job_claims_oldest_then_empty(client, db_session):
     assert r.json()["job"] is None
 
 
+def test_health_check_job_endpoint_creates_and_claims(client, db_session):
+    host_id, token = create_host(client)
+
+    r = client.post("/api/v1/agent/health-check-job", auth=signed(token))
+
+    assert r.status_code == 200, r.text
+    handoff = r.json()["job"]
+    assert handoff is not None
+    assert handoff["job_type"] == "health_check"
+    assert "health_checks" in handoff["params"]
+
+    job = db_session.get(Job, handoff["id"])
+    assert job.status == "running"  # already claimed, no second call needed
+    assert job.requested_by == "boot"
+    assert db_session.get(Host, host_id).last_seen_at is not None
+
+
+def test_health_check_job_endpoint_returns_none_when_host_busy(client, db_session):
+    host_id, token = create_host(client)
+    _make_job(client, host_id)  # an ordinary apt_upgrade job, still pending
+
+    r = client.post("/api/v1/agent/health-check-job", auth=signed(token))
+
+    assert r.status_code == 200, r.text
+    assert r.json()["job"] is None
+    assert db_session.query(Job).filter(Job.host_id == host_id).count() == 1
+
+
+def test_health_check_job_endpoint_requires_signed_auth(client):
+    r = client.post("/api/v1/agent/health-check-job")
+    assert r.status_code == 401
+
+
 def test_job_result_transitions_and_conflicts(client, db_session):
     host_id, token = create_host(client)
     job_id = _make_job(client, host_id)
