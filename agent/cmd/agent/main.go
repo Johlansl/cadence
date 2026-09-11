@@ -1,11 +1,15 @@
-// Command agent has two one-shot modes, both driven by systemd timers:
+// Command agent has three one-shot modes, all driven by systemd timers:
 //
-//	cadence-agent          collect package/OS state, POST a report, and run a
-//	                       job if one is piggybacked on the response
-//	cadence-agent -poll    just ask the server for a pending job and run it
-//	                       (fast path, no collection)
+//	cadence-agent                    collect package/OS state, POST a report,
+//	                                 and run a job if one is piggybacked
+//	cadence-agent -poll              just ask the server for a pending job and
+//	                                 run it (fast path, no collection)
+//	cadence-agent -health-check-boot ask the server to create-and-claim a
+//	                                 health_check job for this boot and run it
+//	                                 if one is returned
 //
-// Communication stays outbound-only; -poll is a short poll, not a long poll.
+// Communication stays outbound-only; -poll and -health-check-boot are short
+// polls, not long polls. -poll and -health-check-boot are mutually exclusive.
 package main
 
 import (
@@ -52,6 +56,8 @@ func main() {
 
 	pollOnly := flag.Bool("poll", false,
 		"check for a pending job and run it, without collecting or reporting packages")
+	healthCheckBoot := flag.Bool("health-check-boot", false,
+		"ask the server to create-and-claim a health_check job for this boot and run it if one is returned")
 	showVersion := flag.Bool("version", false, "print the agent version and exit")
 	flag.Parse()
 
@@ -59,19 +65,37 @@ func main() {
 		fmt.Println(agentVersion)
 		return
 	}
+	if *pollOnly && *healthCheckBoot {
+		logging.Error("agent run failed", "err", "-poll and -health-check-boot are mutually exclusive")
+		os.Exit(1)
+	}
 
-	if err := run(*pollOnly); err != nil {
+	if err := run(*pollOnly, *healthCheckBoot); err != nil {
 		logging.Error("agent run failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(pollOnly bool) error {
+func run(pollOnly, healthCheckBoot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	c := client.New(cfg.ServerURL, cfg.Token, cfg.HTTPTimeout)
+
+	if healthCheckBoot {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+		defer cancel()
+
+		job, err := c.ClaimHealthCheckJob(ctx)
+		if err != nil {
+			return err
+		}
+		if job == nil {
+			return nil // host busy with another job, or nothing to do
+		}
+		return runJob(cfg, c, job)
+	}
 
 	if pollOnly {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)

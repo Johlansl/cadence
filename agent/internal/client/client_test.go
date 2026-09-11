@@ -157,6 +157,51 @@ func TestClaimNextJobEmpty(t *testing.T) {
 	}
 }
 
+func TestClaimHealthCheckJob(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/agent/health-check-job" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"job":{"id":"job-9","job_type":"health_check","params":{}}}`)
+	}))
+	defer srv.Close()
+
+	job, err := New(srv.URL, "tok", 5*time.Second).ClaimHealthCheckJob(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.ID != "job-9" {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestClaimHealthCheckJobEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"job":null}`)
+	}))
+	defer srv.Close()
+
+	job, err := New(srv.URL, "tok", 5*time.Second).ClaimHealthCheckJob(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job != nil {
+		t.Fatalf("expected nil, got %+v", job)
+	}
+}
+
+func TestClaimHealthCheckJobServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, "boom")
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL, "tok", 5*time.Second).ClaimHealthCheckJob(context.Background()); err == nil {
+		t.Fatal("expected an error on HTTP 500")
+	}
+}
+
 func TestSubmitJobResult(t *testing.T) {
 	var gotPath, gotRaw string
 	var gotBody JobResult

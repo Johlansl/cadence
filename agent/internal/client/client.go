@@ -97,6 +97,30 @@ func (c *Client) ClaimNextJob(ctx context.Context) (*report.JobHandoff, error) {
 	return parsed.Job, nil
 }
 
+// ClaimHealthCheckJob asks the server to create and hand back a health_check
+// job for this host in one round trip (used only by the boot-triggered
+// health check, cmd/agent/main.go -health-check-boot). Returns nil when the
+// host already has another job pending or running -- the regular
+// cadence-agent-poll.timer picks that up on its own schedule.
+func (c *Client) ClaimHealthCheckJob(ctx context.Context) (*report.JobHandoff, error) {
+	resp, err := c.do(ctx, "/api/v1/agent/health-check-job", []byte("{}"))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("server returned %s: %s", resp.Status, bytes.TrimSpace(payload))
+	}
+
+	var parsed report.Response // {"job": ...}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return nil, fmt.Errorf("decoding health-check-job response: %w", err)
+	}
+	return parsed.Job, nil
+}
+
 // JobResult is the body of POST /api/v1/jobs/{id}/result.
 type JobResult struct {
 	Status         string `json:"status"` // "succeeded" | "failed"
