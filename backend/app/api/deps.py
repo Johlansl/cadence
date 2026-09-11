@@ -189,6 +189,7 @@ async def _auth_transport(
         or now - certificate.last_used_at >= _LAST_USED_MIN_INTERVAL
     ):
         certificate.last_used_at = now
+    request.state.client_certificate_id = certificate.id
     return "signed+mtls"
 
 

@@ -190,10 +190,10 @@ curl -s https://<site>/api/v1/hosts                  # the host appears, last_se
 ### Install from a `.deb`
 
 Each `agent-v*` release also ships a `.deb` (`amd64` + `arm64`) as a Release
-asset, an `apt`-native alternative to `curl | sh` for hosts you manage with a
-configuration tool. It installs the binary and the `systemd` units but
-**deliberately does not** trust a CA or write the per-host token, so you still
-do those two steps yourself:
+asset, an `apt`-native upgrade channel for hosts you manage with a
+configuration tool. It installs the binary and `systemd` units but
+deliberately does not establish first-contact trust or create credentials;
+fresh hosts must still complete enrollment first.
 
 ```sh
 VER=0.7.2; ARCH=amd64
@@ -203,11 +203,7 @@ sha256sum -c "cadence-agent_${VER}-1_${ARCH}.deb.sha256"
 gh attestation verify "cadence-agent_${VER}-1_${ARCH}.deb" --repo Johlansl/cadence   # optional
 
 sudo apt install "./cadence-agent_${VER}-1_${ARCH}.deb"
-# then, as the post-install message says:
-#   1. trust the server CA (see below)
-#   2. sudo install -D -m 0600 /usr/share/doc/cadence-agent/agent.env.example /etc/cadence/agent.env
-#      and set CADENCE_SERVER_URL + CADENCE_TOKEN (from scripts/provision-host.sh)
-#   3. sudo systemctl start cadence-agent.timer cadence-agent-poll.timer
+# Existing /etc/cadence/agent.env and mTLS credentials are preserved.
 ```
 
 `apt upgrade` then moves the agent forward on the next release. It is not served
@@ -280,11 +276,15 @@ All configuration is environment variables. Server variables live in `.env`
 | `POSTGRES_USER` / `POSTGRES_DB` | `cadence` / `cadence` | database role and name |
 | `POSTGRES_PASSWORD` | - | **read only on first boot** of the `pgdata` volume; changing it later needs `down -v` or an `ALTER ROLE` |
 | `CADENCE_ADMIN_KEY` | - | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
+| `CADENCE_INTERNAL_PROXY_KEY` | - | separate 32+ character secret authenticating Caddy's transport-identity headers to the backend |
 | `CADENCE_DASHBOARD_AUTH` | `on` | basic-auth gate at Caddy on the dashboard + read/admin API (agent endpoints exempt). `off` disables it |
 | `CADENCE_DASHBOARD_USER` | `cadence` | basic-auth username |
 | `CADENCE_DASHBOARD_PASSWORD_HASH` | - | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash, and logs a warning at boot if the bcrypt cost is below 12, the generators use 14) |
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
-| `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443; set `0.0.0.0` to serve the LAN |
+| `CADENCE_AGENT_PORT` | `8443` | dedicated HTTPS port requiring an agent client certificate |
+| `CADENCE_LEGACY_AGENT_ENDPOINTS` | no implicit value | explicit `on` during host migration, then `off`; Compose refuses to start if unset |
+| `CADENCE_ENROLLMENT_DEFAULT_TTL_MINUTES` | `30` | default one-time code lifetime; must be from 5 to 240 minutes |
+| `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443/8443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |
 | `CADENCE_TRUSTED_PROXIES` | - (empty) | reverse-proxy networks (CIDRs) whose `X-Forwarded-For` is trusted for the auth throttle and audit `client`; empty = use the direct peer IP. Set to the compose network subnet, see [Recording the real client IP](#recording-the-real-client-ip) |
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
@@ -308,8 +308,10 @@ All configuration is environment variables. Server variables live in `.env`
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `CADENCE_SERVER_URL` | yes | - | backend base URL, e.g. `https://cadence.lan` |
-| `CADENCE_TOKEN` | yes | - | a per-host token (from registration, or issued via `/api/v1/admin/hosts/{id}/tokens`) |
+| `CADENCE_SERVER_URL` | yes | - | agent base URL, normally `https://cadence.lan:8443` after enrollment |
+| `CADENCE_TOKEN` | yes | - | per-host HMAC secret, written from the one-time enrollment response |
+| `CADENCE_CLIENT_CERT_FILE` / `CADENCE_CLIENT_KEY_FILE` | enrolled hosts | - | versioned mTLS client certificate chain and locally generated private key |
+| `CADENCE_SERVER_CA_FILE` | enrolled hosts | - | fingerprint-verified server CA used for TLS validation |
 | `CADENCE_RUN_APT_UPDATE` | no | `true` (installer) | run `apt-get update` before collecting; failure is non-fatal |
 | `CADENCE_ENABLE_UPGRADES` | no | `true` | kill-switch: if `false`, a triggered job is reported `failed` |
 | `CADENCE_ENABLE_REBOOT` | no | `true` | kill-switch: if `false`, never reboot even under an `auto` policy |
@@ -430,13 +432,13 @@ Full detail: [docs/architecture.md](docs/architecture.md#deployment-notes).
 
 ### Backup & restore
 
-Two things are irreplaceable on the server: the Postgres database and **Caddy's
-data volume** (it holds the internal CA, lose it and every agent fails TLS
-until re-provisioned).
+Three things are irreplaceable on the server: the Postgres database, Caddy's
+server-PKI volume and the backend-only client-PKI volume. Losing either PKI
+requires fleet re-enrollment.
 
 ```sh
 scripts/backup.sh
-# -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, env, minisign.key.enc, MANIFEST}
+# -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, client_pki.tgz, env, minisign.key.enc, MANIFEST}
 ```
 
 `minisign.key.enc` (the agent signing key, passphrase-protected) is included
@@ -445,9 +447,9 @@ releases](#signed-agent-releases).
 
 `CADENCE_BACKUP_DIR` / `CADENCE_BACKUP_KEEP` (default 14) tune it. Run it
 nightly from cron. `scripts/restore-check.sh [dir]` restores the newest (or
-given) backup into throwaway containers, asserts it loads, the CA still
-validates and the signing-key backup is encrypted, and tears them down without
-touching the live stack.
+given) backup into throwaway containers, asserts it loads, both PKIs validate
+and the signing-key backup is encrypted, and tears them down without touching
+the live stack.
 
 To restore for real, from a checkout at the commit in `MANIFEST`:
 
@@ -461,14 +463,17 @@ docker compose exec -T db pg_restore -U cadence -d cadence --clean --if-exists <
 
 docker run --rm -v cadence_caddy_data:/v -v "$PWD/$B":/b:ro postgres:16 \
   sh -c 'tar xzf /b/caddy_data.tgz -C /v'
+docker run --rm -v cadence_client_pki:/v -v "$PWD/$B":/b:ro postgres:16 \
+  sh -c 'tar xzf /b/client_pki.tgz -C /v'
 
 docker compose up -d
 docker compose run --rm backend alembic current    # matches MANIFEST
 ```
 
-Volume names are `<project>_pgdata` / `<project>_caddy_data` (`project` = the
-repo directory name). Restoring onto a stack with data needs `docker compose
-down -v` first, destructive, back up immediately before.
+Volume names are `<project>_pgdata`, `<project>_caddy_data` and
+`<project>_client_pki` (`project` = the repo directory name). Restoring onto a
+stack with data needs `docker compose down -v` first, destructive, back up
+immediately before.
 
 ### Upgrading the agent fleet
 
@@ -479,9 +484,11 @@ stamps that tag into the binary (`git describe`, via `-ldflags`); an untagged
 build falls back to the `agentVersion` literal in `agent/cmd/agent/main.go`.
 
 Then redeploy the server with `scripts/deploy.sh` (or run
-`scripts/publish-agent.sh` alone if the stack is otherwise untouched). On each
-host, re-run the one-liner (it preserves the token) or the manual build, and
-`systemctl restart cadence-agent.service`. See `agent/CHANGELOG.md`.
+`scripts/publish-agent.sh` alone if the stack is otherwise untouched). An
+already-enrolled host can authenticate the installer with its pinned CA and
+set `CADENCE_UPGRADE_ONLY=true`; this preserves its HMAC and mTLS credentials.
+Never fetch or execute the installer over HTTP. See `agent/CHANGELOG.md` and
+[docs/enrollment-mtls.md](docs/enrollment-mtls.md).
 
 ### Rotating a host's agent token
 

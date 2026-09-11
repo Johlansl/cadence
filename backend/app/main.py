@@ -127,6 +127,7 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
     app.include_router(campaigns.admin_router)
     app.include_router(enrollments.admin_router)
     app.include_router(enrollments.agent_router)
+    app.include_router(enrollments.certificate_admin_router)
     app.include_router(exclusions.router)
     app.include_router(exclusions.admin_router)
     app.include_router(fleet.router)

@@ -239,6 +239,32 @@ class EnrollmentClaimed(BaseModel):
     client_certificate_expires_at: datetime
 
 
+class CertificateRenewal(BaseModel):
+    csr_pem: str = Field(min_length=1, max_length=16_384)
+
+
+class CertificateRenewed(BaseModel):
+    client_certificate_pem: str
+    client_certificate_expires_at: datetime
+    fingerprint_sha256: str
+
+
+CertificateState = Literal["active", "expired", "revoked"]
+
+
+class CertificateOut(BaseModel):
+    id: int
+    host_id: uuid.UUID
+    serial_number: str
+    fingerprint_sha256: str
+    not_before: datetime
+    expires_at: datetime
+    issued_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+    state: CertificateState
+
+
 # --- agent report ingestion -------------------------------------------------
 
 class ReportPackage(BaseModel):

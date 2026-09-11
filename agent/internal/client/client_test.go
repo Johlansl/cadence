@@ -190,6 +190,29 @@ func TestClaimHealthCheckJobEmpty(t *testing.T) {
 	}
 }
 
+func TestRenewCertificateKeepsSignedRequest(t *testing.T) {
+	expires := time.Now().Add(90 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		verifySignedHeaders(t, r, "tok", body)
+		if r.URL.Path != "/api/v1/agent/certificate/renew" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"client_certificate_pem":"PEM","client_certificate_expires_at":"`+expires+`","fingerprint_sha256":"abc"}`)
+	}))
+	defer server.Close()
+
+	renewed, err := New(server.URL, "tok", time.Second).RenewCertificate(
+		context.Background(), "CSR",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.ClientCertificatePEM != "PEM" || renewed.FingerprintSHA256 != "abc" {
+		t.Fatalf("renewed = %+v", renewed)
+	}
+}
+
 func TestClaimHealthCheckJobServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

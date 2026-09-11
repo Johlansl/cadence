@@ -31,6 +31,7 @@ import (
 	"cadence/agent/internal/executor"
 	"cadence/agent/internal/logging"
 	"cadence/agent/internal/reboot"
+	"cadence/agent/internal/renewal"
 	"cadence/agent/internal/report"
 )
 
@@ -127,6 +128,17 @@ func run(pollOnly, healthCheckBoot bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if cfg.ClientCertFile != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
+		renewed, renewErr := renewal.RunIfNeeded(ctx, cfg)
+		cancel()
+		if renewErr != nil {
+			return fmt.Errorf("renewing client certificate: %w", renewErr)
+		}
+		if renewed {
+			logging.Info("client certificate renewed; new credentials activate on next run")
+		}
 	}
 	c := client.New(cfg.ServerURL, cfg.Token, cfg.HTTPTimeout)
 	if cfg.ClientCertFile != "" {

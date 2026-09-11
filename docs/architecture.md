@@ -15,11 +15,11 @@ The central server runs as a `docker compose` stack:
 | `backend` | built from `backend/` | FastAPI HTTP API (agent ingest + dashboard reads + admin writes) |
 | `scheduler` | same image as `backend`, `python -m app.scheduler` | turns due `schedules` into `jobs`, advances running campaigns, reaps stuck jobs, dispatches webhook deliveries, runs the daily retention sweep, refreshes the Debian security-advisory feed, records a heartbeat |
 | `frontend` | built from `frontend/` (`nginx:1.27-alpine` serving a Vite build) | the dashboard; nginx also proxies `/api/` to `backend` |
-| `caddy` | `caddy:2-alpine` | the single public entrypoint, TLS terminated with an internal CA; also serves the plain-HTTP agent bootstrap assets |
+| `caddy` | `caddy:2-alpine` | dashboard/enrollment TLS on 443, server-CA bootstrap on HTTP, mandatory agent mTLS on 8443 |
 
 Each monitored host runs the **agent**: a single static Go binary (stdlib only),
-invoked one-shot by two `systemd` timers, a ~30 min full report and a ~1 min
-job poll.
+invoked one-shot by three `systemd` timers: a ~30 min full report, a ~1 min job
+poll and a once-per-boot health refresh.
 
 ## Communication model
 
@@ -48,8 +48,8 @@ the poll path racing on the same job is safe, exactly one claims it.
 
 ## Authentication
 
-- **Agent → server:** per-host tokens (`agent_tokens` table), generated
-  server-side and transmitted once. Several can be active at once for
+- **Agent → server:** enrollment issues both a client certificate and a
+  per-host HMAC token (`agent_tokens` table). Several tokens can be active for
   roll-forward rotation; each has an optional `expires_at` (defaults to
   `CADENCE_TOKEN_DEFAULT_EXPIRY_DAYS`) / `revoked_at`. A token is accepted
   only while not expired/revoked and its host is `is_active`. The agent
@@ -57,7 +57,9 @@ the poll path racing on the same job is safe, exactly one claims it.
   token) instead of the token itself; `token_hash` is the lookup key and the
   Fernet-encrypted plaintext is what verifies the HMAC (see `SECURITY.md`). A
   token from before this scheme has no encrypted copy and cannot authenticate
-  until its host is rotated onto a fresh one.
+  until its host is rotated onto a fresh one. On port 8443 Caddy also requires
+  a client chain from the private client PKI; the backend binds its leaf
+  fingerprint to the same host UUID as the HMAC token.
 - **Admin writes** (create/delete hosts, queue jobs, edit schedules): a single
   shared `X-Admin-Key` header. The dashboard keeps it in `sessionStorage` and
   prompts for it on the first write of a session. Each successful write appends
@@ -80,6 +82,11 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   Fernet-encrypted copy for HMAC verification, optional `expires_at` /
   `revoked_at`, `last_used_at`). Several may be active for roll-forward
   rotation.
+- `enrollment_codes`: hashes of short-lived, single-use enrollment secrets,
+  the pinned server-CA fingerprint and either a new hostname or existing host
+  target.
+- `agent_certificates`: issued client certificate serials/fingerprints,
+  validity, revocation and last-use timestamps, each bound to one host.
 - `packages`: a shared `(name, architecture)` dimension, never deleted.
 - `host_packages`: the current per-host package state (installed version,
   candidate version, security flag, and the Debian `source_package` when the
@@ -319,14 +326,15 @@ The operator-facing guide is [docs/campaigns.md](campaigns.md).
   database and runs `alembic upgrade head` before starting; the two containers
   serialise on a Postgres advisory lock. A fresh database is built straight
   from revision `0001`. There is no `init.sql` bootstrap.
-- **TLS.** Caddy issues certificates from its own internal CA. The CA root must
-  be trusted on every monitored host and dashboard client (the agent verifies
-  against the system trust store). The `caddy_data` volume holds the CA, back
-  it up. A public-domain / ACME setup requires editing the `Caddyfile`.
-- **Agent bootstrap.** `scripts/publish-agent.sh` stages the binary, checksum,
-  units and CA into `dist/`, which Caddy serves over **plain HTTP** at
-  `/install.sh` and `/agent/*` so a host can fetch them before it trusts the
-  CA. This is a trust-on-first-use step, see [../SECURITY.md](../SECURITY.md).
+- **TLS.** Caddy serves the dashboard/enrollment surface on 443 and a mandatory
+  client-authenticated agent surface on 8443, both under the same hostname.
+  `caddy_data` holds the server CA; the backend-only `client_pki` volume holds
+  the separate client root/intermediate and private keys. Back up both.
+- **Agent bootstrap.** HTTP exposes only `/agent/ca.crt`. A trusted local
+  prelude verifies its exact SHA-256 against the fingerprint carried in the
+  manually transferred enrollment code before fetching the installer, binary,
+  checksum, signature or units over HTTPS. See
+  [enrollment-mtls.md](enrollment-mtls.md).
 - **Health & limits.** Every service has a healthcheck; startup is ordered
   `db → backend → frontend → caddy`. Per-service memory/CPU limits and
   json-file log rotation are set for a small (2 vCPU / 2 GB) host.

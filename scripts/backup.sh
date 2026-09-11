@@ -1,7 +1,6 @@
 #!/bin/sh
-# Back up the Cadence central server: the Postgres database and Caddy's data
-# volume (its internal CA + issued certs -- lose it and every agent fails TLS
-# until re-provisioned).
+# Back up the Cadence central server: Postgres, Caddy's server PKI and the
+# backend-only client PKI. Losing either CA requires fleet re-enrollment.
 #
 # Run on the central server, from a checkout of this repo, with the stack up.
 #
@@ -10,6 +9,7 @@
 # Writes a timestamped directory under CADENCE_BACKUP_DIR containing:
 #   db.dump            pg_dump custom format (restore with pg_restore)
 #   caddy_data.tgz     the Caddy /data volume (internal CA + certs)
+#   client_pki.tgz     client root/intermediate certificates and private keys
 #   env                a copy of .env (secrets: admin key, DB password) -- 0600
 #   minisign.key.enc   the agent signing key, passphrase-protected (only if
 #                      scripts/backup-signing-key.sh has been run)
@@ -44,8 +44,17 @@ pg_db=${pg_db:-cadence}
 
 db_cid=$(docker compose ps -q db)
 caddy_cid=$(docker compose ps -q caddy)
-if [ -z "$db_cid" ] || [ -z "$caddy_cid" ]; then
-	echo "backup.sh: the stack must be up (db and caddy containers not found)" >&2
+backend_cid=$(docker compose ps -q backend)
+if [ -z "$db_cid" ] || [ -z "$caddy_cid" ] || [ -z "$backend_cid" ]; then
+	echo "backup.sh: the stack must be up (db, backend and caddy containers required)" >&2
+	exit 1
+fi
+
+client_pki_vol=$(docker inspect -f \
+	'{{range .Mounts}}{{if eq .Destination "/var/lib/cadence/client-pki"}}{{.Name}}{{end}}{{end}}' \
+	"$backend_cid")
+if [ -z "$client_pki_vol" ]; then
+	echo "backup.sh: could not find the backend client-PKI volume" >&2
 	exit 1
 fi
 
@@ -72,6 +81,10 @@ docker compose exec -T db pg_dump -U "$pg_user" -d "$pg_db" -Fc >"$out/db.dump"
 docker run --rm -v "$caddy_vol":/v:ro -v "$out":/out postgres:16 \
 	tar czf /out/caddy_data.tgz -C /v . >/dev/null
 
+# 2b. Client-authentication PKI, including the root and intermediate keys.
+docker run --rm -v "$client_pki_vol":/v:ro -v "$out":/out postgres:16 \
+	tar czf /out/client_pki.tgz -C /v . >/dev/null
+
 # 3. .env (secrets).
 cp "$env_file" "$out/env"
 chmod 0600 "$out/env"
@@ -80,7 +93,7 @@ chmod 0600 "$out/env"
 #     scripts/backup-signing-key.sh. The live key is passwordless and is never
 #     copied; only its .enc sibling. Warn (don't fail) if signing is configured
 #     but the encrypted copy is missing.
-manifest_files="db.dump caddy_data.tgz env"
+manifest_files="db.dump caddy_data.tgz client_pki.tgz env"
 minisign_key=${CADENCE_MINISIGN_KEY:-$HOME/.cadence/minisign.key}
 if [ -f "$minisign_key.enc" ]; then
 	cp "$minisign_key.enc" "$out/minisign.key.enc"
@@ -99,6 +112,7 @@ alembic_rev=$(docker compose exec -T backend alembic current 2>/dev/null \
 	echo "git_commit   $(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
 	echo "alembic_rev  ${alembic_rev:-unknown}"
 	echo "caddy_volume $caddy_vol"
+	echo "client_pki_volume $client_pki_vol"
 	echo
 	# shellcheck disable=SC2086
 	( cd "$out" && sha256sum $manifest_files )

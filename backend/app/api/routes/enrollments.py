@@ -15,7 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_db, require_admin_key
+from app.api.deps import get_current_host, get_db, require_admin_key
 from app.core.config import settings
 from app.core.crypto import encrypt_token_secret
 from app.core.ratelimit import note_rejected, ratelimiter
@@ -24,6 +24,9 @@ from app.enrollment import generate_enrollment_code, parse_enrollment_code, serv
 from app.models.models import AgentCertificate, AgentToken, AuditLog, EnrollmentCode, Host
 from app.pki.client_ca import issue_client_certificate
 from app.schemas.schemas import (
+    CertificateOut,
+    CertificateRenewal,
+    CertificateRenewed,
     EnrollmentClaim,
     EnrollmentClaimed,
     EnrollmentCreate,
@@ -37,6 +40,11 @@ admin_router = APIRouter(
     dependencies=[Depends(require_admin_key)],
 )
 agent_router = APIRouter(prefix="/api/v1/agent", tags=["agent", "enrollment"])
+certificate_admin_router = APIRouter(
+    prefix="/api/v1/admin",
+    tags=["admin", "agent certificates"],
+    dependencies=[Depends(require_admin_key)],
+)
 
 EnrollmentStateFilter = Literal["pending", "expired", "consumed", "revoked"]
 
@@ -317,3 +325,119 @@ async def claim_enrollment(
         client_certificate_pem=issued.certificate_chain_pem,
         client_certificate_expires_at=issued.expires_at,
     )
+
+
+@agent_router.post("/certificate/renew", response_model=CertificateRenewed)
+def renew_certificate(
+    request: Request,
+    payload: CertificateRenewal,
+    host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
+) -> CertificateRenewed:
+    """Issue a replacement while leaving the still-valid old cert usable."""
+    if getattr(request.state, "auth_scheme", None) != "signed+mtls":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "mTLS is required")
+    current_certificate_id = getattr(request.state, "client_certificate_id", None)
+    if current_certificate_id is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "mTLS is required")
+    try:
+        issued = issue_client_certificate(settings.client_pki_dir, payload.csr_pem, host.id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    certificate = AgentCertificate(
+        host_id=host.id,
+        serial_number=issued.serial_number,
+        fingerprint_sha256=issued.fingerprint_sha256,
+        not_before=issued.not_before,
+        expires_at=issued.expires_at,
+    )
+    db.add(certificate)
+    db.flush()
+    db.add(
+        AuditLog(
+            action="certificate.renew",
+            target_type="agent_certificate",
+            target_id=str(certificate.id),
+            actor="agent",
+            client=client_ip(request),
+            request_id=getattr(request.state, "request_id", None),
+            detail={
+                "host_id": str(host.id),
+                "previous_certificate_id": current_certificate_id,
+                "expires_at": issued.expires_at.isoformat(),
+            },
+        )
+    )
+    db.commit()
+    return CertificateRenewed(
+        client_certificate_pem=issued.certificate_chain_pem,
+        client_certificate_expires_at=issued.expires_at,
+        fingerprint_sha256=issued.fingerprint_sha256,
+    )
+
+
+def _certificate_state(row: AgentCertificate, now: datetime) -> str:
+    if row.revoked_at is not None:
+        return "revoked"
+    if row.expires_at <= now:
+        return "expired"
+    return "active"
+
+
+@certificate_admin_router.get(
+    "/hosts/{host_id}/certificates", response_model=list[CertificateOut]
+)
+def list_certificates(
+    host_id: uuid.UUID, db: Session = Depends(get_db)
+) -> list[CertificateOut]:
+    if db.get(Host, host_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "host not found")
+    now = datetime.now(timezone.utc)
+    rows = db.execute(
+        select(AgentCertificate)
+        .where(AgentCertificate.host_id == host_id)
+        .order_by(AgentCertificate.issued_at.desc(), AgentCertificate.id.desc())
+    ).scalars().all()
+    return [
+        CertificateOut(
+            id=row.id,
+            host_id=row.host_id,
+            serial_number=row.serial_number,
+            fingerprint_sha256=row.fingerprint_sha256,
+            not_before=row.not_before,
+            expires_at=row.expires_at,
+            issued_at=row.issued_at,
+            last_used_at=row.last_used_at,
+            revoked_at=row.revoked_at,
+            state=_certificate_state(row, now),
+        )
+        for row in rows
+    ]
+
+
+@certificate_admin_router.delete(
+    "/hosts/{host_id}/certificates/{certificate_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_certificate(
+    request: Request,
+    host_id: uuid.UUID,
+    certificate_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    certificate = db.get(AgentCertificate, certificate_id)
+    if certificate is None or certificate.host_id != host_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "agent certificate not found")
+    if certificate.revoked_at is None:
+        certificate.revoked_at = datetime.now(timezone.utc)
+        record_audit(
+            db,
+            request,
+            "certificate.revoke",
+            target_type="agent_certificate",
+            target_id=certificate.id,
+            detail={"host_id": str(host_id)},
+        )
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -40,7 +40,7 @@ type Result struct {
 	Token                      string    `json:"token"`
 	ClientCertificatePEM       string    `json:"client_certificate_pem"`
 	ClientCertificateExpiresAt time.Time `json:"client_certificate_expires_at"`
-	privateKeyPEM              []byte
+	PrivateKeyPEM              []byte    `json:"-"`
 }
 
 func rootPool(caFile string) (*x509.CertPool, error) {
@@ -55,7 +55,9 @@ func rootPool(caFile string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-func newCSR(hostname string) (string, []byte, error) {
+// NewCSR creates a P-256 key and CSR. The caller must keep the returned key
+// private and write it only after the server returns a matching certificate.
+func NewCSR(hostname string) (string, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return "", nil, fmt.Errorf("generating client private key: %w", err)
@@ -90,7 +92,7 @@ func Enroll(ctx context.Context, serverURL, caFile, code, hostname string, timeo
 		return Result{}, fmt.Errorf("hostname is empty")
 	}
 
-	csrPEM, keyPEM, err := newCSR(hostname)
+	csrPEM, keyPEM, err := NewCSR(hostname)
 	if err != nil {
 		return Result{}, err
 	}
@@ -145,7 +147,7 @@ func Enroll(ctx context.Context, serverURL, caFile, code, hostname string, timeo
 	if _, err := tls.X509KeyPair([]byte(result.ClientCertificatePEM), keyPEM); err != nil {
 		return Result{}, fmt.Errorf("issued certificate does not match generated private key: %w", err)
 	}
-	result.privateKeyPEM = keyPEM
+	result.PrivateKeyPEM = keyPEM
 	return result, nil
 }
 
@@ -199,7 +201,7 @@ func operationalSettings(path string) []string {
 // agent.env last. An interrupted write therefore leaves the previous bundle
 // selected rather than pairing a new key with an old certificate.
 func WriteCredentials(directory, serverCAFile string, result Result) error {
-	if result.privateKeyPEM == nil {
+	if result.PrivateKeyPEM == nil {
 		return fmt.Errorf("enrollment result has no private key")
 	}
 	block, _ := pem.Decode([]byte(result.ClientCertificatePEM))
@@ -219,7 +221,7 @@ func WriteCredentials(directory, serverCAFile string, result Result) error {
 	}
 	certPath := filepath.Join(directory, "client-"+suffix+".crt")
 	keyPath := filepath.Join(directory, "client-"+suffix+".key")
-	if err := atomicWrite(keyPath, result.privateKeyPEM, 0o600); err != nil {
+	if err := atomicWrite(keyPath, result.PrivateKeyPEM, 0o600); err != nil {
 		return fmt.Errorf("writing client private key: %w", err)
 	}
 	if err := atomicWrite(certPath, []byte(result.ClientCertificatePEM), 0o600); err != nil {

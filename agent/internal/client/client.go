@@ -1,4 +1,4 @@
-// Package client talks to the Cadence server over HTTP. Communication is
+// Package client talks to the Cadence server over HTTPS. Communication is
 // outbound-only. Reports are one-shot (no retry loop; the systemd timer drives
 // the next attempt); a job result is posted once, right after the job runs.
 package client
@@ -151,6 +151,39 @@ func (c *Client) ClaimHealthCheckJob(ctx context.Context) (*report.JobHandoff, e
 		return nil, fmt.Errorf("decoding health-check-job response: %w", err)
 	}
 	return parsed.Job, nil
+}
+
+// CertificateRenewal is returned after the server signs a replacement CSR.
+type CertificateRenewal struct {
+	ClientCertificatePEM       string    `json:"client_certificate_pem"`
+	ClientCertificateExpiresAt time.Time `json:"client_certificate_expires_at"`
+	FingerprintSHA256          string    `json:"fingerprint_sha256"`
+}
+
+// RenewCertificate authenticates with both the current mTLS certificate and
+// the unchanged request HMAC, then returns a replacement certificate chain.
+func (c *Client) RenewCertificate(ctx context.Context, csrPEM string) (CertificateRenewal, error) {
+	body, err := json.Marshal(map[string]string{"csr_pem": csrPEM})
+	if err != nil {
+		return CertificateRenewal{}, fmt.Errorf("encoding certificate renewal: %w", err)
+	}
+	resp, err := c.do(ctx, "/api/v1/agent/certificate/renew", body)
+	if err != nil {
+		return CertificateRenewal{}, err
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return CertificateRenewal{}, fmt.Errorf("server returned %s: %s", resp.Status, bytes.TrimSpace(payload))
+	}
+	var renewed CertificateRenewal
+	if err := json.Unmarshal(payload, &renewed); err != nil {
+		return CertificateRenewal{}, fmt.Errorf("decoding certificate renewal: %w", err)
+	}
+	if renewed.ClientCertificatePEM == "" || renewed.ClientCertificateExpiresAt.IsZero() || renewed.FingerprintSHA256 == "" {
+		return CertificateRenewal{}, fmt.Errorf("certificate renewal response is incomplete")
+	}
+	return renewed, nil
 }
 
 // JobResult is the body of POST /api/v1/jobs/{id}/result.

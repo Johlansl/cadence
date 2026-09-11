@@ -149,10 +149,12 @@ apt repository.
 ### TLS uses an internal CA
 
 Caddy issues certificates from its own CA. That CA root must be installed in
-the system trust store of every monitored host and dashboard client. The CA
-private key lives in the `caddy_data` volume, **back it up**; losing it breaks
-TLS for every agent until they are re-provisioned. A public-domain / Let's
-Encrypt setup requires editing the `Caddyfile`.
+the system trust store of every monitored host and dashboard client. Its
+private key lives in `caddy_data`. A separate client root and intermediate in
+the backend-only `client_pki` volume issue agent certificates trusted on port
+8443. **Back up both volumes**; losing either PKI requires fleet
+re-enrollment. A public-domain / Let's Encrypt server setup does not replace
+the private client PKI.
 
 ### The agent runs as root
 

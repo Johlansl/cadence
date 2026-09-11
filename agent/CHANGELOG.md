@@ -15,6 +15,9 @@ Secure enrollment and mTLS transport authentication:
   pair. Existing upgrade, reboot and timeout settings are retained.
 - Normal requests present the enrolled client certificate on the dedicated
   agent listener while retaining the existing per-request HMAC signatures.
+- A regular run renews the 90-day client certificate once it enters its final
+  14 days. A filesystem lock prevents the three one-shot services from racing;
+  the old certificate remains valid if the response or local switch is lost.
 - An existing configuration with no client certificate remains valid for the
   explicitly controlled legacy-listener migration window.
 

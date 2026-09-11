@@ -7,6 +7,7 @@ set -eu
 
 base=${CADENCE_BASE_URL:-https://cadence.lan}
 verified_ca=${CADENCE_VERIFIED_CA:-}
+upgrade_only=${CADENCE_UPGRADE_ONLY:-false}
 case "$base" in
 https://*) ;;
 *) echo "install.sh: CADENCE_BASE_URL must use https" >&2; exit 2 ;;
@@ -19,6 +20,17 @@ if [ -z "$verified_ca" ] || [ ! -f "$verified_ca" ]; then
 	echo "install.sh: CADENCE_VERIFIED_CA must name the fingerprint-verified CA" >&2
 	exit 1
 fi
+case "$upgrade_only" in
+true)
+	if [ ! -f /etc/cadence/agent.env ] ||
+		! grep -q '^CADENCE_CLIENT_CERT_FILE=' /etc/cadence/agent.env; then
+		echo "install.sh: CADENCE_UPGRADE_ONLY requires an enrolled agent" >&2
+		exit 1
+	fi
+	;;
+false) ;;
+*) echo "install.sh: CADENCE_UPGRADE_ONLY must be true or false" >&2; exit 2 ;;
+esac
 
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
@@ -96,9 +108,14 @@ done
 
 # The code arrives on stdin, never argv or the environment. The binary creates
 # the private key locally and switches agent.env only after all credentials
-# have been validated and written.
-/usr/local/bin/cadence-agent -enroll -enroll-server "$base" \
-	-enroll-ca "$server_ca" -enroll-directory /etc/cadence
+# have been validated and written. Authenticated upgrades preserve the
+# existing credential bundle and need no new enrollment code.
+if [ "$upgrade_only" = "false" ]; then
+	/usr/local/bin/cadence-agent -enroll -enroll-server "$base" \
+		-enroll-ca "$server_ca" -enroll-directory /etc/cadence
+else
+	echo "install.sh: preserving enrolled credentials"
+fi
 echo "install.sh: agent $(/usr/local/bin/cadence-agent -version 2>/dev/null || echo '(installed)')"
 
 systemctl daemon-reload

@@ -238,7 +238,7 @@ rather than something to defer until someone asks.
   optional `X-Actor` header (default `admin`), not a proven identity.
 - **One shared basic-auth credential**, not multi-user auth. V1 has no RBAC, so
   Caddy gates the dashboard and the read/admin API with a single
-  username/password (agent endpoints, which carry per-host tokens, are exempt).
+  username/password (agent endpoints, which carry HMAC plus mTLS, are exempt).
   On by default; Caddy binds to loopback by default. Enough to keep a fleet
   inventory off the open internet without building a user system.
 
@@ -303,10 +303,9 @@ server release on every agent bump and vice versa.
 
 ## Agent distribution / signing
 
-The agent binary, its SHA-256, the systemd units and the internal CA are staged
-into `dist/` by `scripts/publish-agent.sh` and served by Caddy over **plain
-HTTP** at `/install.sh` and `/agent/*`, so a host can fetch them before it
-trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
+The agent binary, its SHA-256, systemd units and server CA are staged into
+`dist/` by `scripts/publish-agent.sh`. HTTP serves only `/agent/ca.crt`; all
+other artifacts require HTTPS rooted in that CA.
 
 - **Releases are minisign-signed.** `scripts/publish-agent.sh` signs the binary
   when a private key is present, and, once `agent/minisign.pub` is committed,
@@ -314,16 +313,18 @@ trusts the CA (`SECURITY.md`, "Agent bootstrap is trust-on-first-use").
   The signing key is passwordless, kept at `~/.cadence/minisign.key` (outside
   the repo, gitignored). CI builds a SHA-256-only artifact on purpose: no
   signing key is exposed to CI.
-- **The signature only helps out of band.** `agent/minisign.pub` is committed
-  for convenience, but the installer fetches everything over the same
-  unauthenticated HTTP channel, so verification adds tamper-resistance *only*
-  when the operator passes the key to the installer as `CADENCE_MINISIGN_PUB`
-  from a copy obtained separately (the repo, a password manager, …). This is
-  the documented path for anything past a trusted LAN; on the LAN target the
-  SHA-256 (a truncation guard) is what actually runs by default.
-- **The CA is still trust-on-first-use.** minisign covers the *binary* only;
-  the CA certificate is fetched and trusted over plain HTTP with no
-  fingerprint check. Unchanged, and out of scope here.
+- **Enrollment is the trust root.** One manually transferred, single-use code
+  contains a 192-bit secret and the exact server-CA SHA-256. A trusted prelude
+  validates the unauthenticated CA download before executing any downloaded
+  code or transmitting the secret. Default lifetime is 30 minutes, bounded to
+  5-240 minutes.
+- **Minisign is an extra release layer.** The authenticated HTTPS channel is
+  sufficient for server origin authentication. An out-of-band
+  `CADENCE_MINISIGN_PUB` additionally verifies who produced the agent binary.
+- **mTLS adds to HMAC.** The client certificate authenticates the transport on
+  port 8443. The existing HMAC signature, timestamp window, Fernet secret and
+  constant-time comparisons continue to authenticate every application
+  request. The two identities must resolve to the same host UUID.
 - **Forking Cadence.** A third party who redeploys this repo inherits the
   upstream `agent/minisign.pub` and cannot hold its private half, so their
   `scripts/publish-agent.sh` fails the "unsigned release" guard by
@@ -377,16 +378,16 @@ changelog.
   releases *for the whole fleet*; putting it in a third-party CI on a personal
   account would make a compromised workflow dependency, a stolen repo-admin
   session, or GitHub itself enough to forge a fleet-wide agent. minisign stays
-  a central-server concern (`scripts/publish-agent.sh`), covering the
-  `install.sh` channel the fleet actually uses, which does **not** go through
-  GitHub.
+  a central-server concern (`scripts/publish-agent.sh`), adding producer
+  authentication to the HTTPS `install.sh` channel, which does **not** go
+  through GitHub.
 - **CI artifacts carry a Sigstore build-provenance attestation instead**
   (`actions/attest-build-provenance`, keyless via OIDC). It proves "built by
   this workflow, from this repo, at this commit", verifiable with
   `gh attestation verify <file-or-oci-ref> --repo Johlansl/cadence`, with no
   long-lived key anywhere. This is the tamper-evidence for anything pulled from
-  GitHub / GHCR; minisign remains the tamper-evidence for the LAN `install.sh`
-  path.
+  GitHub / GHCR; minisign remains an additional release-signing layer for the
+  LAN `install.sh` path.
 - **GHCR images are `amd64` only** for now (the server target is amd64). The
   agent is built for `arm64` too. `docker-compose.release.yml` is the overlay
   that runs the published images; the central server keeps building from source
@@ -401,8 +402,8 @@ changelog.
   managed out of CI (like minisign) and is out of scope. `.rpm` waits for the
   agent to speak `dnf` (see "V1 scope"); the package is deliberately
   Debian/Ubuntu-shaped (it wires up the systemd units and recommends the
-  reboot-required helper) but does **not** trust a site CA or write the
-  per-host token, the operator still does that, exactly as with `install.sh`.
+  reboot-required helper) but does **not** establish first-contact trust or
+  create enrollment credentials. It is an upgrade channel after enrollment.
 
 ## CI
 
