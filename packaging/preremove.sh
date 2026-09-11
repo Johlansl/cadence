@@ -7,7 +7,7 @@ case "${1:-remove}" in
 	remove | purge | 0 | "")
 		[ -d /run/systemd/system ] || exit 0
 		systemctl disable --now cadence-agent.timer cadence-agent-poll.timer \
-			>/dev/null 2>&1 || true
+			cadence-agent-health-check-boot.timer >/dev/null 2>&1 || true
 		;;
 esac
 

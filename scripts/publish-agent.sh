@@ -82,7 +82,8 @@ fi
 
 install -m 0644 "$repo/scripts/agent-install.sh" "$dist/install.sh"
 for unit in cadence-agent.service cadence-agent.timer \
-	cadence-agent-poll.service cadence-agent-poll.timer; do
+	cadence-agent-poll.service cadence-agent-poll.timer \
+	cadence-agent-health-check-boot.service cadence-agent-health-check-boot.timer; do
 	install -m 0644 "$repo/agent/systemd/$unit" "$dist/agent/systemd/$unit"
 done
 

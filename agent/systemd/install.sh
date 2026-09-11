@@ -36,7 +36,8 @@ if [ ! -f "$CONFDIR/agent.env" ]; then
 fi
 
 for unit in cadence-agent.service cadence-agent.timer \
-	cadence-agent-poll.service cadence-agent-poll.timer; do
+	cadence-agent-poll.service cadence-agent-poll.timer \
+	cadence-agent-health-check-boot.service cadence-agent-health-check-boot.timer; do
 	install -m 0644 "$HERE/$unit" "$UNITDIR/$unit"
 done
 
@@ -45,8 +46,9 @@ if [ -f "$HERE/../../README.md" ]; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now cadence-agent.timer         # hourly full report
-systemctl enable --now cadence-agent-poll.timer    # 1-min job poll
+systemctl enable --now cadence-agent.timer                     # hourly full report
+systemctl enable --now cadence-agent-poll.timer                # 1-min job poll
+systemctl enable --now cadence-agent-health-check-boot.timer   # once-per-boot health refresh
 
 echo
 if [ "${NEEDS_CONFIG:-0}" = 1 ]; then

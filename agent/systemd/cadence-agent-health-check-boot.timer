@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh Cadence health_status once after boot
+
+[Timer]
+# Fires once per boot only -- this is a boot-completion refresh, not a
+# recurring poll (cadence-agent-poll.timer already covers recurring work; the
+# reboot itself IS the trigger here, not an interval, so no OnUnitActiveSec).
+# Fires slightly before cadence-agent-poll.timer's OnBootSec=1min so a fresh
+# health_status is already in place by the time anything else polls or
+# reports.
+OnBootSec=45s
+Unit=cadence-agent-health-check-boot.service
+
+[Install]
+WantedBy=timers.target

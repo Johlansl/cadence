@@ -119,7 +119,8 @@ echo "install.sh: agent $(/usr/local/bin/cadence-agent -version 2>/dev/null || e
 
 # 4. systemd units.
 for unit in cadence-agent.service cadence-agent.timer \
-	cadence-agent-poll.service cadence-agent-poll.timer; do
+	cadence-agent-poll.service cadence-agent-poll.timer \
+	cadence-agent-health-check-boot.service cadence-agent-health-check-boot.timer; do
 	fetch "agent/systemd/$unit" >"/etc/systemd/system/$unit"
 	chmod 0644 "/etc/systemd/system/$unit"
 done
@@ -150,7 +151,8 @@ fi
 
 # 6. Enable + start.
 systemctl daemon-reload
-systemctl enable --now cadence-agent.timer cadence-agent-poll.timer >/dev/null
+systemctl enable --now cadence-agent.timer cadence-agent-poll.timer \
+	cadence-agent-health-check-boot.timer >/dev/null
 echo "install.sh: timers enabled. First report:"
 systemctl start cadence-agent.service || true
 echo "  journalctl -u cadence-agent -n 20 --no-pager"

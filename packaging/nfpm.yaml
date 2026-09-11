@@ -53,6 +53,14 @@ contents:
     dst: /usr/lib/systemd/system/cadence-agent-poll.timer
     file_info:
       mode: 0644
+  - src: ./dist/units/cadence-agent-health-check-boot.service
+    dst: /usr/lib/systemd/system/cadence-agent-health-check-boot.service
+    file_info:
+      mode: 0644
+  - src: ./dist/units/cadence-agent-health-check-boot.timer
+    dst: /usr/lib/systemd/system/cadence-agent-health-check-boot.timer
+    file_info:
+      mode: 0644
 
   - src: ./agent/systemd/agent.env.example
     dst: /usr/share/doc/cadence-agent/agent.env.example

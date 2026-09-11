@@ -6,7 +6,8 @@ set -e
 
 if [ -d /run/systemd/system ]; then
 	systemctl daemon-reload || true
-	systemctl enable cadence-agent.timer cadence-agent-poll.timer >/dev/null 2>&1 || true
+	systemctl enable cadence-agent.timer cadence-agent-poll.timer \
+		cadence-agent-health-check-boot.timer >/dev/null 2>&1 || true
 fi
 
 if [ ! -f /etc/cadence/agent.env ]; then
@@ -20,14 +21,16 @@ server URL or the per-host token. To finish:
        /etc/cadence/agent.env
      then set CADENCE_SERVER_URL and CADENCE_TOKEN (from scripts/provision-host.sh
      on the server) in that file.
-  3. sudo systemctl start cadence-agent.timer cadence-agent-poll.timer
+  3. sudo systemctl start cadence-agent.timer cadence-agent-poll.timer \
+       cadence-agent-health-check-boot.timer
 
 See https://github.com/Johlansl/cadence for the full install notes.
 EOF
 elif [ -d /run/systemd/system ]; then
 	# Upgrade on an already-configured host: reload and let the timers pick up
 	# the new binary/units on their next fire.
-	systemctl try-restart cadence-agent.timer cadence-agent-poll.timer >/dev/null 2>&1 || true
+	systemctl try-restart cadence-agent.timer cadence-agent-poll.timer \
+		cadence-agent-health-check-boot.timer >/dev/null 2>&1 || true
 fi
 
 exit 0

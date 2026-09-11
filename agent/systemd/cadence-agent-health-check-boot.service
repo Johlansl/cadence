@@ -1,0 +1,34 @@
+[Unit]
+Description=Cadence agent -- refresh health_status once after boot
+Documentation=file:/usr/local/share/doc/cadence/README.md
+After=network-online.target
+Wants=network-online.target
+# Bounded retry for "no network yet at boot": on a genuine failure (a real
+# transport/server error, NOT the ordinary "no job to run" case -- see
+# cmd/agent/main.go's -health-check-boot path, that is a quiet success),
+# retry a few times within a short window, then give up until the next boot.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/cadence/agent.env
+ExecStart=/usr/local/bin/cadence-agent -health-check-boot
+
+# A health check is read-only and bounded (healthCheckTimeout = 5 min in
+# cmd/agent/main.go), plus two short HTTP round trips; this margin covers a
+# few retries around it without approaching cadence-agent-poll.service's
+# budget.
+TimeoutStartSec=600
+Nice=10
+IOSchedulingClass=idle
+
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+LockPersonality=true
+
+Restart=on-failure
+RestartSec=30s
+
+# No [Install] section: started by cadence-agent-health-check-boot.timer.
