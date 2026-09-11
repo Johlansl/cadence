@@ -43,6 +43,7 @@ const (
 	jobTimeout           = 60 * time.Minute // checks + apt action + bounded dpkg recovery
 	postJobReportTimeout = 5 * time.Minute  // the fresh report sent after a job
 	dryRunTimeout        = 5 * time.Minute  // apt-get update + -s dist-upgrade
+	healthCheckTimeout   = 5 * time.Minute  // dpkg/apt/disk/service/reboot probes only
 )
 
 func main() {
@@ -173,6 +174,38 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		}
 		if res.Status == "failed" {
 			return fmt.Errorf("dry-run job %s failed", job.ID)
+		}
+		return nil
+	}
+
+	// Health check: reruns the same post-check style probes as an
+	// apt_upgrade's post-check phase, with no upgrade attached. Placed
+	// before the CADENCE_ENABLE_UPGRADES gate for the same reason as
+	// apt_dry_run -- it changes nothing on the host. Reached either from a
+	// manually triggered dashboard job (via the normal report/next-job
+	// piggyback) or from -health-check-boot.
+	if job.JobType == "health_check" {
+		hctx, hcancel := context.WithTimeout(context.Background(), healthCheckTimeout)
+		defer hcancel()
+
+		settings := job.HealthCheckSettings()
+		checkOptions := executor.CheckOptionsFromThresholds(
+			settings.MinimumAvailableBytes, settings.BootMinimumAvailableBytes, settings.LockWaitSeconds,
+		)
+		logging.Info("running health check", "job_id", job.ID)
+		res := executor.RunHealthCheck(hctx, checkOptions)
+		logging.Info("health check finished", "job_id", job.ID, "health_status", res.HealthStatus)
+
+		if err := submit(client.JobResult{
+			Status: res.Status, ExitCode: res.ExitCode, Log: res.Log,
+			RebootRequired:  res.RebootRequired,
+			FailureCategory: res.FailureCategory, FailureSummary: res.FailureSummary,
+			PostChecks: res.PostChecks, HealthStatus: res.HealthStatus,
+		}); err != nil {
+			return fmt.Errorf("submitting job result: %w", err)
+		}
+		if res.Status == "failed" {
+			return fmt.Errorf("health-check job %s failed", job.ID)
 		}
 		return nil
 	}
