@@ -99,6 +99,58 @@ class AgentToken(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class EnrollmentCode(Base):
+    __tablename__ = "enrollment_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    secret_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    ca_fingerprint_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_host_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE")
+    )
+    enrolled_host_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="SET NULL")
+    )
+    expected_hostname: Mapped[str | None] = mapped_column(Text)
+    label: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    reboot_policy: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'never'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentCertificate(Base):
+    __tablename__ = "agent_certificates"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    host_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("hosts.id", ondelete="CASCADE"), nullable=False
+    )
+    enrollment_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("enrollment_codes.id", ondelete="SET NULL")
+    )
+    serial_number: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    fingerprint_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Package(Base):
     __tablename__ = "packages"
 
