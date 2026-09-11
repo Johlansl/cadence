@@ -57,6 +57,7 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
         if (
             request.method == "OPTIONS"
             or path in ("/healthz", "/readyz")
+            or path == "/api/v1/agent/enroll"
             or (docs and path in _DOCS_PATHS)
             or request.headers.get("x-cadence-token-hash") is not None
             or request.headers.get("x-admin-key") is not None
@@ -125,6 +126,7 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
     app.include_router(campaigns.router)
     app.include_router(campaigns.admin_router)
     app.include_router(enrollments.admin_router)
+    app.include_router(enrollments.agent_router)
     app.include_router(exclusions.router)
     app.include_router(exclusions.admin_router)
     app.include_router(fleet.router)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 ROOT_CERT_FILENAME = "client-root-ca.crt"
 ROOT_KEY_FILENAME = "client-root-ca.key"
@@ -25,6 +26,7 @@ INTERMEDIATE_KEY_FILENAME = "client-intermediate-ca.key"
 
 _ROOT_LIFETIME = timedelta(days=3650)
 _INTERMEDIATE_LIFETIME = timedelta(days=1825)
+_LEAF_LIFETIME = timedelta(days=90)
 _CLOCK_SKEW = timedelta(minutes=5)
 
 
@@ -35,6 +37,15 @@ class ClientCAPaths:
     root_private_key: Path
     intermediate_certificate: Path
     intermediate_private_key: Path
+
+
+@dataclass(frozen=True)
+class IssuedClientCertificate:
+    certificate_chain_pem: str
+    serial_number: str
+    fingerprint_sha256: str
+    not_before: datetime
+    expires_at: datetime
 
 
 def paths(directory: str | Path) -> ClientCAPaths:
@@ -222,3 +233,78 @@ def ensure_client_ca(directory: str | Path) -> ClientCAPaths:
         _load_and_validate(target)
     return target
 
+
+def issue_client_certificate(
+    directory: str | Path, csr_pem: str, host_id: uuid.UUID
+) -> IssuedClientCertificate:
+    """Sign one agent-generated ECDSA P-256 CSR for a specific host."""
+    target = ensure_client_ca(directory)
+    try:
+        csr = x509.load_pem_x509_csr(csr_pem.encode())
+    except ValueError as exc:
+        raise ValueError("invalid certificate signing request") from exc
+    if not csr.is_signature_valid:
+        raise ValueError("certificate signing request signature is invalid")
+    public_key = csr.public_key()
+    if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
+        public_key.curve, ec.SECP256R1
+    ):
+        raise ValueError("certificate signing request must use ECDSA P-256")
+
+    intermediate_cert = x509.load_pem_x509_certificate(
+        target.intermediate_certificate.read_bytes()
+    )
+    intermediate_key = serialization.load_pem_private_key(
+        target.intermediate_private_key.read_bytes(), password=None
+    )
+    if not isinstance(intermediate_key, ec.EllipticCurvePrivateKey):
+        raise RuntimeError("client intermediate CA private key must be ECDSA")
+
+    now = datetime.now(timezone.utc)
+    serial = x509.random_serial_number()
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(_name(f"Cadence agent {host_id}"))
+        .issuer_name(intermediate_cert.subject)
+        .public_key(public_key)
+        .serial_number(serial)
+        .not_valid_before(now - _CLOCK_SKEW)
+        .not_valid_after(now + _LEAF_LIFETIME)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.UniformResourceIdentifier(f"urn:cadence:host:{host_id}")]
+            ),
+            critical=False,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(public_key), False)
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(intermediate_key.public_key()),
+            False,
+        )
+        .sign(intermediate_key, hashes.SHA256())
+    )
+    leaf_pem = certificate.public_bytes(serialization.Encoding.PEM)
+    chain = leaf_pem + target.intermediate_certificate.read_bytes()
+    return IssuedClientCertificate(
+        certificate_chain_pem=chain.decode(),
+        serial_number=format(serial, "x"),
+        fingerprint_sha256=certificate.fingerprint(hashes.SHA256()).hex(),
+        not_before=certificate.not_valid_before_utc,
+        expires_at=certificate.not_valid_after_utc,
+    )

@@ -216,6 +216,29 @@ class EnrollmentOut(BaseModel):
     state: EnrollmentState
 
 
+class EnrollmentClaim(BaseModel):
+    code: str = Field(min_length=1, max_length=160)
+    hostname: str = Field(min_length=1, max_length=255)
+    fqdn: str | None = Field(default=None, max_length=255)
+    csr_pem: str = Field(min_length=1, max_length=16_384)
+
+    @field_validator("hostname")
+    @classmethod
+    def _strip_claim_hostname(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("hostname must not be blank")
+        return stripped
+
+
+class EnrollmentClaimed(BaseModel):
+    host_id: uuid.UUID
+    server_url: str
+    token: str
+    client_certificate_pem: str
+    client_certificate_expires_at: datetime
+
+
 # --- agent report ingestion -------------------------------------------------
 
 class ReportPackage(BaseModel):

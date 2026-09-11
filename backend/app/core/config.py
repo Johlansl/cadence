@@ -165,6 +165,14 @@ class Settings:
         )
         if self.enrollment_default_ttl_minutes < 5:
             raise RuntimeError("CADENCE_ENROLLMENT_DEFAULT_TTL_MINUTES must be >= 5")
+        self.client_pki_dir: str = os.environ.get(
+            "CADENCE_CLIENT_PKI_DIR", "/var/lib/cadence/client-pki"
+        )
+        self.site_address: str = os.environ.get("CADENCE_SITE_ADDRESS", "cadence.lan")
+        self.agent_port: int = _bounded_positive_int("CADENCE_AGENT_PORT", 8443, 65535)
+        self.ratelimit_enrollment_max: int = _positive_int(
+            "CADENCE_RATELIMIT_ENROLLMENT_MAX", 10
+        )
 
         # Networks whose X-Forwarded-For header is trusted (the reverse
         # proxies in front of the backend). Empty -> the direct connection IP

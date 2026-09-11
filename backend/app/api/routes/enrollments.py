@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -13,15 +16,26 @@ from sqlalchemy.orm import Session
 from app.api.audit import record_audit
 from app.api.deps import get_db, require_admin_key
 from app.core.config import settings
-from app.enrollment import generate_enrollment_code
-from app.models.models import EnrollmentCode, Host
-from app.schemas.schemas import EnrollmentCreate, EnrollmentCreated, EnrollmentOut
+from app.core.crypto import encrypt_token_secret
+from app.core.ratelimit import note_rejected, ratelimiter
+from app.core.throttle import client_ip, throttle
+from app.enrollment import generate_enrollment_code, parse_enrollment_code, server_ca_fingerprint
+from app.models.models import AgentCertificate, AgentToken, AuditLog, EnrollmentCode, Host
+from app.pki.client_ca import issue_client_certificate
+from app.schemas.schemas import (
+    EnrollmentClaim,
+    EnrollmentClaimed,
+    EnrollmentCreate,
+    EnrollmentCreated,
+    EnrollmentOut,
+)
 
 admin_router = APIRouter(
     prefix="/api/v1/admin/enrollments",
     tags=["admin", "enrollment"],
     dependencies=[Depends(require_admin_key)],
 )
+agent_router = APIRouter(prefix="/api/v1/agent", tags=["agent", "enrollment"])
 
 EnrollmentStateFilter = Literal["pending", "expired", "consumed", "revoked"]
 
@@ -164,3 +178,128 @@ def revoke_enrollment(
         )
         db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _reject_enrollment(request: Request) -> None:
+    ip = client_ip(request)
+    delay = throttle.record_failure(ip, kind="enrollment")
+    if delay:
+        await asyncio.sleep(delay)
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid enrollment code")
+
+
+@agent_router.post("/enroll", response_model=EnrollmentClaimed)
+async def claim_enrollment(
+    request: Request, payload: EnrollmentClaim, db: Session = Depends(get_db)
+) -> EnrollmentClaimed:
+    """Atomically consume one code and issue both HMAC and mTLS credentials."""
+    ip = client_ip(request)
+    retry_after = ratelimiter.check(
+        f"enrollment:{ip}",
+        limit=settings.ratelimit_enrollment_max,
+        window=settings.ratelimit_window_seconds,
+    )
+    if retry_after:
+        note_rejected(
+            "enrollment", ip, settings.ratelimit_enrollment_max, retry_after, request.url.path
+        )
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "rate limit exceeded",
+            headers={"Retry-After": str(int(retry_after))},
+        )
+
+    try:
+        parts = parse_enrollment_code(payload.code)
+        current_fingerprint = server_ca_fingerprint(settings.server_ca_file)
+    except (ValueError, RuntimeError):
+        await _reject_enrollment(request)
+
+    now = datetime.now(timezone.utc)
+    row = db.execute(
+        select(EnrollmentCode)
+        .where(EnrollmentCode.secret_hash == parts.secret_hash)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if (
+        row is None
+        or row.consumed_at is not None
+        or row.revoked_at is not None
+        or row.expires_at <= now
+        or not secrets.compare_digest(
+            parts.ca_fingerprint_sha256, row.ca_fingerprint_sha256
+        )
+        or not secrets.compare_digest(parts.ca_fingerprint_sha256, current_fingerprint)
+    ):
+        await _reject_enrollment(request)
+
+    if row.target_host_id is None:
+        if not secrets.compare_digest(payload.hostname, row.expected_hostname or ""):
+            await _reject_enrollment(request)
+        host = Host(
+            hostname=payload.hostname,
+            fqdn=payload.fqdn,
+            description=row.description,
+            tags=row.tags,
+            reboot_policy=row.reboot_policy,
+        )
+        db.add(host)
+        db.flush()
+    else:
+        host = db.execute(
+            select(Host).where(Host.id == row.target_host_id).with_for_update()
+        ).scalar_one_or_none()
+        if (
+            host is None
+            or not host.is_active
+            or not secrets.compare_digest(payload.hostname, host.hostname)
+        ):
+            await _reject_enrollment(request)
+
+    try:
+        issued = issue_client_certificate(settings.client_pki_dir, payload.csr_pem, host.id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    token = secrets.token_urlsafe(32)
+    db.add(
+        AgentToken(
+            host_id=host.id,
+            token_hash=hashlib.sha256(token.encode()).hexdigest(),
+            secret_encrypted=encrypt_token_secret(token),
+            label="enrollment",
+            expires_at=now + timedelta(days=settings.token_default_expiry_days),
+        )
+    )
+    db.add(
+        AgentCertificate(
+            host_id=host.id,
+            enrollment_code_id=row.id,
+            serial_number=issued.serial_number,
+            fingerprint_sha256=issued.fingerprint_sha256,
+            not_before=issued.not_before,
+            expires_at=issued.expires_at,
+        )
+    )
+    row.enrolled_host_id = host.id
+    row.consumed_at = now
+    db.add(
+        AuditLog(
+            action="enrollment.consume",
+            target_type="enrollment_code",
+            target_id=str(row.id),
+            actor="agent-enrollment",
+            client=ip,
+            request_id=getattr(request.state, "request_id", None),
+            detail={"host_id": str(host.id)},
+        )
+    )
+    db.commit()
+    throttle.record_success(ip)
+    return EnrollmentClaimed(
+        host_id=host.id,
+        server_url=f"https://{settings.site_address}:{settings.agent_port}",
+        token=token,
+        client_certificate_pem=issued.certificate_chain_pem,
+        client_certificate_expires_at=issued.expires_at,
+    )
