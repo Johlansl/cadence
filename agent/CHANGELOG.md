@@ -3,6 +3,34 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.13.0
+
+A standalone `health_check` job: reruns the same read-only checks as an
+`apt_upgrade`'s post-check phase (dpkg audit, apt dependencies, disk space,
+failed services, reboot required) with no upgrade attached, and reports a
+fresh `health_status`. Unlike the post-check phase inside an `apt_upgrade`, a
+currently-failed service is always a non-blocking `warning`: a standalone
+check has no pre-run baseline in the same job to diff a "new" failure
+against, so treating an already-broken service as freshly `failed` would be
+a manufactured signal.
+
+- Manually triggerable from the dashboard, same pattern as the `apt_dry_run`
+  "dry run" button.
+- A new systemd unit pair, `cadence-agent-health-check-boot.service` /
+  `.timer`, runs the agent with `-health-check-boot` about 45 seconds after
+  every boot, whatever caused it: a Cadence job, a manual SSH reboot, a
+  Proxmox-level reboot. It asks the new `POST /api/v1/agent/health-check-job`
+  for a job (create-and-claim in one round trip, through the same
+  `create_job_for_host` every other job path on the server uses) and runs it
+  through the same dispatch as any other job. No job pending, or the host
+  busy with something else: exits quietly, the regular poll timer catches up.
+- Bounded retry on failure (`Restart=on-failure`, capped by
+  `StartLimitIntervalSec`/`StartLimitBurst`), so a host with no network yet
+  at boot gets a few more attempts within the same boot; the unit never
+  blocks reaching a working system (`Type=oneshot`, no `[Install]` into
+  `multi-user.target`, exactly like the existing two unit pairs).
+- `-health-check-boot` and `-poll` are mutually exclusive flags.
+
 ## 0.12.1
 
 Drop `RestrictSUIDSGID=true` from `cadence-agent.service` and

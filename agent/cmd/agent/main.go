@@ -34,7 +34,7 @@ import (
 // builds override it with the git tag via
 // -ldflags "-X main.agentVersion=<version>" (see scripts/publish-agent.sh).
 // Keep this literal in step with the newest agent/CHANGELOG.md heading.
-var agentVersion = "0.12.1"
+var agentVersion = "0.13.0"
 
 // Run-phase timeouts. Each systemd unit's TimeoutStartSec MUST comfortably
 // exceed the sum of the timeouts on its path, or systemd SIGKILLs the whole

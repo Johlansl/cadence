@@ -8,6 +8,20 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Agent `0.13.0`: a standalone `health_check` job type. It reruns an
+  `apt_upgrade`'s post-check phase (dpkg audit, apt dependencies, disk
+  space, failed services, reboot required) with no upgrade attached,
+  refreshing `hosts.health_status` outside of an `apt_upgrade` result:
+  manually from the dashboard (same pattern as `apt_dry_run`), and
+  automatically once per boot via a new systemd unit pair that asks a new
+  agent-token-authenticated `POST /api/v1/agent/health-check-job` to
+  create-and-claim the job in one round trip. Migration `0019` widens
+  `jobs.job_type`'s CHECK. A `health_check` result carries
+  `post_checks`/`health_status` without `pre_checks`; the cross-field
+  consistency rule that used to require `pre_checks` whenever
+  `post_checks`/`health_status` are sent now lives in `submit_job_result`
+  (job-type aware) instead of the shared Pydantic validator. Campaigns are
+  unaffected: `campaigns.job_type` stays fixed to `apt_upgrade`.
 - Agent `0.12.1`: `RestrictSUIDSGID=true` dropped from both `systemd` units. It
   was silently breaking upgrades of packages that ship setuid/setgid files
   (`shadow` -> `newgrp` / `chage`, `sudo`, `mount`, ...). Reliability of the
