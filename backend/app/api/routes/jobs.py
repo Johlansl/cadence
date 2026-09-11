@@ -112,14 +112,37 @@ def submit_job_result(
             http_status.HTTP_409_CONFLICT,
             f"job is not running (status={job.status})",
         )
-    if job.job_type != "apt_upgrade" and any(
+    if job.job_type not in ("apt_upgrade", "health_check") and any(
         value is not None
         for value in (payload.pre_checks, payload.post_checks, payload.health_status)
     ):
         raise HTTPException(
             http_status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "health checks only apply to apt_upgrade jobs",
+            "health checks only apply to apt_upgrade and health_check jobs",
         )
+    if job.job_type == "apt_upgrade":
+        if payload.post_checks is not None and payload.pre_checks is None:
+            raise HTTPException(
+                http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "pre_checks are required when post_checks are present for an "
+                "apt_upgrade job",
+            )
+        if payload.pre_checks is None and payload.health_status is not None:
+            raise HTTPException(
+                http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "health_status requires pre_checks for an apt_upgrade job",
+            )
+    elif job.job_type == "health_check":
+        if payload.pre_checks is not None:
+            raise HTTPException(
+                http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "a health_check job's result must not carry pre_checks",
+            )
+        if payload.post_checks is None or payload.health_status is None:
+            raise HTTPException(
+                http_status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "a health_check job's result must carry post_checks and health_status",
+            )
 
     job.status = payload.status
     job.log = payload.log

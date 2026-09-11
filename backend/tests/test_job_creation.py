@@ -73,6 +73,16 @@ def test_reboot_job_gets_neither_held_list(db_session):
     assert job.params == {}
 
 
+def test_health_check_job_gets_thresholds_but_no_excluded_or_held_lists(db_session):
+    host = _host(db_session)
+
+    job = create_job_for_host(db_session, host_id=host.id, job_type="health_check")
+
+    assert job.params == {"health_checks": _health_checks()}
+    assert "excluded_packages" not in job.params
+    assert "known_held_packages" not in job.params
+
+
 def test_caller_params_are_kept_but_server_values_are_overwritten(db_session):
     host = _host(db_session)
 

@@ -494,8 +494,14 @@ class JobResultIn(BaseModel):
     # (roadmap item 4). None = not a dry-run, or a dry-run that failed before
     # producing a preview. Stored under job.result['dry_run'].
     dry_run: DryRunResultIn | None = None
-    # Sent by agent >= 0.12.0 for apt_upgrade. Action status above remains
-    # independent: apt may succeed while post-check health is unhealthy.
+    # Sent by agent >= 0.12.0 for apt_upgrade, and by agent >= 0.13.0 for a
+    # standalone health_check job. Action status above remains independent:
+    # apt may succeed while post-check health is unhealthy. Whether
+    # pre_checks are required alongside post_checks/health_status is
+    # job_type-dependent (an apt_upgrade always needs them, a health_check
+    # never carries them), so that rule lives in submit_job_result (jobs.py),
+    # not here -- this validator only checks the shape of what was actually
+    # sent, regardless of job_type.
     pre_checks: HealthCheckPhaseIn | None = None
     post_checks: HealthCheckPhaseIn | None = None
     health_status: HostHealthStatus | None = None
@@ -513,9 +519,7 @@ class JobResultIn(BaseModel):
                 raise ValueError(
                     f"health_status must be {expected!r} for the post-check phase"
                 )
-            if self.pre_checks is None:
-                raise ValueError("pre_checks are required when post_checks are present")
-            if self.pre_checks.status not in ("passed", "warning"):
+            if self.pre_checks is not None and self.pre_checks.status not in ("passed", "warning"):
                 raise ValueError("post_checks require non-blocking pre_checks")
         elif self.pre_checks is not None:
             if self.pre_checks.status not in ("failed", "unknown"):
@@ -524,8 +528,6 @@ class JobResultIn(BaseModel):
                 raise ValueError(
                     "health_status must be 'unknown' when pre-checks block the action"
                 )
-        elif self.pre_checks is None and self.health_status is not None:
-            raise ValueError("health_status requires pre_checks")
         return self
 
 

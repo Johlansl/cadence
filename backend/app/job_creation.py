@@ -38,13 +38,15 @@ def create_job_for_host(
     campaign engine log it and retry on their next pass.
 
     For an `apt_upgrade` or `apt_dry_run` job the server-resolved
-    `params.excluded_packages` is injected, and for `apt_upgrade` also
-    `params.known_held_packages` and the server's health-check thresholds;
-    all always overwrite whatever the caller passed under those keys. The Job
-    is added and flushed (so `job.id` is
-    populated) but not committed, and no audit row is written -- the caller
-    owns both. The host is assumed to exist (FK-guaranteed for the scheduler
-    and engine callers; the route checks it first).
+    `params.excluded_packages` is injected. `apt_upgrade` additionally gets
+    `params.known_held_packages`. Both `apt_upgrade` and `health_check` get
+    the server's health-check thresholds in `params.health_checks`, since
+    `health_check` reruns the same disk-space checks under the same policy.
+    All of these always overwrite whatever the caller passed under those
+    keys. The Job is added and flushed (so `job.id` is populated) but not
+    committed, and no audit row is written -- the caller owns both. The host
+    is assumed to exist (FK-guaranteed for the scheduler and engine callers;
+    the route checks it first).
     """
     active = db.execute(
         select(Job.id)
@@ -59,6 +61,7 @@ def create_job_for_host(
         params["excluded_packages"] = resolve_for_job(db, host_id)
     if job_type == "apt_upgrade":
         params["known_held_packages"] = known_held_for_host(db, host_id)
+    if job_type in ("apt_upgrade", "health_check"):
         params["health_checks"] = {
             "minimum_available_bytes": settings.upgrade_minimum_available_bytes,
             "boot_minimum_available_bytes": settings.upgrade_boot_minimum_available_bytes,

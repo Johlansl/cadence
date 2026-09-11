@@ -345,6 +345,80 @@ def _make_dry_run_job(client, host_id: str) -> str:
     return r.json()["id"]
 
 
+def _make_health_check_job(client, host_id: str) -> str:
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/jobs",
+        headers=ADMIN_HEADERS,
+        json={"job_type": "health_check"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_health_check_result_accepts_post_checks_without_pre_checks(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_health_check_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))  # -> running
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "succeeded",
+            "exit_code": 0,
+            "post_checks": _phase("passed", "passed"),
+            "health_status": "healthy",
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    result = db_session.get(Job, job_id).result
+    assert "pre_checks" not in result
+    assert result["post_checks"]["status"] == "passed"
+    assert result["health_status"] == "healthy"
+    host = db_session.get(Host, host_id)
+    assert host.health_status == "healthy"
+    assert host.health_checked_at == db_session.get(Job, job_id).completed_at
+
+
+def test_health_check_result_rejects_pre_checks(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_health_check_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={
+            "status": "succeeded",
+            "exit_code": 0,
+            "pre_checks": _phase("passed", "passed"),
+            "post_checks": _phase("passed", "passed"),
+            "health_status": "healthy",
+        },
+    )
+
+    assert r.status_code == 422
+    assert db_session.get(Job, job_id).status == "running"
+
+
+def test_health_check_result_requires_post_checks_and_health_status(client):
+    for i, missing in enumerate(
+        ({"health_status": "healthy"}, {"post_checks": _phase("passed", "passed")})
+    ):
+        # A rejected submission leaves the job "running" forever (nothing
+        # rolls it back), so each case needs its own host.
+        host_id, token = create_host(client, hostname=f"vm-hc-missing-{i}")
+        job_id = _make_health_check_job(client, host_id)
+        client.post("/api/v1/agent/next-job", auth=signed(token))
+        r = client.post(
+            f"/api/v1/jobs/{job_id}/result",
+            auth=signed(token),
+            json={"status": "succeeded", "exit_code": 0, **missing},
+        )
+        assert r.status_code == 422, missing
+
+
 # The agent's bounded() (agent/internal/healthcheck/checks.go) truncates every
 # check summary and evidence line to at most this many bytes, ellipsis
 # included. It must land exactly on the server's own limit
