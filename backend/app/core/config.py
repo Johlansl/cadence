@@ -153,6 +153,19 @@ class Settings:
             "CADENCE_SIGNATURE_WINDOW_SECONDS", 300
         )
 
+        # Enrollment codes pin the exact bytes of Caddy's exported server CA.
+        # The endpoint reads this file only when an administrator creates a
+        # code, so a missing publish step fails explicitly without preventing
+        # unrelated API operations from starting.
+        self.server_ca_file: str = os.environ.get(
+            "CADENCE_SERVER_CA_FILE", "/srv/dist/agent/ca.crt"
+        )
+        self.enrollment_default_ttl_minutes: int = _bounded_positive_int(
+            "CADENCE_ENROLLMENT_DEFAULT_TTL_MINUTES", 30, 240
+        )
+        if self.enrollment_default_ttl_minutes < 5:
+            raise RuntimeError("CADENCE_ENROLLMENT_DEFAULT_TTL_MINUTES must be >= 5")
+
         # Networks whose X-Forwarded-For header is trusted (the reverse
         # proxies in front of the backend). Empty -> the direct connection IP
         # is used for the auth throttle and the audit `client` column.

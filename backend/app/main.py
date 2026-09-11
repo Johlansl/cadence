@@ -14,6 +14,7 @@ from app import __version__
 from app.api.routes import (
     admin,
     campaigns,
+    enrollments,
     exclusions,
     fleet,
     hosts,
@@ -123,6 +124,7 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
     app.include_router(admin.router)
     app.include_router(campaigns.router)
     app.include_router(campaigns.admin_router)
+    app.include_router(enrollments.admin_router)
     app.include_router(exclusions.router)
     app.include_router(exclusions.admin_router)
     app.include_router(fleet.router)

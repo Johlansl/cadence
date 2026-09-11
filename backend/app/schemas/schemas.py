@@ -154,6 +154,68 @@ class TokenOut(BaseModel):
     state: TokenState
 
 
+# --- admin: agent enrollment -------------------------------------------------
+
+EnrollmentState = Literal["pending", "expired", "consumed", "revoked"]
+
+
+class EnrollmentCreate(BaseModel):
+    """Create a code for one new hostname or one existing host migration."""
+
+    target_host_id: uuid.UUID | None = None
+    expected_hostname: str | None = Field(default=None, min_length=1, max_length=255)
+    label: str | None = Field(default=None, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+    tags: dict[str, str] = Field(default_factory=dict)
+    reboot_policy: RebootMode = "never"
+    ttl_minutes: int | None = Field(default=None, ge=5, le=240)
+
+    @field_validator("expected_hostname")
+    @classmethod
+    def _strip_hostname(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("expected_hostname must not be blank")
+        return stripped
+
+    @field_validator("tags")
+    @classmethod
+    def _validate_enrollment_tags(cls, value: dict[str, str]) -> dict[str, str]:
+        return HostUpdate(tags=value).tags or {}
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> "EnrollmentCreate":
+        if (self.target_host_id is None) == (self.expected_hostname is None):
+            raise ValueError("provide exactly one of target_host_id or expected_hostname")
+        return self
+
+
+class EnrollmentCreated(BaseModel):
+    id: uuid.UUID
+    code: str
+    expires_at: datetime
+    target_host_id: uuid.UUID | None
+    expected_hostname: str | None
+
+
+class EnrollmentOut(BaseModel):
+    id: uuid.UUID
+    target_host_id: uuid.UUID | None
+    enrolled_host_id: uuid.UUID | None
+    expected_hostname: str | None
+    label: str | None
+    description: str | None
+    tags: dict[str, str]
+    reboot_policy: str
+    created_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None
+    revoked_at: datetime | None
+    state: EnrollmentState
+
+
 # --- agent report ingestion -------------------------------------------------
 
 class ReportPackage(BaseModel):
