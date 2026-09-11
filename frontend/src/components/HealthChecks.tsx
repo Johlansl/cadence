@@ -109,6 +109,19 @@ function Phase({ label, phase }: { label: string; phase: HealthCheckPhase }) {
   )
 }
 
+// A standalone health_check job's result: a single post-check phase, no
+// "Before upgrade" / "After upgrade" framing (there is no upgrade attached).
+export function HealthCheckResult({ phase }: { phase: HealthCheckPhase }) {
+  return (
+    <details className="mt-2">
+      <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">health check</summary>
+      <div className="mt-2 rounded bg-zinc-950/70 p-3">
+        <Phase label="Checks" phase={phase} />
+      </div>
+    </details>
+  )
+}
+
 export function HealthChecks({
   pre,
   post,

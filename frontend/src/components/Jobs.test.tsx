@@ -206,6 +206,55 @@ describe('Jobs', () => {
     expect(JSON.parse(String(init?.body)).job_type).toBe('apt_dry_run')
   })
 
+  it('queues a health_check job from the health check button', async () => {
+    sessionStorage.setItem('cadence.adminKey', 'sekret')
+    const fetchMock = installFetchMock({
+      [JOBS_URL]: { body: [] },
+      [POST_URL]: { status: 201, body: job({ job_type: 'health_check', status: 'pending' }) },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+    await screen.findByText('No jobs yet.')
+
+    await userEvent.click(screen.getByRole('button', { name: /health check/i }))
+
+    expect(await screen.findByText('Health check queued.')).toBeInTheDocument()
+    const [, init] = postCalls(fetchMock)[0]
+    expect(JSON.parse(String(init?.body)).job_type).toBe('health_check')
+  })
+
+  it('renders a health_check result as a single checks panel, not before/after', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            job_type: 'health_check',
+            status: 'succeeded',
+            result: {
+              exit_code: 0,
+              health_status: 'degraded',
+              post_checks: {
+                status: 'warning',
+                checks: [
+                  {
+                    name: 'reboot_required',
+                    status: 'warning',
+                    summary: 'a reboot is required',
+                    details: {},
+                  },
+                ],
+              },
+            },
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText('health check')).toBeInTheDocument()
+    expect(screen.queryByText('Before upgrade')).not.toBeInTheDocument()
+    expect(screen.queryByText('After upgrade')).not.toBeInTheDocument()
+  })
+
   it('renders the structured preview for an apt_dry_run job', async () => {
     installFetchMock({
       [JOBS_URL]: {

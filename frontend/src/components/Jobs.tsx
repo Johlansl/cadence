@@ -6,7 +6,7 @@ import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
 import { DryRunResult } from './DryRunResult'
 import { HealthBadge } from './HealthBadge'
-import { HealthChecks } from './HealthChecks'
+import { HealthCheckResult, HealthChecks } from './HealthChecks'
 import { RelativeTime } from './RelativeTime'
 import { useToast } from './Toast'
 
@@ -143,6 +143,7 @@ export function Jobs({ hostId }: { hostId: string }) {
   )
   const trig = useAdminKeyAction(createJob)
   const dry = useAdminKeyAction((key) => api.dryRunHost(hostId, key))
+  const health = useAdminKeyAction((key) => api.healthCheckHost(hostId, key))
   const clear = useAdminKeyAction((key) => api.clearHostJobs(hostId, key))
   const confirm = useConfirm()
   const toast = useToast()
@@ -158,6 +159,12 @@ export function Jobs({ hostId }: { hostId: string }) {
     if (r?.ok) toast.notify('success', 'Dry-run queued.')
     await refresh()
   }, [dry, toast, refresh])
+
+  const healthCheck = useCallback(async () => {
+    const r = await health.run()
+    if (r?.ok) toast.notify('success', 'Health check queued.')
+    await refresh()
+  }, [health, toast, refresh])
 
   const doClear = useCallback(async () => {
     if (
@@ -218,6 +225,14 @@ export function Jobs({ hostId }: { hostId: string }) {
             </button>
             <button
               type="button"
+              onClick={() => void healthCheck()}
+              disabled={health.busy || active}
+              className="rounded border border-zinc-700 px-2 py-1 text-xs font-medium text-zinc-300 hover:border-zinc-500 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {health.busy ? 'queuing…' : 'health check'}
+            </button>
+            <button
+              type="button"
               onClick={() => void trigger()}
               disabled={trig.busy || active}
               className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
@@ -250,7 +265,10 @@ export function Jobs({ hostId }: { hostId: string }) {
         </p>
       ) : (
         <>
-          <AdminActionFeedback actions={[trig, dry, clear]} onKeyAccepted={() => void refresh()} />
+          <AdminActionFeedback
+            actions={[trig, dry, health, clear]}
+            onKeyAccepted={() => void refresh()}
+          />
 
           {jobs.length === 0 ? (
             <p className="mt-2 text-xs text-zinc-600">No jobs yet.</p>
@@ -303,8 +321,12 @@ export function Jobs({ hostId }: { hostId: string }) {
                     {j.job_type === 'apt_dry_run' && j.result?.dry_run && (
                       <DryRunResult data={j.result.dry_run} />
                     )}
-                    {j.result?.pre_checks && (
-                      <HealthChecks pre={j.result.pre_checks} post={j.result.post_checks} />
+                    {j.job_type === 'health_check' && j.result?.post_checks ? (
+                      <HealthCheckResult phase={j.result.post_checks} />
+                    ) : (
+                      j.result?.pre_checks && (
+                        <HealthChecks pre={j.result.pre_checks} post={j.result.post_checks} />
+                      )
                     )}
                     {j.log && (
                       <details className="mt-1">

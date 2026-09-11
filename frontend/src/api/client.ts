@@ -153,6 +153,16 @@ export const api = {
     })
   },
 
+  // A standalone health check: reruns the post-check style probes (dpkg
+  // audit, apt dependencies, disk space, failed services, reboot required)
+  // and refreshes hosts.health_status, without an upgrade attached.
+  healthCheckHost(hostId: string, adminKey: string) {
+    return adminWrite<Job>(`/admin/hosts/${hostId}/jobs`, adminKey, 'POST', {
+      job_type: 'health_check',
+      requested_by: 'dashboard',
+    })
+  },
+
   patchHost(
     hostId: string,
     adminKey: string,
