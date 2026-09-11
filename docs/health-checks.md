@@ -77,6 +77,34 @@ a campaign. This preserves the policy used for that run in `jobs.params`.
 An agent receiving a job without these settings, for example from an older
 server, uses the same defaults locally.
 
+## Triggers outside of apt_upgrade
+
+Besides an `apt_upgrade`'s own post-checks, exactly two other things refresh
+`health_status`, both via a standalone `health_check` job (agent `0.13.0`+)
+that reruns the same post-check probes with no upgrade attached:
+
+- **Manual**: a "health check" button on the host page, next to "dry run" and
+  "trigger dist-upgrade", same pattern.
+- **Automatic, once per boot**: a systemd unit
+  (`cadence-agent-health-check-boot.timer`) fires about 45 seconds after
+  every boot, whatever caused it -- a Cadence `apt_upgrade` with
+  `reboot: auto`, a manual SSH reboot, a Proxmox-level reboot. It asks a new
+  `POST /api/v1/agent/health-check-job` to atomically create and claim a
+  `health_check` job for the calling host, then runs it exactly like any
+  other job. The trigger is the boot itself (systemd), not agent-persisted
+  state: the agent stays stateless between runs.
+
+A plain periodic report never touches `health_status`: this is deliberate,
+ruled out for its continuous, unbounded cost. These three triggers --
+`apt_upgrade`'s own post-checks, the manual button, the once-per-boot check
+-- are the only ones.
+
+A `health_check` result carries `post_checks` and `health_status` but never
+`pre_checks` (there is no pre-check phase without an upgrade to gate). Its
+failed-services check never distinguishes "new" from "pre-existing": a
+currently-failed service is always a `warning`, since a standalone check has
+no pre-run baseline in the same job to diff a "new" failure against.
+
 ## Compatibility and rollout
 
 The server continues to accept job results from older agents. Their jobs have

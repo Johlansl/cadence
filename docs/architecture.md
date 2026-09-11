@@ -36,6 +36,12 @@ host. There is no long-poll and no daemon:
 - `POST /api/v1/agent/next-job`: a dedicated fast poll (~1 min) that claims a
   pending job without re-collecting package state, so a dashboard-triggered
   action starts within about a minute instead of waiting for the next report.
+- `POST /api/v1/agent/health-check-job`: atomically creates and hands back a
+  standalone `health_check` job for the calling host, through the same
+  `create_job_for_host` every job-creation path uses. Used by the
+  once-per-boot systemd unit (`cadence-agent-health-check-boot.timer`, agent
+  `0.13.0`+); returns no job when the host already has another one pending or
+  running, and the regular poll picks that up instead.
 
 Job claiming uses `SELECT ... FOR UPDATE SKIP LOCKED`, so the report path and
 the poll path racing on the same job is safe, exactly one claims it.
@@ -80,15 +86,20 @@ PostgreSQL, schema owned by Alembic (`backend/alembic/versions/`; revision
   agent reports it). Replaced wholesale on every report.
 - `reports`: an append-only log of each report (counters + the raw payload).
 - `jobs`: queued/running/finished actions (`apt_upgrade`, `reboot`,
-  `apt_dry_run` -- a DB CHECK closes the set), with a jsonb `params`, a
-  captured `log`, and a nullable `campaign_id` (set when the campaign engine
-  created the job, NULL otherwise). `apt_dry_run`
+  `apt_dry_run`, `health_check` -- a DB CHECK closes the set), with a jsonb
+  `params`, a captured `log`, and a nullable `campaign_id` (set when the
+  campaign engine created the job, NULL otherwise). `apt_dry_run`
   is a pure-read simulation: the agent runs `apt-get -s dist-upgrade` and
   reports, in `result.dry_run`, what a real `apt_upgrade` would do (packages
   it would upgrade / newly install / remove, the ones apt keeps back, the
   ones a Cadence exclusion rule filters out, and the ones already on hold on
   the box). It never runs `apt-mark`, `dpkg`, or a real upgrade, and it runs
-  even where `CADENCE_ENABLE_UPGRADES=false`. A failed job also carries a
+  even where `CADENCE_ENABLE_UPGRADES=false`. `health_check` is also a pure
+  read: it reruns `apt_upgrade`'s post-check phase (dpkg audit, apt
+  dependencies, disk space, failed services, reboot required) with no
+  upgrade attached, updating `health_status` the same way. See "Upgrade
+  health checks" below and `docs/health-checks.md`. A failed job also
+  carries a
   coarse
   `failure_category` and a one-line `failure_summary`: the agent classifies
   from the output of the apt/dpkg command that failed (or reports `timeout` /
@@ -169,6 +180,16 @@ into `params.health_checks`: 1 GiB for `/var`, 200 MiB for boot filesystems and
 a 120 second package-lock wait by default. The agent has identical fallbacks
 for jobs from an older server. See the operator guide,
 [health-checks.md](health-checks.md), for the exact order and severity rules.
+
+Outside of an `apt_upgrade`'s own post-checks, a standalone `health_check`
+job (agent `0.13.0`+, no new job type for the checks above, but its own
+`health_check` job type since there is no upgrade to gate) refreshes
+`health_status` on demand or once per boot; see
+[health-checks.md](health-checks.md#triggers-outside-of-apt_upgrade).
+Campaigns are unaffected: `campaigns.job_type` carries its own CHECK fixed to
+`apt_upgrade` (migration `0016`), and the campaign engine never passes a
+`job_type` to `create_job_for_host`, so a `health_check` job can never be
+orchestrated by a campaign.
 
 ## Webhooks
 

@@ -121,6 +121,33 @@ rather than something to defer until someone asks.
   `/run/reboot-required`, so the state self-corrects within one cycle. It is
   on the dedicated-reboot path, not the `apt_upgrade` health path this change
   is about, so it is deliberately deferred rather than fixed mid-change.
+- **A later, standalone health check IS a new job type, unlike the check
+  above.** The distinction: the checks above are integral to what an
+  `apt_upgrade` run itself needs to gate and observe about itself, so folding
+  them into that job let every creation path share one guard for free. A
+  later need (a host's `health_status` never self-heals after a reboot with
+  no `apt_upgrade` since, and a freshly-upgraded agent starts at `unknown`
+  forever with no job to set it) has no upgrade attached at all: there is
+  nothing to gate. A new `health_check` job type is the correct closure here,
+  reusing the same post-check functions verbatim (no duplicated logic) and
+  the same `params.health_checks` threshold injection, rather than inventing
+  a fourth way to ask "what state is this host in".
+- **The once-per-boot trigger is systemd/the boot itself, not
+  agent-persisted state.** The agent has no local state file recording "I
+  rebooted" to read back -- the same principle already settled for hold
+  reconciliation (roadmap item 3: a local state file was explicitly rejected
+  there too, for the same robustness reason). A dedicated systemd timer with
+  `OnBootSec=` fires once per boot regardless of who or what caused it (a
+  Cadence job, a manual SSH reboot, a Proxmox-level reboot), which is exactly
+  the "any reboot, any cause" trigger this needed.
+- **The boot path asks the server to create-and-claim, it never constructs a
+  job itself.** `POST /api/v1/agent/health-check-job` reuses
+  `create_job_for_host` exactly as every other creation path does (the admin
+  route, the scheduler, the campaign engine), so the "one active job per
+  host" invariant and the `params.health_checks` threshold injection apply
+  uniformly. If the host already has another job active, the endpoint
+  returns no job rather than special-casing what kind of job that is; the
+  regular poll picks it up.
 
 ## Authentication
 
