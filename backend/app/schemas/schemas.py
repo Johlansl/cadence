@@ -22,10 +22,13 @@ RebootMode = Literal["auto", "never", "prompt"]
 
 # Job kinds the API accepts. The scheduler only ever creates 'apt_upgrade'.
 # 'apt_dry_run' is a pure-read simulation (roadmap item 4): it never changes
-# anything on the host. jobs.job_type stays free TEXT in the DB (no CHECK);
-# this Literal is the only closed-set enforcement, tightened to a DB CHECK
-# only when campaigns (item 5) add job types.
-JobType = Literal["apt_upgrade", "reboot", "apt_dry_run"]
+# anything on the host. 'health_check' is also a pure read: it reruns an
+# apt_upgrade's post-check phase (dpkg audit, apt dependencies, disk space,
+# failed services, reboot required) with no upgrade attached, on demand or
+# once per boot. jobs.job_type carries a DB CHECK since migration 0016
+# (widened for 'health_check' by 0019); this Literal is the parallel
+# closed-set enforcement at the API layer.
+JobType = Literal["apt_upgrade", "reboot", "apt_dry_run", "health_check"]
 
 # Scope of a package_exclusions rule: every host, one named host, or every
 # host carrying a tag (roadmap item 6). A genuinely small, closed set (unlike

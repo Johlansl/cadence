@@ -20,7 +20,7 @@ from app.core.config import settings
 
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
 INIT_SQL = (BACKEND_DIR / "app" / "db" / "init.sql").read_text()
-HEAD_REVISION = "0018"
+HEAD_REVISION = "0019"
 
 
 @pytest.fixture()
