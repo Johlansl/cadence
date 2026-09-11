@@ -85,3 +85,18 @@ def test_run_migrations_adopts_a_legacy_init_sql_database(throwaway_db):
     prestart.run_migrations()  # must not raise on the pre-existing baseline
 
     assert _applied_revision(throwaway_db) == HEAD_REVISION
+
+
+def test_initialize_client_pki_only_when_enabled(tmp_path, monkeypatch):
+    from app import prestart
+
+    directory = tmp_path / "client-pki"
+    monkeypatch.setattr(prestart.settings, "client_pki_dir", str(directory))
+    monkeypatch.setattr(prestart.settings, "client_pki_init", False)
+    prestart.initialize_client_pki()
+    assert not directory.exists()
+
+    monkeypatch.setattr(prestart.settings, "client_pki_init", True)
+    prestart.initialize_client_pki()
+    assert (directory / "client-root-ca.crt").is_file()
+    assert (directory / "client-intermediate-ca.key").is_file()

@@ -1,39 +1,53 @@
-# Cadence reverse proxy. One public entrypoint, TLS terminated here.
-#
-# CADENCE_SITE_ADDRESS must be a hostname that resolves to this server for every
-# client and monitored host (LAN DNS or /etc/hosts). With a bare hostname Caddy
-# issues a certificate from its own internal CA -- export it to the hosts, see
-# README "Trust Caddy's internal CA". For a public domain + Let's Encrypt, drop
-# `tls internal` below and add an ACME email.
+# Cadence reverse proxy. One hostname, separate TLS listeners for humans and
+# agents: 443 is dashboard/bootstrap, 8443 requires an agent client certificate.
 
-# Basic-auth gate on the dashboard and the read/admin API. On by default. The
-# agent endpoints authenticate with per-host signed HMAC requests, not these
-# credentials, so they are exempt.
+# Basic-auth gate on the dashboard and read/admin API. Enrollment, authenticated
+# install assets and agent routes have their own controls and are excluded.
 (on) {
-	@dashboard not path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
+	@dashboard not path /install.sh /agent/* /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
 	basic_auth @dashboard {
 		{$CADENCE_DASHBOARD_USER} {$CADENCE_DASHBOARD_PASSWORD_HASH}
 	}
 }
 
-# CADENCE_DASHBOARD_AUTH=off imports this instead: no gate. Only on a network
-# you fully trust (a VPN, a management VLAN).
 (off) {
 }
 
-# Plain HTTP: everything redirects to HTTPS, except the agent bootstrap assets
-# (the installer, the binary, the CA itself) -- those must be reachable before
-# the host trusts the internal CA. Populated by scripts/publish-agent.sh.
+# Temporary compatibility path for agents without a client certificate. The
+# compose preflight requires an explicit on/off value, so a deployment cannot
+# silently choose whether the existing fleet remains reachable.
+(legacy-on) {
+	@legacy_agent path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
+	handle @legacy_agent {
+		reverse_proxy backend:8000 {
+			header_up -X-Cadence-Transport
+			header_up -X-Cadence-Proxy-Key
+			header_up -X-Cadence-Client-Cert-Fingerprint
+			header_up X-Cadence-Transport legacy
+			header_up X-Cadence-Proxy-Key {$CADENCE_INTERNAL_PROXY_KEY}
+		}
+	}
+}
+
+(legacy-off) {
+	@legacy_agent path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
+	handle @legacy_agent {
+		respond 404
+	}
+}
+
+# First contact on plain HTTP. This is deliberately the only handle before the
+# catch-all redirect: no installer, binary, checksum, signature or systemd unit
+# can be retrieved without authenticated HTTPS.
 http://{$CADENCE_SITE_ADDRESS} {
-	# defer so -Server also strips it from Caddy-generated responses.
 	header {
 		defer
 		-Server
 		X-Content-Type-Options nosniff
 	}
 
-	@bootstrap path /install.sh /agent/*
-	handle @bootstrap {
+	@ca path /agent/ca.crt
+	handle @ca {
 		root * /srv/dist
 		file_server
 	}
@@ -42,16 +56,11 @@ http://{$CADENCE_SITE_ADDRESS} {
 	}
 }
 
-{$CADENCE_SITE_ADDRESS} {
+# Dashboard, admin API, enrollment exchange and authenticated install assets.
+https://{$CADENCE_SITE_ADDRESS}:443 {
 	tls internal
 	encode gzip
 
-	# defer so every field (Server removal included) lands on Caddy's own
-	# responses too, e.g. the basic_auth 401. The CSP is enforcing: the
-	# dashboard is a self-contained Vite build -- one same-origin <script>
-	# and <link>, no inline code, no external assets, no eval -- so 'self'
-	# with no 'unsafe-inline' holds (verified against a real browser
-	# console). Was shipped Report-Only first.
 	header {
 		defer
 		-Server
@@ -60,17 +69,9 @@ http://{$CADENCE_SITE_ADDRESS} {
 		Referrer-Policy no-referrer
 		Cross-Origin-Opener-Policy same-origin
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
-		# The dashboard is a self-contained inventory UI: no device sensors,
-		# camera/mic, geolocation, Payment Request, WebUSB, screen capture or
-		# programmatic fullscreen; interest-cohort=() opts out of FLoC.
 		Permissions-Policy "accelerometer=(), camera=(), display-capture=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
-		# Legacy header. 0 = disable the old XSS auditor (removed from Chrome,
-		# never in Firefox, caused info-leak bugs); the enforcing CSP above is
-		# the real defense. OWASP Secure Headers recommends exactly this.
 		X-XSS-Protection "0"
 	}
-	# basic_auth's 401 is a Caddy-generated error response and bypasses the
-	# handler chain above; re-apply the same hardening on the error path.
 	handle_errors {
 		header {
 			defer
@@ -85,9 +86,63 @@ http://{$CADENCE_SITE_ADDRESS} {
 		respond "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
 	}
 
-	import {$CADENCE_DASHBOARD_AUTH:on}
+	@assets path /install.sh /agent/*
+	handle @assets {
+		root * /srv/dist
+		file_server
+	}
 
-	# nginx in the frontend image already proxies /api/ to backend:8000,
-	# so everything can go to a single upstream.
+	@enrollment path /api/v1/agent/enroll
+	handle @enrollment {
+		reverse_proxy backend:8000 {
+			header_up -X-Cadence-Transport
+			header_up -X-Cadence-Proxy-Key
+			header_up -X-Cadence-Client-Cert-Fingerprint
+			header_up X-Cadence-Transport enrollment
+			header_up X-Cadence-Proxy-Key {$CADENCE_INTERNAL_PROXY_KEY}
+		}
+	}
+
+	import legacy-{$CADENCE_LEGACY_AGENT_ENDPOINTS:off}
+	import {$CADENCE_DASHBOARD_AUTH:on}
 	reverse_proxy frontend:80
+}
+
+# Post-enrollment agent listener. Caddy verifies the client chain before HTTP
+# routing; the backend additionally binds its leaf fingerprint to the host
+# authenticated by the unchanged per-request HMAC.
+https://{$CADENCE_SITE_ADDRESS}:{$CADENCE_AGENT_PORT:8443} {
+	tls {
+		issuer internal
+		client_auth {
+			mode require_and_verify
+			trust_pool file {
+				pem_file /etc/cadence/client-pki/client-root-ca.crt
+			}
+		}
+	}
+	encode gzip
+	header {
+		defer
+		-Server
+		X-Content-Type-Options nosniff
+	}
+
+	@agent_api {
+		path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
+		not path /api/v1/agent/enroll
+	}
+	handle @agent_api {
+		reverse_proxy backend:8000 {
+			header_up -X-Cadence-Transport
+			header_up -X-Cadence-Proxy-Key
+			header_up -X-Cadence-Client-Cert-Fingerprint
+			header_up X-Cadence-Transport mtls
+			header_up X-Cadence-Proxy-Key {$CADENCE_INTERNAL_PROXY_KEY}
+			header_up X-Cadence-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
+		}
+	}
+	handle {
+		respond 404
+	}
 }

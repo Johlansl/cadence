@@ -168,11 +168,24 @@ class Settings:
         self.client_pki_dir: str = os.environ.get(
             "CADENCE_CLIENT_PKI_DIR", "/var/lib/cadence/client-pki"
         )
+        self.client_pki_init: bool = _bool_env("CADENCE_CLIENT_PKI_INIT", False)
         self.site_address: str = os.environ.get("CADENCE_SITE_ADDRESS", "cadence.lan")
         self.agent_port: int = _bounded_positive_int("CADENCE_AGENT_PORT", 8443, 65535)
         self.ratelimit_enrollment_max: int = _positive_int(
             "CADENCE_RATELIMIT_ENROLLMENT_MAX", 10
         )
+        self.require_agent_transport_auth: bool = _bool_env(
+            "CADENCE_REQUIRE_AGENT_TRANSPORT_AUTH", False
+        )
+        self.legacy_agent_endpoints: bool = _bool_env(
+            "CADENCE_LEGACY_AGENT_ENDPOINTS", True
+        )
+        self.internal_proxy_key: str = os.environ.get("CADENCE_INTERNAL_PROXY_KEY", "")
+        if self.require_agent_transport_auth and len(self.internal_proxy_key) < 32:
+            raise RuntimeError(
+                "CADENCE_INTERNAL_PROXY_KEY must be at least 32 characters when "
+                "CADENCE_REQUIRE_AGENT_TRANSPORT_AUTH is enabled"
+            )
 
         # Networks whose X-Forwarded-For header is trusted (the reverse
         # proxies in front of the backend). Empty -> the direct connection IP

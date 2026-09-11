@@ -159,3 +159,34 @@ def test_bad_csr_does_not_consume_valid_code(client, db_session, tmp_path, monke
     assert response.status_code == 400
     db_session.expire_all()
     assert db_session.get(EnrollmentCode, created["id"]).consumed_at is None
+
+
+def test_claim_requires_authenticated_enrollment_proxy(
+    client, tmp_path, monkeypatch
+):
+    _configure_pki(tmp_path, monkeypatch)
+    created = _new_code(client, "vm-enrolled")
+    _, csr = _csr()
+    monkeypatch.setattr(
+        "app.api.routes.enrollments.settings.require_agent_transport_auth", True
+    )
+    monkeypatch.setattr(
+        "app.api.routes.enrollments.settings.internal_proxy_key",
+        "transport-test-key-that-is-long-enough",
+    )
+
+    payload = {
+        "code": created["code"],
+        "hostname": "vm-enrolled",
+        "csr_pem": csr,
+    }
+    assert client.post("/api/v1/agent/enroll", json=payload).status_code == 401
+    response = client.post(
+        "/api/v1/agent/enroll",
+        headers={
+            "X-Cadence-Transport": "enrollment",
+            "X-Cadence-Proxy-Key": "transport-test-key-that-is-long-enough",
+        },
+        json=payload,
+    )
+    assert response.status_code == 200, response.text

@@ -33,6 +33,9 @@ os.environ["CADENCE_DISABLE_AUTH_THROTTLE"] = "1"
 # The successful-traffic rate limiter would 429 the many requests a single test
 # fires. Off by default here; test_ratelimit.py re-enables it per test.
 os.environ["CADENCE_RATELIMIT_ENABLED"] = "false"
+# Most API tests exercise HMAC directly without a reverse proxy. Dedicated
+# transport tests enable the Caddy marker checks explicitly.
+os.environ["CADENCE_REQUIRE_AGENT_TRANSPORT_AUTH"] = "false"
 # Fresh per test run; nothing needs it to persist across runs -- every test
 # token is issued and used within the one run that generated it.
 os.environ["CADENCE_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()

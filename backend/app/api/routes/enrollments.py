@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -188,11 +189,24 @@ async def _reject_enrollment(request: Request) -> None:
     raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid enrollment code")
 
 
+async def _require_enrollment_transport(request: Request) -> None:
+    if not settings.require_agent_transport_auth:
+        return
+    proxy_key = request.headers.get("x-cadence-proxy-key")
+    if (
+        request.headers.get("x-cadence-transport") != "enrollment"
+        or proxy_key is None
+        or not hmac.compare_digest(proxy_key, settings.internal_proxy_key)
+    ):
+        await _reject_enrollment(request)
+
+
 @agent_router.post("/enroll", response_model=EnrollmentClaimed)
 async def claim_enrollment(
     request: Request, payload: EnrollmentClaim, db: Session = Depends(get_db)
 ) -> EnrollmentClaimed:
     """Atomically consume one code and issue both HMAC and mTLS credentials."""
+    await _require_enrollment_transport(request)
     ip = client_ip(request)
     retry_after = ratelimiter.check(
         f"enrollment:{ip}",

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Validate the dashboard basic-auth hash, then start Caddy.
+# Validate security-critical proxy settings, then start Caddy.
 #
 # docker compose interpolates every `$` in .env values, so a bcrypt hash
 # pasted in raw loses its `$` separators -- Caddy would then start with an
@@ -7,6 +7,30 @@
 # and scripts/rotate-dashboard-password.sh write the hash `$`-doubled so it
 # survives; this checks the result at boot.
 set -eu
+
+legacy=${CADENCE_LEGACY_AGENT_ENDPOINTS:-}
+case "$legacy" in
+on|off) ;;
+*)
+	echo "caddy: CADENCE_LEGACY_AGENT_ENDPOINTS must be set explicitly to 'on' or 'off'." >&2
+	exit 1
+	;;
+esac
+
+proxy_key=${CADENCE_INTERNAL_PROXY_KEY:-}
+if [ "${#proxy_key}" -lt 32 ]; then
+	echo "caddy: CADENCE_INTERNAL_PROXY_KEY must contain at least 32 characters." >&2
+	exit 1
+fi
+
+agent_port=${CADENCE_AGENT_PORT:-8443}
+case "$agent_port" in
+''|*[!0-9]*) echo "caddy: CADENCE_AGENT_PORT must be an integer." >&2; exit 1 ;;
+esac
+if [ "$agent_port" -lt 1 ] || [ "$agent_port" -gt 65535 ]; then
+	echo "caddy: CADENCE_AGENT_PORT must be from 1 to 65535." >&2
+	exit 1
+fi
 
 auth=${CADENCE_DASHBOARD_AUTH:-on}
 if [ "$auth" != "off" ]; then

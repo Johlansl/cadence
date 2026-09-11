@@ -17,7 +17,7 @@ from app.core.crypto import decrypt_token_secret
 from app.core.ratelimit import note_rejected, ratelimiter
 from app.core.throttle import client_ip, throttle
 from app.db.base import SessionLocal
-from app.models.models import AgentToken, Host
+from app.models.models import AgentCertificate, AgentToken, Host
 
 # How stale `agent_tokens.last_used_at` is allowed to get before a successful
 # auth rewrites it. Every agent request would otherwise UPDATE the row (~1/min
@@ -146,11 +146,62 @@ async def _auth_signed(
     return host, tok
 
 
+async def _auth_transport(
+    request: Request,
+    db: Session,
+    host: Host,
+    ip: str,
+    now: datetime,
+    transport: str | None,
+    proxy_key: str | None,
+    certificate_fingerprint: str | None,
+) -> str:
+    """Bind Caddy's authenticated transport identity to the HMAC host."""
+    if not settings.require_agent_transport_auth:
+        return "signed"
+    if proxy_key is None or not hmac.compare_digest(proxy_key, settings.internal_proxy_key):
+        await _reject_401(ip, "transport", "invalid agent transport")
+    if transport == "legacy":
+        if not settings.legacy_agent_endpoints:
+            await _reject_401(ip, "transport", "invalid agent transport")
+        return "signed+legacy"
+    if transport != "mtls" or certificate_fingerprint is None:
+        await _reject_401(ip, "transport", "invalid agent transport")
+
+    fingerprint = certificate_fingerprint.strip().lower()
+    if len(fingerprint) != 64 or any(char not in "0123456789abcdef" for char in fingerprint):
+        await _reject_401(ip, "transport", "invalid agent transport")
+    certificate = db.execute(
+        select(AgentCertificate).where(
+            AgentCertificate.fingerprint_sha256 == fingerprint
+        )
+    ).scalar_one_or_none()
+    if (
+        certificate is None
+        or certificate.host_id != host.id
+        or certificate.revoked_at is not None
+        or certificate.not_before > now
+        or certificate.expires_at <= now
+    ):
+        await _reject_401(ip, "transport", "invalid agent transport")
+    if (
+        certificate.last_used_at is None
+        or now - certificate.last_used_at >= _LAST_USED_MIN_INTERVAL
+    ):
+        certificate.last_used_at = now
+    return "signed+mtls"
+
+
 async def get_current_host(
     request: Request,
     x_cadence_token_hash: str | None = Header(None, alias="X-Cadence-Token-Hash"),
     x_cadence_timestamp: str | None = Header(None, alias="X-Cadence-Timestamp"),
     x_cadence_signature: str | None = Header(None, alias="X-Cadence-Signature"),
+    x_cadence_transport: str | None = Header(None, alias="X-Cadence-Transport"),
+    x_cadence_proxy_key: str | None = Header(None, alias="X-Cadence-Proxy-Key"),
+    x_cadence_client_fingerprint: str | None = Header(
+        None, alias="X-Cadence-Client-Cert-Fingerprint"
+    ),
     db: Session = Depends(get_db),
 ) -> Host:
     """Authenticate an agent request from the signed-request headers
@@ -168,7 +219,16 @@ async def get_current_host(
         host, tok = await _auth_signed(
             request, db, ip, x_cadence_token_hash, x_cadence_timestamp, x_cadence_signature, now
         )
-        request.state.auth_scheme = "signed"
+        request.state.auth_scheme = await _auth_transport(
+            request,
+            db,
+            host,
+            ip,
+            now,
+            x_cadence_transport,
+            x_cadence_proxy_key,
+            x_cadence_client_fingerprint,
+        )
     elif any(signed_present):
         await _reject_401(ip, "signed", "incomplete signed-request headers")
     else:

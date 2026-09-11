@@ -59,6 +59,14 @@ services:
       CADENCE_ADMIN_KEY_PREVIOUS: ${CADENCE_ADMIN_KEY_PREVIOUS:-}
       CADENCE_TOKEN_ENCRYPTION_KEY: ${CADENCE_TOKEN_ENCRYPTION_KEY}
       CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS: ${CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS:-}
+      CADENCE_SITE_ADDRESS: ${CADENCE_SITE_ADDRESS}
+      CADENCE_AGENT_PORT: ${CADENCE_AGENT_PORT:-8443}
+      CADENCE_SERVER_CA_FILE: /srv/dist/agent/ca.crt
+      CADENCE_CLIENT_PKI_DIR: /var/lib/cadence/client-pki
+      CADENCE_CLIENT_PKI_INIT: "true"
+      CADENCE_REQUIRE_AGENT_TRANSPORT_AUTH: "true"
+      CADENCE_LEGACY_AGENT_ENDPOINTS: ${CADENCE_LEGACY_AGENT_ENDPOINTS:?set to on during migration or off after every host has mTLS}
+      CADENCE_INTERNAL_PROXY_KEY: ${CADENCE_INTERNAL_PROXY_KEY:?set a random internal proxy key}
     depends_on:
       db:
         condition: service_healthy
@@ -66,6 +74,12 @@ services:
       # Interface is configurable: 127.0.0.1 (default) for a local test,
       # 0.0.0.0 to reach the API from other VMs. See CADENCE_BACKEND_BIND.
       - "${CADENCE_BACKEND_BIND:-127.0.0.1}:8000:8000"
+    volumes:
+      # Private client CA material is writable only by the backend. Caddy gets
+      # the public root through its own read-only mount below.
+      - client_pki:/var/lib/cadence/client-pki
+      # Enrollment codes pin Caddy's exported server CA from staged assets.
+      - ./dist:/srv/dist:ro
     healthcheck:
       # /readyz does a SELECT 1; no curl in the slim image, so use stdlib.
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)\""]
@@ -96,6 +110,7 @@ services:
       CADENCE_ADMIN_KEY_PREVIOUS: ${CADENCE_ADMIN_KEY_PREVIOUS:-}
       CADENCE_TOKEN_ENCRYPTION_KEY: ${CADENCE_TOKEN_ENCRYPTION_KEY}
       CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS: ${CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS:-}
+      CADENCE_CLIENT_PKI_INIT: "false"
     depends_on:
       db:
         condition: service_healthy
@@ -139,6 +154,9 @@ services:
     cpus: "1.0"
     environment:
       CADENCE_SITE_ADDRESS: ${CADENCE_SITE_ADDRESS}
+      CADENCE_AGENT_PORT: ${CADENCE_AGENT_PORT:-8443}
+      CADENCE_LEGACY_AGENT_ENDPOINTS: ${CADENCE_LEGACY_AGENT_ENDPOINTS:?set to on during migration or off after every host has mTLS}
+      CADENCE_INTERNAL_PROXY_KEY: ${CADENCE_INTERNAL_PROXY_KEY:?set a random internal proxy key}
       # Basic-auth gate (see Caddyfile). Defaults keep it ON.
       CADENCE_DASHBOARD_AUTH: ${CADENCE_DASHBOARD_AUTH:-on}
       CADENCE_DASHBOARD_USER: ${CADENCE_DASHBOARD_USER:-cadence}
@@ -157,12 +175,15 @@ services:
       # to 0.0.0.0 in .env to serve the LAN. 80 redirects to 443.
       - "${CADENCE_HTTP_BIND:-127.0.0.1}:80:80"
       - "${CADENCE_HTTP_BIND:-127.0.0.1}:443:443"
+      - "${CADENCE_HTTP_BIND:-127.0.0.1}:${CADENCE_AGENT_PORT:-8443}:${CADENCE_AGENT_PORT:-8443}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/entrypoint.sh:/etc/caddy/entrypoint.sh:ro
-      # Agent bootstrap assets (installer, binary, CA), served over HTTP.
-      # Populated by scripts/publish-agent.sh; may be absent until then.
+      # Agent install assets. Only the CA path is exposed on HTTP; every other
+      # artifact is HTTPS-only. Populated by scripts/publish-agent.sh.
       - ./dist:/srv/dist:ro
+      # Public trust anchor only; private client-CA keys stay backend-only.
+      - client_pki:/etc/cadence/client-pki:ro
       # Persist the internal CA + issued certs across restarts.
       - caddy_data:/data
       - caddy_config:/config
@@ -176,5 +197,6 @@ services:
 
 volumes:
   pgdata:
+  client_pki:
   caddy_data:
   caddy_config:

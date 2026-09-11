@@ -30,6 +30,7 @@ admin_key=$(openssl rand -hex 32)
 # Fernet needs urlsafe-base64 of 32 random bytes, not hex -- same encoding
 # Fernet.generate_key() itself produces, without needing Python on the host.
 token_enc_key=$(openssl rand -base64 32 | tr '+/' '-_')
+proxy_key=$(openssl rand -hex 32)
 dash_user=cadence
 dash_pw=$(openssl rand -hex 12)
 dash_hash=$(docker run --rm caddy:2-alpine caddy hash-password --plaintext "$dash_pw")
@@ -40,6 +41,7 @@ sed \
 	-e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$pg_pw|" \
 	-e "s|^CADENCE_ADMIN_KEY=.*|CADENCE_ADMIN_KEY=$admin_key|" \
 	-e "s|^CADENCE_TOKEN_ENCRYPTION_KEY=.*|CADENCE_TOKEN_ENCRYPTION_KEY=$token_enc_key|" \
+	-e "s|^CADENCE_INTERNAL_PROXY_KEY=.*|CADENCE_INTERNAL_PROXY_KEY=$proxy_key|" \
 	-e "s|^CADENCE_DASHBOARD_USER=.*|CADENCE_DASHBOARD_USER=$dash_user|" \
 	-e "s|^CADENCE_DASHBOARD_PASSWORD_HASH=.*|CADENCE_DASHBOARD_PASSWORD_HASH=$dash_hash_esc|" \
 	.env.example >.env
@@ -62,8 +64,8 @@ gen-secrets.sh: wrote .env (0600).
       user:     $dash_user
       password: $dash_pw
 
-  POSTGRES_PASSWORD, CADENCE_ADMIN_KEY and CADENCE_TOKEN_ENCRYPTION_KEY were
-  generated too; all three are in .env. Review CADENCE_SITE_ADDRESS and
+  POSTGRES_PASSWORD, CADENCE_ADMIN_KEY, CADENCE_TOKEN_ENCRYPTION_KEY and
+  CADENCE_INTERNAL_PROXY_KEY were generated too. Review CADENCE_SITE_ADDRESS and
   CADENCE_HTTP_BIND (127.0.0.1 by
   default -- set 0.0.0.0 to serve the LAN), then:
 

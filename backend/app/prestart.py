@@ -114,6 +114,23 @@ def run_migrations() -> None:
         lock_engine.dispose()
 
 
+def initialize_client_pki() -> None:
+    """Initialize the private client CA only in the designated backend.
+
+    The scheduler shares this image and prestart path but has neither the
+    private volume nor a reason to issue certificates.
+    """
+    if not settings.client_pki_init:
+        return
+    from app.pki.client_ca import ensure_client_ca
+
+    material = ensure_client_ca(settings.client_pki_dir)
+    log.info(
+        "client PKI ready",
+        extra=_f(root_certificate=str(material.root_certificate)),
+    )
+
+
 def main() -> None:
     configure_logging()
     # Alembic's fileConfig (run in-process by command.upgrade) resets the root
@@ -121,6 +138,7 @@ def main() -> None:
     log.setLevel(logging.INFO)
     wait_for_db()
     run_migrations()
+    initialize_client_pki()
 
 
 if __name__ == "__main__":
