@@ -6,8 +6,35 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
-## Unreleased
+## 0.3.0
 
+- Agent enrollment and mTLS transport authentication. A short-lived,
+  single-use enrollment code (`cad1.<192-bit-secret>.<server-CA-SHA256>`)
+  pins the server's CA before any executable artifact is fetched, closing
+  the first-contact gap where a MITM serving the install script over HTTP
+  could otherwise substitute it. `POST /api/v1/agent/enroll` atomically
+  consumes one code and issues both an HMAC token and a 90-day ECDSA P-256
+  client certificate from a new private client PKI (migration `0020`:
+  `enrollment_codes`, `agent_certificates`). Agent traffic moves to a
+  dedicated `:8443` listener requiring `client_auth mode
+  require_and_verify`; the backend additionally binds the verified
+  certificate's host to the same host authenticated by the existing
+  per-request HMAC signature, so a certificate and a token issued to
+  different hosts never validate together. `CADENCE_LEGACY_AGENT_ENDPOINTS`
+  gated the transitional dual-mode window during fleet migration; both
+  hosts (`vm-japp`, `vm-nginxproxy`) are migrated and it is now `off`.
+  Certificates renew automatically 14 days before expiry
+  (`POST /api/v1/agent/certificate/renew`); the previous certificate stays
+  valid until the switch completes, so a lost renewal response cannot lock
+  an agent out. A new `#enrollment` dashboard view administers codes and
+  certificates. `scripts/backup.sh` / `restore-check.sh` now cover the
+  client PKI. Migration `0021` fixes an oversight in `0020`: deleting a
+  host could leave an `enrollment_codes` row either silently vanishing
+  (audit loss, `target_host_id` was `ON DELETE CASCADE`) or blocking the
+  delete outright (`enrollment_codes_consumption_check` rejecting the row
+  `ON DELETE SET NULL` left behind); both host references on
+  `enrollment_codes` now go `ON DELETE SET NULL` and the row always
+  survives as an orphaned audit record. See `docs/enrollment-mtls.md`.
 - Agent `0.13.0`: a standalone `health_check` job type. It reruns an
   `apt_upgrade`'s post-check phase (dpkg audit, apt dependencies, disk
   space, failed services, reboot required) with no upgrade attached,

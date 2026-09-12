@@ -85,7 +85,7 @@ Do not delete or revoke a host's existing token during migration. For one host:
    valid certificate paired with another host's HMAC token is rejected.
 
 For the current fleet, migrate `vm-japp` first. Keep `vm-nginxproxy` on the
-legacy 443 path while observing `vm-japp` for at least 30 minutes, one complete
+legacy 443 path while observing `vm-japp` for at least 10 minutes, one complete
 report cycle and multiple poll cycles. This is the exact end of
 sub-delivery A. EnrollmentView work must not begin until this real-host gate is
 complete and separately approved.
