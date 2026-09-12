@@ -66,7 +66,7 @@ func RunIfNeeded(ctx context.Context, cfg config.Config) (bool, error) {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return false, fmt.Errorf("locking certificate renewal: %w", err)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 
 	// Another agent process may have renewed while this one waited for the
 	// lock. Its inherited environment is stale, so inspect the switched file.
