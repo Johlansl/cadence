@@ -30,8 +30,17 @@ backup_dir=${CADENCE_BACKUP_DIR:-$repo/backups}
 # shellcheck disable=SC2012
 src=${1:-$(ls -1d "$backup_dir"/*/ 2>/dev/null | sort | tail -n 1)}
 src=${src%/}
-if [ -z "$src" ] || [ ! -f "$src/db.dump" ] || [ ! -f "$src/client_pki.tgz" ]; then
+if [ -z "$src" ] || [ ! -f "$src/db.dump" ] || [ ! -f "$src/caddy_data.tgz" ]; then
 	echo "restore-check.sh: no usable backup at '${src:-<none>}'" >&2
+	exit 1
+fi
+client_pki_state=$(sed -n 's/^client_pki_volume  *//p' "$src/MANIFEST" | head -n 1)
+if [ -f "$src/client_pki.tgz" ]; then
+	has_client_pki=1
+elif [ "$client_pki_state" = "not-present" ]; then
+	has_client_pki=0
+else
+	echo "restore-check.sh: client_pki.tgz is missing from a post-mTLS backup" >&2
 	exit 1
 fi
 echo "restore-check.sh: source = $src"
@@ -55,6 +64,7 @@ cleanup() {
 	docker rm -f "$db" "$be" "$cad" >/dev/null 2>&1 || true
 	docker network rm "$net" >/dev/null 2>&1 || true
 	docker volume rm -f "$pgvol" "$cadvol" "$pkivol" >/dev/null 2>&1 || true
+	rm -f /tmp/rt_pre_mtls_Caddyfile
 }
 trap cleanup EXIT
 cleanup
@@ -67,8 +77,10 @@ docker volume create "$pkivol" >/dev/null
 # --- restore the Caddy data volume from the tarball ------------------------
 docker run --rm -v "$cadvol":/v -v "$src":/b:ro postgres:16 \
 	sh -c 'tar xzf /b/caddy_data.tgz -C /v' >/dev/null
-docker run --rm -v "$pkivol":/v -v "$src":/b:ro postgres:16 \
-	sh -c 'tar xzf /b/client_pki.tgz -C /v' >/dev/null
+if [ "$has_client_pki" = 1 ]; then
+	docker run --rm -v "$pkivol":/v -v "$src":/b:ro postgres:16 \
+		sh -c 'tar xzf /b/client_pki.tgz -C /v' >/dev/null
+fi
 
 # --- bring up a fresh Postgres and restore the dump ----------------------
 docker run -d --name "$db" --network "$net" \
@@ -141,28 +153,45 @@ docker run --rm -v "$cadvol":/v:ro postgres:16 sh -c '
 		/v/caddy/certificates/local/*/*.crt' >/tmp/rt_openssl.log 2>&1 \
 	&& chain_ok=1 || chain_ok=0
 
-docker run --rm -v "$pkivol":/v:ro postgres:16 sh -c '
-	openssl verify -CAfile /v/client-root-ca.crt /v/client-intermediate-ca.crt &&
-	test -s /v/client-root-ca.key && test -s /v/client-intermediate-ca.key' \
-	>/tmp/rt_client_pki.log 2>&1 \
-	&& client_pki_ok=1 || client_pki_ok=0
-
-docker run -d --name "$cad" --network "$net" \
-	-v "$cadvol":/data -v "$repo/Caddyfile":/etc/caddy/Caddyfile:ro \
-	-v "$pkivol":/etc/cadence/client-pki:ro \
-	-e CADENCE_SITE_ADDRESS=cadence.lan -e CADENCE_AGENT_PORT=8443 \
-	-e CADENCE_DASHBOARD_AUTH=off -e CADENCE_LEGACY_AGENT_ENDPOINTS=off \
-	-e CADENCE_INTERNAL_PROXY_KEY=restore-check-internal-proxy-key \
-	-p 127.0.0.1:18443:443 \
-	caddy:2-alpine >/dev/null
+if [ "$has_client_pki" = 1 ]; then
+	docker run --rm -v "$pkivol":/v:ro postgres:16 sh -c '
+		openssl verify -CAfile /v/client-root-ca.crt /v/client-intermediate-ca.crt &&
+		test -s /v/client-root-ca.key && test -s /v/client-intermediate-ca.key' \
+		>/tmp/rt_client_pki.log 2>&1 \
+		&& client_pki_ok=1 || client_pki_ok=0
+	docker run -d --name "$cad" --network "$net" \
+		-v "$cadvol":/data -v "$repo/Caddyfile":/etc/caddy/Caddyfile:ro \
+		-v "$pkivol":/etc/cadence/client-pki:ro \
+		-e CADENCE_SITE_ADDRESS=cadence.lan -e CADENCE_AGENT_PORT=8443 \
+		-e CADENCE_DASHBOARD_AUTH=off -e CADENCE_LEGACY_AGENT_ENDPOINTS=off \
+		-e CADENCE_INTERNAL_PROXY_KEY=restore-check-internal-proxy-key \
+		-p 127.0.0.1:18443:443 \
+		caddy:2-alpine >/dev/null
+else
+	client_pki_ok=1
+	: >/tmp/rt_client_pki.log
+	printf '%s\n' 'cadence.lan {' '    tls internal' '    respond "restore check"' '}' \
+		>/tmp/rt_pre_mtls_Caddyfile
+	docker run -d --name "$cad" --network "$net" \
+		-v "$cadvol":/data \
+		-v /tmp/rt_pre_mtls_Caddyfile:/etc/caddy/Caddyfile:ro \
+		-p 127.0.0.1:18443:443 \
+		caddy:2-alpine caddy run --config /etc/caddy/Caddyfile \
+		--adapter caddyfile >/dev/null
+fi
 docker run --rm -v "$cadvol":/v:ro postgres:16 \
 	cat /v/caddy/pki/authorities/local/root.crt >/tmp/rt_root.crt 2>/dev/null
 sleep 3
 verify_res=$(curl -s -o /dev/null \
+	--noproxy '*' \
 	--cacert /tmp/rt_root.crt --resolve cadence.lan:18443:127.0.0.1 \
 	-w '%{ssl_verify_result}' "https://cadence.lan:18443/" 2>/dev/null || true)
 if [ "$chain_ok" = 1 ] && [ "$client_pki_ok" = 1 ] && [ "$verify_res" = "0" ]; then
-	echo "  [ok] 4/5  restored server and client PKIs validate; Caddy TLS is trusted"
+	if [ "$has_client_pki" = 1 ]; then
+		echo "  [ok] 4/5  restored server and client PKIs validate; Caddy TLS is trusted"
+	else
+		echo "  [ok] 4/5  restored pre-mTLS server PKI validates; Caddy TLS is trusted"
+	fi
 else
 	echo "  [FAIL] 4/5  server_pki=$chain_ok client_pki=$client_pki_ok ssl_verify_result='$verify_res'"
 	cat /tmp/rt_openssl.log /tmp/rt_client_pki.log; fail=1
