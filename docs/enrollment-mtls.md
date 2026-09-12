@@ -52,6 +52,11 @@ Back up before deployment. `scripts/backup.sh` now includes both
 and their private keys). `scripts/restore-check.sh` validates both in isolated
 volumes.
 
+On the one-time upgrade from a version older than revision 0020, the client
+PKI volume does not exist yet. The pre-upgrade backup records
+`client_pki_volume not-present` and omits `client_pki.tgz`; every backup after
+the first successful A deployment must contain it.
+
 ## Host-by-host migration
 
 Do not delete or revoke a host's existing token during migration. For one host:

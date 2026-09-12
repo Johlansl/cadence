@@ -53,10 +53,6 @@ fi
 client_pki_vol=$(docker inspect -f \
 	'{{range .Mounts}}{{if eq .Destination "/var/lib/cadence/client-pki"}}{{.Name}}{{end}}{{end}}' \
 	"$backend_cid")
-if [ -z "$client_pki_vol" ]; then
-	echo "backup.sh: could not find the backend client-PKI volume" >&2
-	exit 1
-fi
 
 # The real (project-prefixed) name of the volume mounted at Caddy's /data.
 caddy_vol=$(docker inspect -f \
@@ -82,8 +78,14 @@ docker run --rm -v "$caddy_vol":/v:ro -v "$out":/out postgres:16 \
 	tar czf /out/caddy_data.tgz -C /v . >/dev/null
 
 # 2b. Client-authentication PKI, including the root and intermediate keys.
-docker run --rm -v "$client_pki_vol":/v:ro -v "$out":/out postgres:16 \
-	tar czf /out/client_pki.tgz -C /v . >/dev/null
+# A pre-upgrade backup from a deployment older than revision 0020 has no such
+# volume yet. Keep that backup usable, and include the PKI on every later run.
+if [ -n "$client_pki_vol" ]; then
+	docker run --rm -v "$client_pki_vol":/v:ro -v "$out":/out postgres:16 \
+		tar czf /out/client_pki.tgz -C /v . >/dev/null
+else
+	echo "backup.sh: client PKI not mounted; creating a pre-mTLS backup without it" >&2
+fi
 
 # 3. .env (secrets).
 cp "$env_file" "$out/env"
@@ -93,7 +95,10 @@ chmod 0600 "$out/env"
 #     scripts/backup-signing-key.sh. The live key is passwordless and is never
 #     copied; only its .enc sibling. Warn (don't fail) if signing is configured
 #     but the encrypted copy is missing.
-manifest_files="db.dump caddy_data.tgz client_pki.tgz env"
+manifest_files="db.dump caddy_data.tgz env"
+if [ -n "$client_pki_vol" ]; then
+	manifest_files="$manifest_files client_pki.tgz"
+fi
 minisign_key=${CADENCE_MINISIGN_KEY:-$HOME/.cadence/minisign.key}
 if [ -f "$minisign_key.enc" ]; then
 	cp "$minisign_key.enc" "$out/minisign.key.enc"
@@ -112,7 +117,7 @@ alembic_rev=$(docker compose exec -T backend alembic current 2>/dev/null \
 	echo "git_commit   $(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)"
 	echo "alembic_rev  ${alembic_rev:-unknown}"
 	echo "caddy_volume $caddy_vol"
-	echo "client_pki_volume $client_pki_vol"
+	echo "client_pki_volume ${client_pki_vol:-not-present}"
 	echo
 	# shellcheck disable=SC2086
 	( cd "$out" && sha256sum $manifest_files )
