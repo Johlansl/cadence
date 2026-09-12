@@ -30,7 +30,10 @@ fi
 
 old_ifs=$IFS
 IFS=.
+set -f
+# shellcheck disable=SC2086  # deliberate IFS split on '.', not globbing (set -f above)
 set -- $code
+set +f
 IFS=$old_ifs
 if [ "$#" -ne 3 ] || [ "$1" != "cad1" ] || [ "${#2}" -ne 32 ] || [ "${#3}" -ne 64 ]; then
 	echo "agent-bootstrap.sh: invalid enrollment code format" >&2
