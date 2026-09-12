@@ -20,8 +20,6 @@
 	@legacy_agent path /api/v1/reports /api/v1/agent/* /api/v1/jobs/*/result
 	handle @legacy_agent {
 		reverse_proxy backend:8000 {
-			header_up -X-Cadence-Transport
-			header_up -X-Cadence-Proxy-Key
 			header_up -X-Cadence-Client-Cert-Fingerprint
 			header_up X-Cadence-Transport legacy
 			header_up X-Cadence-Proxy-Key {$CADENCE_INTERNAL_PROXY_KEY}
@@ -95,8 +93,6 @@ https://{$CADENCE_SITE_ADDRESS}:443 {
 	@enrollment path /api/v1/agent/enroll
 	handle @enrollment {
 		reverse_proxy backend:8000 {
-			header_up -X-Cadence-Transport
-			header_up -X-Cadence-Proxy-Key
 			header_up -X-Cadence-Client-Cert-Fingerprint
 			header_up X-Cadence-Transport enrollment
 			header_up X-Cadence-Proxy-Key {$CADENCE_INTERNAL_PROXY_KEY}
@@ -134,9 +130,6 @@ https://{$CADENCE_SITE_ADDRESS}:{$CADENCE_AGENT_PORT:8443} {
 	}
 	handle @agent_api {
 		reverse_proxy backend:8000 {
-			header_up -X-Cadence-Transport
-			header_up -X-Cadence-Proxy-Key
-			header_up -X-Cadence-Client-Cert-Fingerprint
 			header_up X-Cadence-Transport mtls
 			header_up X-Cadence-Proxy-Key {$CADENCE_INTERNAL_PROXY_KEY}
 			header_up X-Cadence-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
