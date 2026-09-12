@@ -75,8 +75,8 @@ describe('EnrollmentView', () => {
     })
     renderWithProviders(<EnrollmentView hosts={hosts} />)
 
-    expect(await screen.findByText('vm-existing')).toBeInTheDocument()
-    expect(screen.getByText('existing host')).toBeInTheDocument()
+    const existingKind = await screen.findByText('existing host')
+    expect(within(existingKind.closest('li')!).getByText('vm-existing')).toBeInTheDocument()
     expect(screen.getAllByText('consumed')).toHaveLength(2)
     expect(screen.queryByText(/cad1\./)).not.toBeInTheDocument()
   })

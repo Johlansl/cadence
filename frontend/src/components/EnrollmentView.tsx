@@ -11,6 +11,7 @@ import type {
 } from '../types'
 import { AdminActionFeedback, useAdminKeyAction } from './AdminKeyPrompt'
 import { useConfirm } from './ConfirmDialog'
+import { EnrollmentCertificates } from './EnrollmentCertificates'
 import { RelativeTime } from './RelativeTime'
 import { useToast } from './Toast'
 
@@ -143,6 +144,8 @@ export function EnrollmentView({ hosts }: { hosts: HostSummary[] }) {
           </ul>
         )}
       </section>
+
+      {rows !== null && <EnrollmentCertificates hosts={hosts} />}
     </div>
   )
 }
@@ -385,6 +388,11 @@ function EnrollmentRow({
   const toast = useToast()
   const revoker = useAdminKeyAction((key) => api.revokeEnrollment(enrollment.id, key))
 
+  const acceptRevoked = () => {
+    toast.notify('success', 'Enrollment code revoked.')
+    onChanged()
+  }
+
   const revoke = async () => {
     if (
       !(await confirm({
@@ -396,10 +404,7 @@ function EnrollmentRow({
     )
       return
     const result = await revoker.run()
-    if (result?.ok) {
-      toast.notify('success', 'Enrollment code revoked.')
-      onChanged()
-    }
+    if (result?.ok) acceptRevoked()
   }
 
   return (
@@ -438,7 +443,7 @@ function EnrollmentRow({
       <AdminActionFeedback
         actions={revoker}
         onKeyAccepted={(result) => {
-          if (result?.ok) onChanged()
+          if (result?.ok) acceptRevoked()
         }}
       />
     </div>
