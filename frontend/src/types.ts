@@ -193,6 +193,58 @@ export interface PackageExclusionInput {
   description: string | null
 }
 
+export type EnrollmentState = 'pending' | 'expired' | 'consumed' | 'revoked'
+
+export interface EnrollmentCode {
+  id: string
+  target_host_id: string | null
+  enrolled_host_id: string | null
+  expected_hostname: string | null
+  label: string | null
+  description: string | null
+  tags: Record<string, string>
+  reboot_policy: RebootPolicy
+  created_at: string
+  expires_at: string
+  consumed_at: string | null
+  revoked_at: string | null
+  state: EnrollmentState
+}
+
+export interface EnrollmentInput {
+  target_host_id?: string
+  expected_hostname?: string
+  label?: string | null
+  description?: string | null
+  tags?: Record<string, string>
+  reboot_policy?: RebootPolicy
+  ttl_minutes: number
+}
+
+// The plaintext code appears only in this creation response.
+export interface EnrollmentCreated {
+  id: string
+  code: string
+  expires_at: string
+  target_host_id: string | null
+  expected_hostname: string | null
+}
+
+export type AgentCertificateState = 'active' | 'expired' | 'revoked'
+
+export interface AgentCertificate {
+  id: number
+  host_id: string
+  serial_number: string
+  fingerprint_sha256: string
+  not_before: string
+  expires_at: string
+  issued_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+  state: AgentCertificateState
+}
+
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed'
 
 // One package line in an apt_dry_run preview (roadmap item 4).

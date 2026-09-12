@@ -1,7 +1,12 @@
 import type {
+  AgentCertificate,
   Campaign,
   CampaignDetail,
   CampaignInput,
+  EnrollmentCode,
+  EnrollmentCreated,
+  EnrollmentInput,
+  EnrollmentState,
   FleetSummary,
   HostDetail,
   HostSummary,
@@ -81,6 +86,20 @@ async function adminWrite<T>(
     detail = errorDetail(await res.json(), res.status)
   } catch {
     /* no JSON body -- caller falls back to a generic message */
+  }
+  return { ok: false, status: res.status, detail }
+}
+
+async function adminRead<T>(path: string, adminKey: string): Promise<AdminWriteResult<T>> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { Accept: 'application/json', 'X-Admin-Key': adminKey },
+  })
+  if (res.ok) return { ok: true, status: res.status, data: (await res.json()) as T }
+  let detail: string | undefined
+  try {
+    detail = errorDetail(await res.json(), res.status)
+  } catch {
+    /* no JSON body */
   }
   return { ok: false, status: res.status, detail }
 }
@@ -234,6 +253,32 @@ export const api = {
   deleteExclusion(exclusionId: string, adminKey: string) {
     return adminWrite<null>(
       `/admin/package-exclusions/${exclusionId}`,
+      adminKey,
+      'DELETE',
+      undefined,
+    )
+  },
+
+  listEnrollments(adminKey: string, state?: EnrollmentState) {
+    const query = state ? `?state=${encodeURIComponent(state)}` : ''
+    return adminRead<EnrollmentCode[]>(`/admin/enrollments${query}`, adminKey)
+  },
+
+  createEnrollment(adminKey: string, body: EnrollmentInput) {
+    return adminWrite<EnrollmentCreated>('/admin/enrollments', adminKey, 'POST', body)
+  },
+
+  revokeEnrollment(enrollmentId: string, adminKey: string) {
+    return adminWrite<null>(`/admin/enrollments/${enrollmentId}`, adminKey, 'DELETE', undefined)
+  },
+
+  listAgentCertificates(hostId: string, adminKey: string) {
+    return adminRead<AgentCertificate[]>(`/admin/hosts/${hostId}/certificates`, adminKey)
+  },
+
+  revokeAgentCertificate(hostId: string, certificateId: number, adminKey: string) {
+    return adminWrite<null>(
+      `/admin/hosts/${hostId}/certificates/${certificateId}`,
       adminKey,
       'DELETE',
       undefined,

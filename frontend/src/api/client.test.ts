@@ -109,3 +109,52 @@ describe('campaign endpoints', () => {
     ])
   })
 })
+
+describe('enrollment endpoints', () => {
+  it('lists filtered enrollments with the admin key', async () => {
+    const fn = installFetchMock({ 'GET /api/v1/admin/enrollments': { body: [] } })
+
+    const r = await api.listEnrollments('adm', 'pending')
+
+    expect(r).toMatchObject({ ok: true, data: [] })
+    expect(String(fn.mock.calls[0][0])).toBe('/api/v1/admin/enrollments?state=pending')
+    expect(new Headers(fn.mock.calls[0][1]?.headers).get('X-Admin-Key')).toBe('adm')
+  })
+
+  it('creates and revokes an enrollment code', async () => {
+    const fn = installFetchMock({
+      'POST /api/v1/admin/enrollments': {
+        status: 201,
+        body: { id: 'en1', code: 'cad1.secret.fingerprint' },
+      },
+      'DELETE /api/v1/admin/enrollments/en1': { status: 204 },
+    })
+
+    await api.createEnrollment('adm', { expected_hostname: 'vm-new', ttl_minutes: 30 })
+    await api.revokeEnrollment('en1', 'adm')
+
+    expect(fn.mock.calls.map((call) => String(call[0]))).toEqual([
+      '/api/v1/admin/enrollments',
+      '/api/v1/admin/enrollments/en1',
+    ])
+    expect(JSON.parse(fn.mock.calls[0][1]?.body as string)).toEqual({
+      expected_hostname: 'vm-new',
+      ttl_minutes: 30,
+    })
+  })
+
+  it('lists and revokes certificates through their host-scoped paths', async () => {
+    const fn = installFetchMock({
+      'GET /api/v1/admin/hosts/h1/certificates': { body: [] },
+      'DELETE /api/v1/admin/hosts/h1/certificates/7': { status: 204 },
+    })
+
+    await api.listAgentCertificates('h1', 'adm')
+    await api.revokeAgentCertificate('h1', 7, 'adm')
+
+    expect(fn.mock.calls.map((call) => String(call[0]))).toEqual([
+      '/api/v1/admin/hosts/h1/certificates',
+      '/api/v1/admin/hosts/h1/certificates/7',
+    ])
+  })
+})
