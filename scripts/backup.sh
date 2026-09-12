@@ -23,6 +23,7 @@
 #                         its .enc sibling is what gets backed up
 
 set -eu
+umask 077
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo=$(CDPATH='' cd -- "$here/.." && pwd)
@@ -73,16 +74,17 @@ echo "backup.sh: -> $out"
 docker compose exec -T db pg_dump -U "$pg_user" -d "$pg_db" -Fc >"$out/db.dump"
 
 # 2. Caddy data volume (tar from a throwaway container mounting it read-only;
-#    reuse the postgres image so nothing extra is pulled).
-docker run --rm -v "$caddy_vol":/v:ro -v "$out":/out postgres:16 \
-	tar czf /out/caddy_data.tgz -C /v . >/dev/null
+#    reuse the postgres image so nothing extra is pulled). Stream the archive
+#    to the host so it is owned by the backup user and respects the 0077 umask.
+docker run --rm -v "$caddy_vol":/v:ro postgres:16 \
+	tar czf - -C /v . >"$out/caddy_data.tgz"
 
 # 2b. Client-authentication PKI, including the root and intermediate keys.
 # A pre-upgrade backup from a deployment older than revision 0020 has no such
 # volume yet. Keep that backup usable, and include the PKI on every later run.
 if [ -n "$client_pki_vol" ]; then
-	docker run --rm -v "$client_pki_vol":/v:ro -v "$out":/out postgres:16 \
-		tar czf /out/client_pki.tgz -C /v . >/dev/null
+	docker run --rm -v "$client_pki_vol":/v:ro postgres:16 \
+		tar czf - -C /v . >"$out/client_pki.tgz"
 else
 	echo "backup.sh: client PKI not mounted; creating a pre-mTLS backup without it" >&2
 fi
