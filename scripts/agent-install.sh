@@ -97,7 +97,11 @@ else
 fi
 
 server_ca=/usr/local/share/ca-certificates/cadence-server.crt
-install -m 0644 "$verified_ca" "$server_ca"
+if [ "$verified_ca" -ef "$server_ca" ]; then
+	echo "install.sh: verified CA is already the installed server CA"
+else
+	install -m 0644 "$verified_ca" "$server_ca"
+fi
 update-ca-certificates >/dev/null 2>&1
 install -m 0755 "$temporary/cadence-agent" /usr/local/bin/cadence-agent
 for unit in cadence-agent.service cadence-agent.timer \
