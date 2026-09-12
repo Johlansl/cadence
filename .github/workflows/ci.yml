@@ -212,6 +212,8 @@ jobs:
           CADENCE_ADMIN_KEY=ci-admin-key-0123456789abcdef
           CADENCE_TOKEN_ENCRYPTION_KEY=9-_VPVQlom8pTYO4akOJgl62acDbmu83HjzWCZTsAmU=
           CADENCE_SITE_ADDRESS=cadence.ci.local
+          CADENCE_INTERNAL_PROXY_KEY=ci-internal-proxy-key-0123456789abcdef
+          CADENCE_LEGACY_AGENT_ENDPOINTS=off
           CADENCE_DASHBOARD_AUTH=on
           CADENCE_DASHBOARD_USER=cadence
           CADENCE_DASHBOARD_PASSWORD_HASH=$$2a$$14$$9RzS8dzkDp0vCxfkusQZR.1l95oLIGKbReMUMdZwJ77Dz9SNKXqra
