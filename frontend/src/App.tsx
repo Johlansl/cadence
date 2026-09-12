@@ -3,6 +3,7 @@ import { api } from './api/client'
 import { BulkActionBar } from './components/BulkActionBar'
 import { CampaignsView } from './components/CampaignsView'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { EnrollmentView } from './components/EnrollmentView'
 import { ExclusionsView } from './components/ExclusionsView'
 import { FleetOverview } from './components/FleetOverview'
 import { HostDetail } from './components/HostDetail'
@@ -18,8 +19,8 @@ import type { HostDetail as HostDetailData, HostSummary } from './types'
 const POLL_MS = 30_000
 
 // The current view is mirrored in the URL hash (#host=<id>, #packages,
-// #webhooks, #exclusions, #campaigns) so a reload keeps the view and the link
-// is shareable.
+// #webhooks, #exclusions, #campaigns, #enrollment) so a reload keeps the view
+// and the link is shareable.
 function readHashHostId(): string | null {
   const m = /(?:^|[#&])host=([^&]+)/.exec(window.location.hash)
   return m ? decodeURIComponent(m[1]) : null
@@ -36,6 +37,9 @@ function readHashIsExclusions(): boolean {
 function readHashIsCampaigns(): boolean {
   return window.location.hash === '#campaigns'
 }
+function readHashIsEnrollment(): boolean {
+  return window.location.hash === '#enrollment'
+}
 function writeHash(next: string): void {
   if (window.location.hash === next) return
   const url = next || window.location.pathname + window.location.search
@@ -49,6 +53,7 @@ export default function App() {
   const [showWebhooks, setShowWebhooks] = useState<boolean>(readHashIsWebhooks)
   const [showExclusions, setShowExclusions] = useState<boolean>(readHashIsExclusions)
   const [showCampaigns, setShowCampaigns] = useState<boolean>(readHashIsCampaigns)
+  const [showEnrollment, setShowEnrollment] = useState<boolean>(readHashIsEnrollment)
   const [detail, setDetail] = useState<HostDetailData | null>(null)
   // Two independent failures: the host-list poll drives the global sync
   // indicator; a host-detail poll failure is shown in the detail pane only,
@@ -124,6 +129,7 @@ export default function App() {
     setShowWebhooks(false)
     setShowExclusions(false)
     setShowCampaigns(false)
+    setShowEnrollment(false)
     writeHash(id ? `#host=${encodeURIComponent(id)}` : '')
   }, [])
 
@@ -133,6 +139,7 @@ export default function App() {
     setShowWebhooks(false)
     setShowExclusions(false)
     setShowCampaigns(false)
+    setShowEnrollment(false)
     writeHash('#packages')
   }, [])
 
@@ -142,6 +149,7 @@ export default function App() {
     setShowWebhooks(true)
     setShowExclusions(false)
     setShowCampaigns(false)
+    setShowEnrollment(false)
     writeHash('#webhooks')
   }, [])
 
@@ -151,6 +159,7 @@ export default function App() {
     setShowWebhooks(false)
     setShowExclusions(true)
     setShowCampaigns(false)
+    setShowEnrollment(false)
     writeHash('#exclusions')
   }, [])
 
@@ -160,7 +169,18 @@ export default function App() {
     setShowWebhooks(false)
     setShowExclusions(false)
     setShowCampaigns(true)
+    setShowEnrollment(false)
     writeHash('#campaigns')
+  }, [])
+
+  const selectEnrollment = useCallback(() => {
+    setSelectedId(null)
+    setShowPackages(false)
+    setShowWebhooks(false)
+    setShowExclusions(false)
+    setShowCampaigns(false)
+    setShowEnrollment(true)
+    writeHash('#enrollment')
   }, [])
 
   // Called after a host mutation from the detail pane.
@@ -173,7 +193,7 @@ export default function App() {
     void refreshList()
   }, [refreshList, select])
 
-  // Follow back/forward navigation between hosts and the packages view.
+  // Follow back/forward navigation between hosts and top-level views.
   useEffect(() => {
     const onHashChange = () => {
       setSelectedId(readHashHostId())
@@ -181,6 +201,7 @@ export default function App() {
       setShowWebhooks(readHashIsWebhooks())
       setShowExclusions(readHashIsExclusions())
       setShowCampaigns(readHashIsCampaigns())
+      setShowEnrollment(readHashIsEnrollment())
     }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
@@ -234,6 +255,15 @@ export default function App() {
           >
             Campaigns
           </button>
+          <button
+            type="button"
+            onClick={selectEnrollment}
+            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+              showEnrollment ? 'text-zinc-200' : 'text-zinc-500'
+            }`}
+          >
+            Enrollment
+          </button>
           <OverviewChips hosts={hosts} />
         </div>
         <div className="text-xs text-zinc-600">
@@ -283,7 +313,9 @@ export default function App() {
           </nav>
         </aside>
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {showCampaigns ? (
+          {showEnrollment ? (
+            <EnrollmentView hosts={hosts} />
+          ) : showCampaigns ? (
             <CampaignsView />
           ) : showWebhooks ? (
             <WebhooksView />
