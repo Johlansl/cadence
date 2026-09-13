@@ -14,7 +14,7 @@ from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from app.advisories.debian import DEBIAN_CODENAME
-from app.models.models import Advisory, AdvisoryPackage
+from app.models.models import Advisory, AdvisoryPackage, CveScore
 
 # Binary package -> Debian source package, for security-relevant libraries
 # whose binary name differs from the source. Fallback only: agent 0.7.0 sends
@@ -102,6 +102,52 @@ def advisories_for(
             if r.id in seen:
                 continue
             seen.add(r.id)
-            refs.append({"id": r.id, "url": r.url, "cves": list(r.cve_ids or [])})
+            refs.append(
+                {
+                    "id": r.id,
+                    "url": r.url,
+                    "cves": list(r.cve_ids or []),
+                    "cvss_score": None,
+                    "cvss_severity": None,
+                    "cvss_vector": None,
+                }
+            )
         out[key] = refs
     return out
+
+
+def apply_cve_scores(db: Session, refs_by_key: dict[Any, list[dict]]) -> None:
+    """Attach the cached CVSS rollup to advisory refs in place, one batch
+    query for every CVE involved. Each ref's `cvss_*` fields become the
+    highest known base score across its CVEs (and that score's severity and
+    vector); refs with no known score keep None. The DSA/DLA linkage itself
+    is untouched."""
+    cve_ids = {
+        cve_id
+        for refs in refs_by_key.values()
+        for ref in refs
+        for cve_id in ref.get("cves", [])
+    }
+    if not cve_ids:
+        return
+    scores = {
+        row.cve_id: row
+        for row in db.execute(
+            select(CveScore).where(CveScore.cve_id.in_(sorted(cve_ids)))
+        )
+        .scalars()
+        .all()
+    }
+    for refs in refs_by_key.values():
+        for ref in refs:
+            best = None
+            for cve_id in ref.get("cves", []):
+                row = scores.get(cve_id)
+                if row is None or row.base_score is None:
+                    continue
+                if best is None or row.base_score > best.base_score:
+                    best = row
+            if best is not None:
+                ref["cvss_score"] = float(best.base_score)
+                ref["cvss_severity"] = best.base_severity
+                ref["cvss_vector"] = best.vector

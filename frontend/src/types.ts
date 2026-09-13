@@ -61,6 +61,12 @@ export interface AdvisoryRef {
   id: string
   url: string
   cves: string[]
+  // Highest known CVSS base score across the advisory's CVEs (roadmap
+  // item 9). All three are null/undefined when no CVE has a known score,
+  // which means unknown, never zero.
+  cvss_score?: number | null
+  cvss_severity?: string | null
+  cvss_vector?: string | null
 }
 
 export interface HostPackage {

@@ -409,11 +409,18 @@ class FleetSummary(BaseModel):
 
 class AdvisoryRef(BaseModel):
     """A security advisory linked to a pending security update. `id` is a
-    DSA/DLA identifier; `url` points at the security-tracker page."""
+    DSA/DLA identifier; `url` points at the security-tracker page. The
+    `cvss_*` rollup is the highest known CVSS base score across the
+    advisory's CVEs (roadmap item 9); all three are None when no CVE has a
+    known score, which means unknown, never zero and never evidence that a
+    host is unaffected."""
 
     id: str
     url: str
     cves: list[str]
+    cvss_score: float | None = None
+    cvss_severity: str | None = None
+    cvss_vector: str | None = None
 
 
 class HostPackageOut(BaseModel):

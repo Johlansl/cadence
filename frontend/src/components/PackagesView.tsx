@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { pill } from '../lib/pill'
 import type { PackageStatusFilter, PackageSummaryRow } from '../types'
+import { severityLabel } from './PackageTable'
 
 const POLL_MS = 30_000
 const DEBOUNCE_MS = 300
@@ -157,16 +158,26 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
                       </span>
                       {h.is_security_update && <span className={pill('danger')}>SEC</span>}
                       {h.advisories.map((a) => (
-                        <a
-                          key={a.id}
-                          href={a.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={a.cves.join(', ')}
-                          className={`${pill('info')} hover:text-sky-300`}
-                        >
-                          {a.id}
-                        </a>
+                        <span key={a.id} className="whitespace-nowrap">
+                          <a
+                            href={a.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={a.cves.join(', ')}
+                            className={`${pill('info')} hover:text-sky-300`}
+                          >
+                            {a.id}
+                          </a>
+                          {a.cvss_score != null && (
+                            <span
+                              title={a.cvss_vector ?? undefined}
+                              className="ml-1 font-mono text-[10px] text-zinc-400"
+                            >
+                              {a.cvss_score}
+                              {severityLabel(a) ? ` ${severityLabel(a)}` : ''}
+                            </span>
+                          )}
+                        </span>
                       ))}
                     </span>
                   </li>

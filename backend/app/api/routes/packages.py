@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, select, tuple_
 from sqlalchemy.orm import Session
 
-from app.advisories.match import advisories_for, codename_for, source_for
+from app.advisories.match import (
+    advisories_for,
+    apply_cve_scores,
+    codename_for,
+    source_for,
+)
 from app.api.deps import get_db
 from app.api.pagination import after_keyset
 from app.models.models import Host, HostPackage, Package
@@ -115,6 +120,7 @@ def list_packages(
             )
         )
     advisories_by_key = advisories_for(db, adv_items)
+    apply_cve_scores(db, advisories_by_key)
 
     grouped: dict[tuple[str, str], list] = {}
     for row in all_rows:

@@ -84,7 +84,14 @@ def test_host_detail_links_matching_advisory_and_leaves_counts(client, db_sessio
     by_name = {p["name"]: p for p in body["packages"]}
 
     assert by_name["libssl3"]["advisories"] == [
-        {"id": "DSA-5745-1", "url": DSA_URL, "cves": ["CVE-2026-6119"]}
+        {
+            "id": "DSA-5745-1",
+            "url": DSA_URL,
+            "cves": ["CVE-2026-6119"],
+            "cvss_score": None,
+            "cvss_severity": None,
+            "cvss_vector": None,
+        }
     ]
     assert by_name["vim"]["advisories"] == []
     assert by_name["bash"]["advisories"] == []
@@ -148,6 +155,9 @@ def test_reported_source_package_drives_the_match(client, db_session):
             "id": "DSA-9000-1",
             "url": "https://security-tracker.debian.org/tracker/DSA-9000-1",
             "cves": ["CVE-2026-9000"],
+            "cvss_score": None,
+            "cvss_severity": None,
+            "cvss_vector": None,
         }
     ]
     assert by_name["libbar1"]["advisories"] == []
@@ -178,5 +188,12 @@ def test_packages_view_links_advisory(client, db_session):
     rows = client.get("/api/v1/packages?status=security").json()
     libssl = next(r for r in rows if r["name"] == "libssl3")
     assert libssl["hosts"][0]["advisories"] == [
-        {"id": "DSA-5745-1", "url": DSA_URL, "cves": ["CVE-2026-6119"]}
+        {
+            "id": "DSA-5745-1",
+            "url": DSA_URL,
+            "cves": ["CVE-2026-6119"],
+            "cvss_score": None,
+            "cvss_severity": None,
+            "cvss_vector": None,
+        }
     ]

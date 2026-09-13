@@ -127,6 +127,9 @@ describe('PackagesView', () => {
               id: 'DSA-5745-1',
               url: 'https://security-tracker.debian.org/tracker/DSA-5745-1',
               cves: ['CVE-2026-6119'],
+              cvss_score: 5.5,
+              cvss_severity: 'MEDIUM',
+              cvss_vector: 'CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H',
             },
           ],
         },
@@ -138,5 +141,6 @@ describe('PackagesView', () => {
     const link = await screen.findByRole('link', { name: 'DSA-5745-1' })
     expect(link).toHaveAttribute('href', 'https://security-tracker.debian.org/tracker/DSA-5745-1')
     expect(link).toHaveAttribute('title', 'CVE-2026-6119')
+    expect(await screen.findByText('5.5 Medium')).toBeInTheDocument()
   })
 })

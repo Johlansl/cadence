@@ -1,5 +1,11 @@
 import { useMemo, useState } from 'react'
-import type { HostPackage } from '../types'
+import type { AdvisoryRef, HostPackage } from '../types'
+
+// "MEDIUM" -> "Medium" for the inline score label.
+export function severityLabel(a: AdvisoryRef): string {
+  if (!a.cvss_severity) return ''
+  return a.cvss_severity.charAt(0) + a.cvss_severity.slice(1).toLowerCase()
+}
 
 // security update first, then any update, then the rest, name as tie-breaker.
 function smartRank(p: HostPackage): number {
@@ -145,16 +151,26 @@ export function PackageTable({ packages }: { packages: HostPackage[] }) {
                   </span>
                 )}
                 {p.advisories.map((a) => (
-                  <a
-                    key={a.id}
-                    href={a.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={a.cves.join(', ')}
-                    className="ml-1 rounded bg-sky-500/10 px-1 font-sans text-[10px] font-medium text-sky-400 ring-1 ring-sky-500/30 hover:text-sky-300"
-                  >
-                    {a.id}
-                  </a>
+                  <span key={a.id} className="ml-1 whitespace-nowrap">
+                    <a
+                      href={a.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={a.cves.join(', ')}
+                      className="rounded bg-sky-500/10 px-1 font-sans text-[10px] font-medium text-sky-400 ring-1 ring-sky-500/30 hover:text-sky-300"
+                    >
+                      {a.id}
+                    </a>
+                    {a.cvss_score != null && (
+                      <span
+                        title={a.cvss_vector ?? undefined}
+                        className="ml-1 font-sans text-[10px] text-zinc-400"
+                      >
+                        {a.cvss_score}
+                        {severityLabel(a) ? ` ${severityLabel(a)}` : ''}
+                      </span>
+                    )}
+                  </span>
                 ))}
               </td>
               <td className="px-3 py-1.5 text-zinc-500">{p.installed_version}</td>

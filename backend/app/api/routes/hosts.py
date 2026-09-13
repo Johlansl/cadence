@@ -15,7 +15,12 @@ from fastapi import status as http_status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.advisories.match import advisories_for, codename_for, source_for
+from app.advisories.match import (
+    advisories_for,
+    apply_cve_scores,
+    codename_for,
+    source_for,
+)
 from app.api.deps import get_db
 from app.api.pagination import after_keyset
 from app.core.staleness import LATE_AFTER
@@ -251,6 +256,7 @@ def get_host(host_id: uuid.UUID, db: Session = Depends(get_db)) -> HostDetail:
                 if r.candidate_version is not None and r.is_security_update
             ),
         )
+        apply_cve_scores(db, advisories_by_key)
 
     return HostDetail(
         **_summary_fields(host),

@@ -91,4 +91,42 @@ describe('PackageTable', () => {
     await userEvent.type(screen.getByLabelText(/filter packages/i), 'cve-2026-6119')
     expect(rowNames()).toEqual(['libssl3'])
   })
+
+  it('shows the cached CVSS score next to the advisory, and nothing when unknown', () => {
+    const scored = pkg({
+      name: 'libssl3',
+      candidate_version: '3.0.14-1~deb12u2',
+      is_security_update: true,
+      advisories: [
+        {
+          id: 'DSA-5745-1',
+          url: 'https://security-tracker.debian.org/tracker/DSA-5745-1',
+          cves: ['CVE-2024-0727'],
+          cvss_score: 5.5,
+          cvss_severity: 'MEDIUM',
+          cvss_vector: 'CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H',
+        },
+      ],
+    })
+    const unscored = pkg({
+      name: 'openssl',
+      candidate_version: '3.0.14-1~deb12u2',
+      is_security_update: true,
+      advisories: [
+        {
+          id: 'DSA-5745-1',
+          url: 'https://security-tracker.debian.org/tracker/DSA-5745-1',
+          cves: ['CVE-2026-0000'],
+          cvss_score: null,
+          cvss_severity: null,
+          cvss_vector: null,
+        },
+      ],
+    })
+    render(<PackageTable packages={[scored, unscored]} />)
+
+    const score = screen.getByText('5.5 Medium')
+    expect(score).toHaveAttribute('title', 'CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H')
+    expect(screen.queryByText('null')).not.toBeInTheDocument()
+  })
 })
