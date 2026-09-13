@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     SmallInteger,
     Text,
     Uuid,
@@ -216,6 +218,30 @@ class AdvisoryPackage(Base):
     release: Mapped[str] = mapped_column(Text, primary_key=True)
     package: Mapped[str] = mapped_column(Text, primary_key=True)
     fixed_version: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class CveScore(Base):
+    """A cached CVSS score for one CVE (roadmap item 9, migration 0022).
+
+    The DSA/DLA pipeline stays the source of truth for which CVEs concern
+    which package; this table only caches the score so the read API never
+    fetches from the network. Populated only by the scheduler's CVE-score
+    refresh. A NULL `base_score` / `base_severity` means "unknown", never
+    zero and never evidence that a host is unaffected."""
+
+    __tablename__ = "cve_scores"
+
+    cve_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    base_score: Mapped[Decimal | None] = mapped_column(Numeric(3, 1))
+    base_severity: Mapped[str | None] = mapped_column(Text)
+    vector: Mapped[str | None] = mapped_column(Text)
+    cvss_version: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'nvd'")
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class Report(Base):
