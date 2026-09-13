@@ -134,6 +134,22 @@ def test_refresh_skips_when_recent(db_session, monkeypatch):
     assert calls == []
 
 
+def test_refresh_paces_lookups_without_slowing_a_single_cve(db_session, monkeypatch):
+    import app.scheduler as scheduler_mod
+
+    monkeypatch.setattr(settings, "cve_score_refresh_enabled", True)
+    monkeypatch.setattr(
+        "app.scheduler.fetch_nvd", lambda cve_id, **kw: {"vulnerabilities": []}
+    )
+    slept: list[float] = []
+    monkeypatch.setattr(scheduler_mod.time, "sleep", slept.append)
+    _seed_advisory(db_session, cves=["CVE-2024-0001", "CVE-2024-0002"])
+
+    run_cve_score_refresh_if_due(now=datetime.now(timezone.utc), db=db_session)
+
+    assert slept == [scheduler_mod.NVD_REQUEST_SPACING_SECONDS]
+
+
 def test_refresh_disabled_is_a_noop(db_session, monkeypatch):
     monkeypatch.setattr(settings, "cve_score_refresh_enabled", False)
 

@@ -63,6 +63,10 @@ ADVISORY_REFRESH_EVERY = timedelta(hours=6)
 ADVISORY_STATE_KEY = "last_advisory_refresh_at"
 CVE_SCORE_REFRESH_EVERY = timedelta(hours=6)
 CVE_SCORE_STATE_KEY = "last_cve_score_refresh_at"
+# Gentle pacing between NVD lookups within one refresh pass: the NVD serves
+# anonymous callers at a low rate, and one request per distinct CVE needs no
+# hurry on a 6 h tick. 429s are additionally retried once in fetch_nvd.
+NVD_REQUEST_SPACING_SECONDS = 1.0
 PACKAGES_GC_EVERY = timedelta(days=7)
 PACKAGES_GC_STATE_KEY = "last_packages_gc_at"
 _stop = False
@@ -502,7 +506,9 @@ def run_cve_score_refresh_if_due(
         cve_ids = _referenced_cve_ids(db)
         rows: list[dict] = []
         failed = 0
-        for cve_id in cve_ids:
+        for index, cve_id in enumerate(cve_ids):
+            if index:
+                time.sleep(NVD_REQUEST_SPACING_SECONDS)
             try:
                 payload = fetch_nvd(cve_id, api_key=settings.cve_nvd_api_key or None)
             except Exception:  # noqa: BLE001 -- keep last good data, retry next tick

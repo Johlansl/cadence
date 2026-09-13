@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -24,11 +26,57 @@ from app.models.models import CveScore
 
 log = logging.getLogger("cadence.cve_scores")
 
+
+def _f(**fields: object) -> dict:
+    """Wrap structured fields for the logfmt formatter."""
+    return {"fields": fields}
+
 NVD_CVES_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+
+# Upper bound for honouring a 429 Retry-After: a single score lookup must
+# never stall the 6 h scheduler tick for longer than this.
+NVD_RETRY_AFTER_MAX_SECONDS = 120.0
+
+# Fallback wait when a 429 carries no usable Retry-After header.
+NVD_RETRY_AFTER_DEFAULT_SECONDS = 30.0
 
 # NVD metric blocks in preference order: the API serves several CVSS
 # generations side by side and not every CVE carries every generation.
 _METRIC_BLOCKS = ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2")
+
+
+def _retry_after_delay(exc: urllib.error.HTTPError) -> float:
+    """Seconds to wait before retrying a 429, from its `Retry-After` header
+    (numeric form) clamped to `NVD_RETRY_AFTER_MAX_SECONDS`. A missing or
+    unparsable header falls back to `NVD_RETRY_AFTER_DEFAULT_SECONDS`."""
+    raw = None
+    try:
+        raw = exc.headers.get("Retry-After")
+    except AttributeError:
+        raw = None
+    try:
+        delay = float(raw) if raw is not None else NVD_RETRY_AFTER_DEFAULT_SECONDS
+    except (TypeError, ValueError):
+        delay = NVD_RETRY_AFTER_DEFAULT_SECONDS
+    return max(0.0, min(delay, NVD_RETRY_AFTER_MAX_SECONDS))
+
+
+def _get_once(
+    url: str, headers: dict[str, str], timeout: float, max_bytes: int
+) -> dict[str, Any]:
+    req = urllib.request.Request(url, headers=headers)
+    chunks: list[bytes] = []
+    total = 0
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"{url}: response exceeds {max_bytes} bytes")
+            chunks.append(chunk)
+    return json.loads(b"".join(chunks).decode("utf-8"))
 
 
 def fetch_nvd(
@@ -42,24 +90,26 @@ def fetch_nvd(
     than `max_bytes`. A single record is a few KB; hitting the cap means the
     endpoint changed shape and the caller must adapt on purpose. The optional
     `api_key` is sent as the documented `apiKey` header and is never logged.
+    A 429 is retried exactly once after its `Retry-After` wait (capped);
+    anything else raises for the caller to handle.
     """
     query = urllib.parse.urlencode({"cveId": cve_id})
+    url = f"{NVD_CVES_URL}?{query}"
     headers = {"User-Agent": "cadence-scheduler"}
     if api_key:
         headers["apiKey"] = api_key
-    req = urllib.request.Request(f"{NVD_CVES_URL}?{query}", headers=headers)
-    chunks: list[bytes] = []
-    total = 0
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise ValueError(f"{NVD_CVES_URL}: response exceeds {max_bytes} bytes")
-            chunks.append(chunk)
-    return json.loads(b"".join(chunks).decode("utf-8"))
+    try:
+        return _get_once(url, headers, timeout, max_bytes)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 429:
+            raise
+        delay = _retry_after_delay(exc)
+        log.info(
+            "nvd rate limited, retrying once",
+            extra=_f(cve_id=cve_id, retry_after_s=delay),
+        )
+        time.sleep(delay)
+        return _get_once(url, headers, timeout, max_bytes)
 
 
 def select_score(payload: dict[str, Any], cve_id: str) -> dict[str, Any] | None:

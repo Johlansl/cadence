@@ -60,8 +60,11 @@ rather than something to defer until someone asks.
   CVSS computation locally for the same result. Selection prefers the
   `Primary` entry of the newest CVSS generation available; a CVE the NVD
   knows nothing about stays NULL (unknown, never zero), and a failed fetch
-  keeps the last good row. The DSA/DLA matching above is unchanged, and the
-  "not a vulnerability scan" disclaimer covers the score too.
+  keeps the last good row. Lookups are paced 1 s apart within a pass and a
+  429 is retried once after its `Retry-After` (capped at 120 s), so the
+  refresh adapts to the NVD rate without hardcoding it. The DSA/DLA
+  matching above is unchanged, and the "not a vulnerability scan"
+  disclaimer covers the score too.
 - **The agent never reboots on its own** unless the host's `reboot_policy` is
   `auto` (or a job overrides it) *and* the kill-switch `CADENCE_ENABLE_REBOOT`
   is not `false`. It otherwise just reports `reboot_required`.

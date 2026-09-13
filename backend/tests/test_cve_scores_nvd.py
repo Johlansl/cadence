@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import io
 import json
+import urllib.error
 from datetime import datetime, timezone
 from decimal import Decimal
+from email.message import Message
 
 from sqlalchemy import select
 
@@ -132,6 +134,72 @@ def test_fetch_sends_cve_id_and_optional_key(monkeypatch):
 
     fetch_nvd("CVE-2024-0727")
     assert seen["apiKey"] is None
+
+
+def _http_error(code: int, retry_after: str | None) -> urllib.error.HTTPError:
+    headers = Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        code,
+        "rate limited" if code == 429 else "not found",
+        headers,
+        io.BytesIO(),
+    )
+
+
+def test_fetch_retries_429_once_after_retry_after(monkeypatch):
+    calls: list[str] = []
+    slept: list[float] = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise _http_error(429, "45")
+        return _StubResponse(json.dumps({"totalResults": 0}).encode())
+
+    monkeypatch.setattr(cve_scores.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cve_scores.time, "sleep", slept.append)
+    assert fetch_nvd("CVE-2024-0727") == {"totalResults": 0}
+    assert len(calls) == 2
+    assert slept == [45.0]
+
+
+def test_fetch_clamps_and_defaults_retry_after(monkeypatch):
+    for header, expected in (("9999", 120.0), (None, 30.0), ("soon", 30.0)):
+        slept: list[float] = []
+
+        def fake_urlopen(req, timeout=None, _header=header):
+            raise _http_error(429, _header)
+
+        monkeypatch.setattr(cve_scores.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(cve_scores.time, "sleep", slept.append)
+        try:
+            fetch_nvd("CVE-2024-0727")
+            raise AssertionError("second 429 must raise")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 429
+        assert slept == [expected], header
+
+
+def test_fetch_does_not_retry_other_errors(monkeypatch):
+    calls: list[str] = []
+    slept: list[float] = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req.full_url)
+        raise _http_error(404, None)
+
+    monkeypatch.setattr(cve_scores.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cve_scores.time, "sleep", slept.append)
+    try:
+        fetch_nvd("CVE-2024-0727")
+        raise AssertionError("404 must raise")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 404
+    assert len(calls) == 1
+    assert slept == []
 
 
 def test_refresh_upserts_and_keeps_unknown_as_null(db_session):
