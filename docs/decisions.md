@@ -45,12 +45,23 @@ rather than something to defer until someone asks.
   `GET /packages` link each apt-flagged pending security update to the DSA/DLA
   whose per-release `fixed_version` **equals** apt's candidate version (an
   exact string match, Cadence still does no version comparison of its own).
-  It is deliberately *not* a full vulnerability scan: no unfixed / no-DSA CVEs,
-  no severity. Agent `0.7.0`+ reports each binary's Debian source package
+  It is deliberately *not* a full vulnerability scan: no unfixed / no-DSA CVEs.
+  Agent `0.7.0`+ reports each binary's Debian source package
   (`dpkg-query ${source:Package}`) and the release codename
   (`/etc/os-release VERSION_CODENAME`), which the read-path uses directly; for
   older agents it falls back to a name-based binary→source mapping with a small
   curated table for common libraries and a `VERSION_ID`→codename table.
+- **CVE severity is a cached NVD lookup, not a scan upgrade.** On the same
+  scheduler tick the server resolves one CVSS row per CVE the feed
+  references (`cve_scores`, migration `0022`) from the NVD CVE API 2.0, and
+  the read API shows the highest known score per advisory. The NVD was
+  chosen over OSV because OSV records carry the CVSS vector string without
+  the numeric base score (verified live), which would have meant coding the
+  CVSS computation locally for the same result. Selection prefers the
+  `Primary` entry of the newest CVSS generation available; a CVE the NVD
+  knows nothing about stays NULL (unknown, never zero), and a failed fetch
+  keeps the last good row. The DSA/DLA matching above is unchanged, and the
+  "not a vulnerability scan" disclaimer covers the score too.
 - **The agent never reboots on its own** unless the host's `reboot_policy` is
   `auto` (or a job overrides it) *and* the kill-switch `CADENCE_ENABLE_REBOOT`
   is not `false`. It otherwise just reports `reboot_required`.

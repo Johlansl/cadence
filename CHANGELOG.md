@@ -6,6 +6,19 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
+## Unreleased
+
+- CVE severity (CVSS). Every CVE already linked via a DSA/DLA can now show a
+  cached CVSS base score and severity, resolved per CVE from the NVD CVE API
+  2.0 by the scheduler (new `cve_scores` table, migration `0022`, refreshed
+  on the advisory tick) and served by `GET /api/v1/hosts/{id}` and
+  `GET /api/v1/packages` as a per-advisory rollup (highest known score).
+  The DSA/DLA matching is unchanged, a CVE with no known score shows nothing
+  extra (unknown, never zero), and the mapping stays best-effort: the absence
+  of a score or an advisory never means a host is unaffected. Disable the
+  lookup with `CADENCE_CVE_SCORE_REFRESH_ENABLED=false`; an optional
+  `CADENCE_NVD_API_KEY` raises the NVD rate allowance. No agent change.
+
 ## 0.3.0
 
 - Agent enrollment and mTLS transport authentication. A short-lived,
