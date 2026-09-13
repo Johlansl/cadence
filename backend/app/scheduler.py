@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.advisories import debian
+from app.advisories.cve_scores import fetch_nvd, refresh_cve_scores, select_score
 from app.advisories.sync import refresh_advisories
 from app.campaigns.engine import advance_campaigns
 from app.core.config import settings
@@ -30,6 +31,7 @@ from app.core.staleness import SILENT_AFTER
 from app.db.base import SessionLocal
 from app.job_creation import create_job_for_host
 from app.models.models import (
+    Advisory,
     AgentToken,
     AuditLog,
     Campaign,
@@ -59,6 +61,8 @@ RETENTION_STATE_KEY = "last_retention_at"
 HEARTBEAT_STATE_KEY = "last_tick_at"
 ADVISORY_REFRESH_EVERY = timedelta(hours=6)
 ADVISORY_STATE_KEY = "last_advisory_refresh_at"
+CVE_SCORE_REFRESH_EVERY = timedelta(hours=6)
+CVE_SCORE_STATE_KEY = "last_cve_score_refresh_at"
 PACKAGES_GC_EVERY = timedelta(days=7)
 PACKAGES_GC_STATE_KEY = "last_packages_gc_at"
 _stop = False
@@ -440,6 +444,90 @@ def run_advisory_refresh_if_due(
     log.info("advisory refresh done", extra=_f(**counts, feeds=len(urls)))
 
 
+def _cve_score_due(db: Session, now: datetime) -> bool:
+    """True when the CVE scores haven't been refreshed within
+    CVE_SCORE_REFRESH_EVERY. Last-run time lives in scheduler_state so a
+    restart doesn't re-trigger a fetch."""
+    last = db.execute(
+        select(SchedulerState.value).where(SchedulerState.key == CVE_SCORE_STATE_KEY)
+    ).scalar_one_or_none()
+    if last is None:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except ValueError:
+        return True
+    return now - last_dt >= CVE_SCORE_REFRESH_EVERY
+
+
+def _mark_cve_score_done(db: Session, now: datetime) -> None:
+    db.execute(
+        pg_insert(SchedulerState)
+        .values(key=CVE_SCORE_STATE_KEY, value=now.isoformat(), updated_at=now)
+        .on_conflict_do_update(
+            index_elements=["key"], set_={"value": now.isoformat(), "updated_at": now}
+        )
+    )
+    db.commit()
+
+
+def _referenced_cve_ids(db: Session) -> list[str]:
+    """Distinct CVE ids currently referenced by the advisory feed, sorted.
+    Only these get a score lookup: the DSA/DLA feed stays the source of
+    truth for which CVEs matter."""
+    ids: set[str] = set()
+    for (cve_ids,) in db.execute(select(Advisory.cve_ids)).all():
+        for cve_id in cve_ids or []:
+            ids.add(cve_id)
+    return sorted(ids)
+
+
+def run_cve_score_refresh_if_due(
+    now: datetime | None = None, db: Session | None = None
+) -> None:
+    """Resolve a cached CVSS score for every referenced CVE at most once per
+    CVE_SCORE_REFRESH_EVERY. A per-CVE fetch failure keeps that CVE's last
+    good row and the state key is only advanced once every referenced CVE
+    resolved, so the next tick retries the rest. A CVE the NVD knows nothing
+    about is stored as a NULL (unknown) row, never a zero. Pass `db` to run
+    inside an existing session (tests)."""
+    now = now or datetime.now(timezone.utc)
+    if not settings.cve_score_refresh_enabled:
+        return
+    own_session = db is None
+    db = db or SessionLocal()
+    try:
+        if not _cve_score_due(db, now):
+            return
+        cve_ids = _referenced_cve_ids(db)
+        rows: list[dict] = []
+        failed = 0
+        for cve_id in cve_ids:
+            try:
+                payload = fetch_nvd(cve_id, api_key=settings.cve_nvd_api_key or None)
+            except Exception:  # noqa: BLE001 -- keep last good data, retry next tick
+                log.warning(
+                    "cve score fetch failed, keeping last good data",
+                    exc_info=True,
+                    extra=_f(cve_id=cve_id),
+                )
+                failed += 1
+                continue
+            row = select_score(payload, cve_id)
+            rows.append(row if row is not None else {"cve_id": cve_id, "source": "nvd"})
+        if rows:
+            refresh_cve_scores(db, rows, now)
+        if failed:
+            return
+        _mark_cve_score_done(db, now)
+    finally:
+        if own_session:
+            db.close()
+    log.info(
+        "cve score refresh done", extra=_f(scores=len(rows), failed=failed, cves=len(cve_ids))
+    )
+
+
 def _packages_gc_due(db: Session, now: datetime) -> bool:
     """True when the packages GC hasn't run within PACKAGES_GC_EVERY. Last-run
     time lives in scheduler_state so a restart doesn't re-trigger it."""
@@ -538,6 +626,7 @@ def main() -> None:
             dispatch_pending_deliveries()
             run_retention_if_due()
             run_advisory_refresh_if_due()
+            run_cve_score_refresh_if_due()
             run_packages_gc_if_due()
             record_heartbeat()
         except Exception:  # noqa: BLE001 -- keep the loop alive

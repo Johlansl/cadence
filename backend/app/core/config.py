@@ -256,6 +256,17 @@ class Settings:
             os.environ.get("CADENCE_ADVISORY_FEED_URLS", "").replace(",", " ").split()
         )
 
+        # CVE/CVSS score enrichment (roadmap item 9): the scheduler resolves
+        # a cached CVSS score for every CVE the advisory feed references.
+        # Disable (CI, air-gapped installs) with
+        # CADENCE_CVE_SCORE_REFRESH_ENABLED=false. The NVD API key is
+        # optional; without it the lookup still works at the public rate.
+        # It is sent as the `apiKey` header and never logged or stored.
+        self.cve_score_refresh_enabled: bool = _bool_env(
+            "CADENCE_CVE_SCORE_REFRESH_ENABLED", True
+        )
+        self.cve_nvd_api_key: str = os.environ.get("CADENCE_NVD_API_KEY", "")
+
         # The shared `packages` dimension is get-or-created on every report and
         # never shrinks. A weekly scheduler sweep deletes rows no host_packages
         # references (every read path inner-joins from host_packages, so an
