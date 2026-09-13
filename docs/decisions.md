@@ -52,9 +52,13 @@ rather than something to defer until someone asks.
   older agents it falls back to a name-based binary→source mapping with a small
   curated table for common libraries and a `VERSION_ID`→codename table.
 - **CVE severity is a cached NVD lookup, not a scan upgrade.** On the same
-  scheduler tick the server resolves one CVSS row per CVE the feed
-  references (`cve_scores`, migration `0022`) from the NVD CVE API 2.0, and
-  the read API shows the highest known score per advisory. The NVD was
+  scheduler tick the server resolves one CVSS row per *displayed* CVE
+  (`cve_scores`, migration `0022`) from the NVD CVE API 2.0: only CVEs in
+  advisories matching a pending security update on an active host, collected
+  through the same `advisories_for` matching the read API uses, so the
+  refresh set cannot drift from what the dashboard shows. Resolving every
+  historical feed CVE instead would stall the tick for hours. The read API
+  shows the highest known score per advisory. The NVD was
   chosen over OSV because OSV records carry the CVSS vector string without
   the numeric base score (verified live), which would have meant coding the
   CVSS computation locally for the same result. Selection prefers the

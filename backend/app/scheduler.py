@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.advisories import debian
 from app.advisories.cve_scores import fetch_nvd, refresh_cve_scores, select_score
+from app.advisories.match import advisories_for, codename_for, source_for
 from app.advisories.sync import refresh_advisories
 from app.campaigns.engine import advance_campaigns
 from app.core.config import settings
@@ -31,7 +32,6 @@ from app.core.staleness import SILENT_AFTER
 from app.db.base import SessionLocal
 from app.job_creation import create_job_for_host
 from app.models.models import (
-    Advisory,
     AgentToken,
     AuditLog,
     Campaign,
@@ -475,15 +475,48 @@ def _mark_cve_score_done(db: Session, now: datetime) -> None:
     db.commit()
 
 
-def _referenced_cve_ids(db: Session) -> list[str]:
-    """Distinct CVE ids currently referenced by the advisory feed, sorted.
-    Only these get a score lookup: the DSA/DLA feed stays the source of
-    truth for which CVEs matter."""
-    ids: set[str] = set()
-    for (cve_ids,) in db.execute(select(Advisory.cve_ids)).all():
-        for cve_id in cve_ids or []:
-            ids.add(cve_id)
-    return sorted(ids)
+def _displayed_cve_ids(db: Session) -> list[str]:
+    """Distinct CVE ids the dashboard can actually show, sorted: the CVEs in
+    advisories matching a pending security update on an active host. The
+    full feed holds tens of thousands of historical CVEs; resolving scores
+    for all of them would stall the tick for hours, while only this small
+    set ever reaches a screen. Matching reuses `advisories_for`, the exact
+    function the read API uses, so the refresh set cannot drift from what
+    the dashboard displays."""
+    rows = db.execute(
+        select(
+            Package.name,
+            Package.architecture,
+            HostPackage.source_package,
+            Host.os_version,
+            Host.os_codename,
+            HostPackage.candidate_version,
+        )
+        .join(HostPackage, HostPackage.package_id == Package.id)
+        .join(Host, Host.id == HostPackage.host_id)
+        .where(
+            Host.is_active.is_(True),
+            HostPackage.candidate_version.is_not(None),
+            HostPackage.is_security_update.is_(True),
+        )
+    ).all()
+    items = []
+    for r in rows:
+        codename = r.os_codename or codename_for(r.os_version)
+        if codename is None:
+            continue
+        items.append(
+            (
+                (r.name, r.architecture),
+                r.source_package or source_for(r.name),
+                codename,
+                r.candidate_version,
+            )
+        )
+    refs = advisories_for(db, items)
+    return sorted(
+        {cve_id for rs in refs.values() for ref in rs for cve_id in ref.get("cves", [])}
+    )
 
 
 def run_cve_score_refresh_if_due(
@@ -491,7 +524,7 @@ def run_cve_score_refresh_if_due(
 ) -> None:
     """Resolve a cached CVSS score for every referenced CVE at most once per
     CVE_SCORE_REFRESH_EVERY. A per-CVE fetch failure keeps that CVE's last
-    good row and the state key is only advanced once every referenced CVE
+    good row and the state key is only advanced once every displayed CVE
     resolved, so the next tick retries the rest. A CVE the NVD knows nothing
     about is stored as a NULL (unknown) row, never a zero. Pass `db` to run
     inside an existing session (tests)."""
@@ -503,7 +536,7 @@ def run_cve_score_refresh_if_due(
     try:
         if not _cve_score_due(db, now):
             return
-        cve_ids = _referenced_cve_ids(db)
+        cve_ids = _displayed_cve_ids(db)
         rows: list[dict] = []
         failed = 0
         for index, cve_id in enumerate(cve_ids):
