@@ -6,7 +6,7 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
-## Unreleased
+## 0.4.0
 
 - Admin SSO via OIDC (Authentik as reference). Dashboard operators can sign
   in at the provider; the backend validates the ID token locally and seals
