@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import type { AdminWriteResult } from '../api/client'
 import { clearAdminKey, getAdminKey, setAdminKey } from '../lib/adminKey'
+import { useSession } from './SessionAuth'
 
 // Shared plumbing for the admin-key-guarded write endpoints (trigger a job,
 // change a host's reboot policy, ...). Holds the busy/error state and the
@@ -10,8 +11,31 @@ export function useAdminKeyAction<T>(action: (key: string) => Promise<AdminWrite
   const [error, setError] = useState<string | null>(null)
   const [needKey, setNeedKey] = useState(false)
   const [keyDraft, setKeyDraft] = useState('')
+  const {
+    session: { authenticated },
+    refresh,
+  } = useSession()
 
   const run = useCallback(async (): Promise<AdminWriteResult<T> | undefined> => {
+    if (authenticated) {
+      // SSO session: the cookie authenticates, the header goes empty and
+      // the backend attributes the action to the verified identity.
+      setBusy(true)
+      setError(null)
+      try {
+        const res = await action('')
+        if (res.ok) return res
+        if (res.status === 401) {
+          await refresh()
+          setError('Session expired. Sign in again.')
+        } else {
+          setError(res.detail ?? `Request failed (${res.status}).`)
+        }
+        return res
+      } finally {
+        setBusy(false)
+      }
+    }
     const key = getAdminKey()
     if (!key) {
       setNeedKey(true)
@@ -34,7 +58,7 @@ export function useAdminKeyAction<T>(action: (key: string) => Promise<AdminWrite
     } finally {
       setBusy(false)
     }
-  }, [action])
+  }, [action, authenticated, refresh])
 
   const submitKey = useCallback(async (): Promise<AdminWriteResult<T> | undefined> => {
     if (!keyDraft.trim()) return

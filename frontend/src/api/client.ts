@@ -19,6 +19,7 @@ import type {
   ReportSummary,
   Schedule,
   ScheduleInput,
+  SessionInfo,
   Webhook,
   WebhookCreated,
   WebhookInput,
@@ -295,5 +296,26 @@ export const api = {
   // draft -> running; also pause / resume / cancel. Body-less POSTs.
   campaignAction(id: string, adminKey: string, action: 'activate' | 'pause' | 'resume' | 'cancel') {
     return adminWrite<CampaignDetail>(`/admin/campaigns/${id}/${action}`, adminKey, 'POST', {})
+  },
+
+  // SSO session (roadmap item 10). The session cookie travels automatically
+  // (same origin); nothing secret passes through JS here.
+  loginUrl: () => `${BASE}/auth/oidc/login`,
+  startLogin() {
+    window.location.assign(api.loginUrl())
+  },
+  async getSession(): Promise<{ ssoAvailable: boolean; session: SessionInfo }> {
+    const res = await fetch(`${BASE}/auth/me`, { headers: { Accept: 'application/json' } })
+    // 404 = OIDC not configured server-side: hide SSO UI entirely.
+    if (res.status === 404) return { ssoAvailable: false, session: { authenticated: false } }
+    if (!res.ok) throw new Error(`Request failed (${res.status}).`)
+    return { ssoAvailable: true, session: (await res.json()) as SessionInfo }
+  },
+  async logout(): Promise<void> {
+    const res = await fetch(`${BASE}/auth/logout`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) throw new Error(`Request failed (${res.status}).`)
   },
 }

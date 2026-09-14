@@ -12,6 +12,7 @@ import { HostList } from './components/HostList'
 import { OverviewChips, SilentBanner } from './components/Overview'
 import { PackagesView } from './components/PackagesView'
 import { RelativeTime } from './components/RelativeTime'
+import { SessionButton, SessionProvider } from './components/SessionAuth'
 import { WebhooksView } from './components/WebhooksView'
 import { EMPTY_FILTERS, filterHosts, type HostFilters as Filters } from './lib/hostFilter'
 import type { HostDetail as HostDetailData, HostSummary } from './types'
@@ -208,143 +209,146 @@ export default function App() {
   }, [])
 
   return (
-    <div className="flex h-full flex-col bg-zinc-950">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-        <div className="flex items-baseline gap-3">
-          <button
-            type="button"
-            onClick={() => select(null)}
-            className="text-sm font-semibold uppercase tracking-widest text-zinc-300 hover:text-zinc-100"
-            title="Back to the fleet overview"
-          >
-            Cadence
-          </button>
-          <button
-            type="button"
-            onClick={selectPackages}
-            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-              showPackages ? 'text-zinc-200' : 'text-zinc-500'
-            }`}
-          >
-            Packages
-          </button>
-          <button
-            type="button"
-            onClick={selectWebhooks}
-            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-              showWebhooks ? 'text-zinc-200' : 'text-zinc-500'
-            }`}
-          >
-            Webhooks
-          </button>
-          <button
-            type="button"
-            onClick={selectExclusions}
-            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-              showExclusions ? 'text-zinc-200' : 'text-zinc-500'
-            }`}
-          >
-            Exclusions
-          </button>
-          <button
-            type="button"
-            onClick={selectCampaigns}
-            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-              showCampaigns ? 'text-zinc-200' : 'text-zinc-500'
-            }`}
-          >
-            Campaigns
-          </button>
-          <button
-            type="button"
-            onClick={selectEnrollment}
-            className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-              showEnrollment ? 'text-zinc-200' : 'text-zinc-500'
-            }`}
-          >
-            Enrollment
-          </button>
-          <OverviewChips hosts={hosts} />
-        </div>
-        <div className="text-xs text-zinc-600">
-          {listError ? (
-            <span className="text-red-400">sync error: {listError}</span>
-          ) : lastSync ? (
-            <span>
-              synced <RelativeTime iso={lastSync.toISOString()} />
-            </span>
-          ) : (
-            <span>loading…</span>
-          )}
-        </div>
-      </header>
+    <SessionProvider>
+      <div className="flex h-full flex-col bg-zinc-950">
+        <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
+          <div className="flex items-baseline gap-3">
+            <button
+              type="button"
+              onClick={() => select(null)}
+              className="text-sm font-semibold uppercase tracking-widest text-zinc-300 hover:text-zinc-100"
+              title="Back to the fleet overview"
+            >
+              Cadence
+            </button>
+            <button
+              type="button"
+              onClick={selectPackages}
+              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+                showPackages ? 'text-zinc-200' : 'text-zinc-500'
+              }`}
+            >
+              Packages
+            </button>
+            <button
+              type="button"
+              onClick={selectWebhooks}
+              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+                showWebhooks ? 'text-zinc-200' : 'text-zinc-500'
+              }`}
+            >
+              Webhooks
+            </button>
+            <button
+              type="button"
+              onClick={selectExclusions}
+              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+                showExclusions ? 'text-zinc-200' : 'text-zinc-500'
+              }`}
+            >
+              Exclusions
+            </button>
+            <button
+              type="button"
+              onClick={selectCampaigns}
+              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+                showCampaigns ? 'text-zinc-200' : 'text-zinc-500'
+              }`}
+            >
+              Campaigns
+            </button>
+            <button
+              type="button"
+              onClick={selectEnrollment}
+              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
+                showEnrollment ? 'text-zinc-200' : 'text-zinc-500'
+              }`}
+            >
+              Enrollment
+            </button>
+            <OverviewChips hosts={hosts} />
+          </div>
+          <div className="flex items-center gap-3 text-xs text-zinc-600">
+            <SessionButton />
+            {listError ? (
+              <span className="text-red-400">sync error: {listError}</span>
+            ) : lastSync ? (
+              <span>
+                synced <RelativeTime iso={lastSync.toISOString()} />
+              </span>
+            ) : (
+              <span>loading…</span>
+            )}
+          </div>
+        </header>
 
-      <SilentBanner hosts={hosts} onSelect={select} />
+        <SilentBanner hosts={hosts} onSelect={select} />
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-r border-zinc-800">
-          <HostFilters
-            value={filters}
-            onChange={setFilters}
-            shown={visibleHosts.length}
-            total={hosts.length}
-          />
-          {checked.size > 0 && (
-            <BulkActionBar
-              hostIds={[...checked]}
-              onClear={clearChecked}
-              onDone={() => {
-                clearChecked()
-                void refreshList()
-              }}
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-r border-zinc-800">
+            <HostFilters
+              value={filters}
+              onChange={setFilters}
+              shown={visibleHosts.length}
+              total={hosts.length}
             />
-          )}
-          <nav aria-label="Hosts" className="min-h-0 flex-1 overflow-auto">
-            <HostList
-              hosts={visibleHosts}
-              selectedId={selectedId}
-              onSelect={select}
-              emptyLabel={
-                hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'
-              }
-              checkedIds={checked}
-              onToggleCheck={toggleChecked}
-            />
-          </nav>
-        </aside>
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {showEnrollment ? (
-            <EnrollmentView hosts={hosts} />
-          ) : showCampaigns ? (
-            <CampaignsView />
-          ) : showWebhooks ? (
-            <WebhooksView />
-          ) : showExclusions ? (
-            <ExclusionsView />
-          ) : showPackages ? (
-            <PackagesView onSelectHost={select} />
-          ) : detail ? (
-            <>
-              {detailError && (
-                <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-6 py-1.5 text-xs text-amber-400">
-                  couldn't refresh this host: {detailError}
-                </p>
-              )}
-              <div className="min-h-0 flex-1">
-                <ErrorBoundary key={detail.id}>
-                  <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
-                </ErrorBoundary>
-              </div>
-            </>
-          ) : selectedId ? (
-            <p className="p-6 text-sm text-red-400">
-              {detailError ? `failed to load host: ${detailError}` : 'loading…'}
-            </p>
-          ) : (
-            <FleetOverview hosts={hosts} onSelect={select} />
-          )}
-        </main>
+            {checked.size > 0 && (
+              <BulkActionBar
+                hostIds={[...checked]}
+                onClear={clearChecked}
+                onDone={() => {
+                  clearChecked()
+                  void refreshList()
+                }}
+              />
+            )}
+            <nav aria-label="Hosts" className="min-h-0 flex-1 overflow-auto">
+              <HostList
+                hosts={visibleHosts}
+                selectedId={selectedId}
+                onSelect={select}
+                emptyLabel={
+                  hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'
+                }
+                checkedIds={checked}
+                onToggleCheck={toggleChecked}
+              />
+            </nav>
+          </aside>
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {showEnrollment ? (
+              <EnrollmentView hosts={hosts} />
+            ) : showCampaigns ? (
+              <CampaignsView />
+            ) : showWebhooks ? (
+              <WebhooksView />
+            ) : showExclusions ? (
+              <ExclusionsView />
+            ) : showPackages ? (
+              <PackagesView onSelectHost={select} />
+            ) : detail ? (
+              <>
+                {detailError && (
+                  <p className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-6 py-1.5 text-xs text-amber-400">
+                    couldn't refresh this host: {detailError}
+                  </p>
+                )}
+                <div className="min-h-0 flex-1">
+                  <ErrorBoundary key={detail.id}>
+                    <HostDetail host={detail} onChanged={onHostChanged} onDeleted={onHostDeleted} />
+                  </ErrorBoundary>
+                </div>
+              </>
+            ) : selectedId ? (
+              <p className="p-6 text-sm text-red-400">
+                {detailError ? `failed to load host: ${detailError}` : 'loading…'}
+              </p>
+            ) : (
+              <FleetOverview hosts={hosts} onSelect={select} />
+            )}
+          </main>
+        </div>
       </div>
-    </div>
+    </SessionProvider>
   )
 }

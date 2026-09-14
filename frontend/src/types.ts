@@ -57,6 +57,12 @@ export interface ReportSummary {
   reboot_required: boolean
 }
 
+export interface SessionInfo {
+  authenticated: boolean
+  actor?: string | null
+  sub?: string | null
+}
+
 export interface AdvisoryRef {
   id: string
   url: string
