@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
 import time
+import urllib.error
+import urllib.request
 
 import pytest
 from cryptography.fernet import Fernet
@@ -24,6 +27,8 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from app.auth.oidc import (
     OidcError,
     actor_from_claims,
+    exchange_code,
+    fetch_json,
     open_session,
     parse_compact,
     seal_session,
@@ -322,6 +327,49 @@ def test_parse_compact_rejects_non_jws():
         parse_compact("just-a-string")
     with pytest.raises(OidcError):
         _check("e30.e30.e30", {"keys": []})
+
+
+def test_fetch_json_wraps_transport_failures(monkeypatch):
+    """DNS/refused/timeout/HTTP-error from the provider surface as
+    OidcError (the routes turn it into 502/401), never raw."""
+    failures = [
+        urllib.error.URLError("dns down"),
+        urllib.error.HTTPError("https://p/", 404, "Not Found", {}, None),
+        socket.timeout("timed out"),
+        ConnectionRefusedError("refused"),
+    ]
+    for failure in failures:
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            lambda *a, _f=failure, **k: (_ for _ in ()).throw(_f),
+        )
+        with pytest.raises(OidcError):
+            fetch_json("https://provider.example.com/.well-known/openid-configuration")
+
+
+def test_exchange_code_wraps_read_timeout(monkeypatch):
+    """A stall mid-body is a provider failure too, not a 500."""
+
+    class SlowResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            raise socket.timeout("timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: SlowResp())
+    with pytest.raises(OidcError):
+        exchange_code(
+            "https://provider.example.com/token/",
+            code="c",
+            redirect_uri="https://cb",
+            client_id="id",
+            client_secret="s",
+        )
 
 
 def test_now_defaults_to_wall_clock(jwks, rsa_key):

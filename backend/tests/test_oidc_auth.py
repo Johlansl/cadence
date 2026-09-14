@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.error
+import urllib.request
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -166,6 +168,22 @@ def test_login_rejects_open_redirect(client, oidc_on, stub_provider):
     ctx = stub_provider
     _, data, _ = _login_state(client, ctx, next="https://evil.example.com/")
     assert data["next"] == "/"
+
+
+def test_login_unreachable_provider_is_502(client, oidc_on, monkeypatch):
+    """A dead provider (DNS down under discovery) is a 502 with the
+    documented detail, never a 500: fetch_json wraps the transport error
+    as OidcError and the route maps it. The discovery cache is cleared so
+    the failure happens below fetch_json for real."""
+    oidc_mod._discovery_cache.clear()
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(urllib.error.URLError("dns down")),
+    )
+    r = client.get("/api/v1/auth/oidc/login?next=/hosts", follow_redirects=False)
+    assert r.status_code == 502
+    assert r.json()["detail"] == "identity provider unreachable"
 
 
 def test_callback_sets_session_and_redirects(client, oidc_on, stub_provider):

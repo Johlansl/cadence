@@ -72,13 +72,27 @@ def _b64url_decode(segment: str) -> bytes:
 def fetch_json(url: str, *, timeout: float = 10.0, max_bytes: int = 64 * 1024) -> Any:
     """GET a JSON document, refusing bodies larger than `max_bytes` (metadata
     and JWKS are a few KB; the cap keeps a compromised endpoint from feeding
-    unbounded input to the parser)."""
+    unbounded input to the parser). Transport failures (DNS, refused,
+    timeouts, TLS, HTTP error statuses) surface as `OidcError`, never raw:
+    the routes map that to 502/401 without a 500 or a traceback."""
     req = urllib.request.Request(url, headers={"User-Agent": "cadence-backend"})
     chunks: list[bytes] = []
     total = 0
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    try:
+        resp_cm = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        raise OidcError(f"{url}: HTTP {exc.code}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        # OSError covers socket.gaierror, refused connections, timeouts and
+        # ssl.SSLError; HTTPError subclasses URLError and is handled above
+        # for a status-specific message.
+        raise OidcError(f"{url}: unreachable") from exc
+    with resp_cm as resp:
         while True:
-            chunk = resp.read(65536)
+            try:
+                chunk = resp.read(65536)
+            except (urllib.error.URLError, OSError) as exc:
+                raise OidcError(f"{url}: body unreadable") from exc
             if not chunk:
                 break
             total += len(chunk)
@@ -385,7 +399,9 @@ def exchange_code(
             raw = resp.read(max_bytes + 1)
     except urllib.error.HTTPError as exc:
         raise OidcError(f"token endpoint HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, OSError) as exc:
+        # OSError covers refused connections, stalls mid-body, timeouts and
+        # ssl.SSLError; HTTPError subclasses URLError and keeps its branch.
         raise OidcError(f"token endpoint unreachable: {exc}") from exc
     if len(raw) > max_bytes:
         raise OidcError("token response too large")
