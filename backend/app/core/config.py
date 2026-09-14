@@ -267,6 +267,29 @@ class Settings:
         )
         self.cve_nvd_api_key: str = os.environ.get("CADENCE_NVD_API_KEY", "")
 
+        # Admin SSO via OIDC (roadmap item 10). Fully inert unless enabled
+        # AND fully configured: with CADENCE_OIDC_ENABLED=false (the
+        # default) the auth endpoints 404 and every admin write keeps
+        # requiring the shared X-Admin-Key exactly as before.
+        self.oidc_enabled: bool = _bool_env("CADENCE_OIDC_ENABLED", False)
+        self.oidc_issuer: str = os.environ.get("CADENCE_OIDC_ISSUER", "").rstrip("/")
+        self.oidc_client_id: str = os.environ.get("CADENCE_OIDC_CLIENT_ID", "")
+        # Secret, same handling as the other secrets (0600 .env, never
+        # logged): used only for the back-channel code exchange.
+        self.oidc_client_secret: str = os.environ.get("CADENCE_OIDC_CLIENT_SECRET", "")
+        self.oidc_scopes: str = os.environ.get(
+            "CADENCE_OIDC_SCOPES", "openid email profile"
+        )
+        # Fixed session lifetime (default 8 h, an operator day); re-login
+        # after. No sliding renewal in v1.
+        self.oidc_session_ttl_seconds: int = _positive_int(
+            "CADENCE_OIDC_SESSION_TTL_SECONDS", 28800
+        )
+        # Leeway for exp/iat checks against provider clock drift.
+        self.oidc_clock_skew_seconds: int = _positive_int(
+            "CADENCE_OIDC_CLOCK_SKEW_SECONDS", 120
+        )
+
         # The shared `packages` dimension is get-or-created on every report and
         # never shrinks. A weekly scheduler sweep deletes rows no host_packages
         # references (every read path inner-joins from host_packages, so an
