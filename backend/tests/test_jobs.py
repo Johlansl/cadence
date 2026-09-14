@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from app.models.models import Host, Job
-from tests.conftest import ADMIN_HEADERS, create_host, signed
+from app.models.models import Host, Job, WebhookDelivery
+from tests.conftest import ADMIN_HEADERS, create_host, signed, webhook_row
 
 
 def _make_job(client, host_id: str) -> str:
@@ -638,3 +638,225 @@ def test_list_host_jobs_pagination(client, db_session):
     ).json()
     assert len(more) == 3
     assert all(j["created_at"] < page[-1]["created_at"] for j in more)
+
+
+def _race_job_result(first: dict, second: dict, *, job_type: str = "apt_upgrade"):
+    """Race two truly independent transactions submitting one running job.
+
+    Each side runs on its own connection with its own commit, overlapping on
+    a pre-read barrier so both observe ``running``. Rows are committed on
+    their own connections (outside any rolled-back test transaction) because
+    the race only exists across real concurrent transactions; they are
+    deleted at teardown. Returns (winner_tag, stored_job, deliveries, host).
+    """
+    import threading
+
+    from fastapi import HTTPException
+    from sqlalchemy.orm import sessionmaker
+
+    from app.api.routes.jobs import submit_job_result
+    from app.db.base import engine
+    from app.models.models import Host, Job, Webhook, WebhookDelivery
+    from app.schemas.schemas import JobResultIn
+    from tests.conftest import webhook_row
+
+    maker = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    setup = maker()
+    try:
+        host = Host(
+            hostname=f"vm-race-{uuid.uuid4().hex[:8]}",
+            os_family="debian",
+            package_manager="apt",
+            reboot_required=True,
+        )
+        setup.add(host)
+        setup.flush()
+        host_id = host.id
+        hook_id = webhook_row(setup, events=("job.succeeded", "job.failed")).id
+        job = Job(
+            host_id=host_id,
+            job_type=job_type,
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        setup.add(job)
+        setup.flush()
+        job_id = job.id
+        setup.commit()
+    finally:
+        setup.close()
+
+    barrier = threading.Barrier(2)
+    outcomes: dict[str, tuple] = {}
+
+    def _submit(tag: str, payload: dict) -> None:
+        db = maker()
+        try:
+            own_host = db.get(Host, host_id)
+            db.get(Job, job_id)  # pre-read: both sides overlap on "running"
+            barrier.wait(timeout=30)
+            submit_job_result(job_id, JobResultIn(**payload), own_host, db)
+            outcomes[tag] = ("ok", None)
+        except HTTPException as exc:
+            db.rollback()
+            outcomes[tag] = ("http", exc.status_code)
+        finally:
+            db.close()
+
+    try:
+        threads = [
+            threading.Thread(target=_submit, args=("a", first), daemon=True),
+            threading.Thread(target=_submit, args=("b", second), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+        assert all(not thread.is_alive() for thread in threads), outcomes
+        assert sorted(kind for kind, _ in outcomes.values()) == ["http", "ok"], outcomes
+        (winner_tag,) = [tag for tag, (kind, _) in outcomes.items() if kind == "ok"]
+        (loser_code,) = [code for kind, code in outcomes.values() if kind == "http"]
+        assert loser_code == 409, outcomes
+
+        check = maker()
+        try:
+            stored = check.get(Job, job_id)
+            host = check.get(Host, host_id)
+            deliveries = [
+                d
+                for d in check.query(WebhookDelivery).all()
+                if (d.payload.get("data") or {}).get("job_id") == str(job_id)
+            ]
+            return winner_tag, stored, deliveries, host
+        finally:
+            check.close()
+    finally:
+        cleanup = maker()
+        try:
+            cleanup.query(WebhookDelivery).filter(
+                WebhookDelivery.webhook_id == hook_id
+            ).delete()
+            cleanup.query(Job).filter(Job.host_id == host_id).delete()
+            cleanup.query(Webhook).filter(Webhook.id == hook_id).delete()
+            cleanup.query(Host).filter(Host.id == host_id).delete()
+            cleanup.commit()
+        finally:
+            cleanup.close()
+
+
+def test_concurrent_result_one_winner_succeeded_vs_succeeded(db_session):
+    winner, stored, deliveries, _ = _race_job_result(
+        {"status": "succeeded", "exit_code": 0, "log": "race-a"},
+        {"status": "succeeded", "exit_code": 0, "log": "race-b"},
+    )
+    expected_log = f"race-{winner}"
+    assert stored.status == "succeeded"
+    assert stored.log == expected_log  # no blend of the two submissions
+    assert len(deliveries) == 1  # the loser stages no outbox row
+    assert deliveries[0].event_type == "job.succeeded"
+    assert deliveries[0].payload["data"]["status"] == "succeeded"
+
+
+def test_concurrent_result_one_winner_succeeded_vs_failed(db_session):
+    # Every final field must come from one winner: no blend across submissions.
+    winner, stored, deliveries, host = _race_job_result(
+        {"status": "succeeded", "exit_code": 0, "log": "race-a"},
+        {
+            "status": "failed",
+            "exit_code": 1,
+            "log": "race-b",
+            "failure_category": "dpkg_error",
+            "failure_summary": "E: dpkg broke",
+        },
+    )
+    expected = {
+        "a": {
+            "status": "succeeded",
+            "exit_code": 0,
+            "failure_category": None,
+            "failure_summary": None,
+        },
+        "b": {
+            "status": "failed",
+            "exit_code": 1,
+            "failure_category": "dpkg_error",
+            "failure_summary": "E: dpkg broke",
+        },
+    }[winner]
+    assert stored.status == expected["status"]
+    assert stored.log == f"race-{winner}"
+    assert stored.result["exit_code"] == expected["exit_code"]
+    assert stored.failure_category == expected["failure_category"]
+    assert stored.failure_summary == expected["failure_summary"]
+    assert len(deliveries) == 1
+    assert deliveries[0].event_type == f"job.{expected['status']}"
+    data = deliveries[0].payload["data"]
+    assert data["status"] == expected["status"]
+    assert data["job_id"] == str(stored.id)
+    assert data.get("failure_category") == expected["failure_category"]
+    assert data.get("failure_summary") == expected["failure_summary"]
+    # Neither side sends health: the host projection stays untouched,
+    # proving the loser wrote nothing anywhere.
+    assert host.health_status == "unknown"
+    assert host.health_checked_at is None
+
+
+def test_concurrent_result_one_winner_failed_vs_failed(db_session):
+    winner, stored, deliveries, _ = _race_job_result(
+        {"status": "failed", "exit_code": 1, "log": "race-a"},
+        {"status": "failed", "exit_code": 2, "log": "race-b"},
+    )
+    assert stored.status == "failed"
+    assert stored.log == f"race-{winner}"
+    assert stored.result["exit_code"] == {"a": 1, "b": 2}[winner]
+    assert len(deliveries) == 1
+    assert deliveries[0].event_type == "job.failed"
+
+
+def test_concurrent_result_host_projection_from_winner_only(db_session):
+    # A reboot job's success clears reboot_required: the host must reflect
+    # the winner alone, never a blend with the loser.
+    winner, stored, deliveries, host = _race_job_result(
+        {"status": "succeeded", "exit_code": 0, "log": "race-a"},
+        {"status": "failed", "exit_code": 1, "log": "race-b"},
+        job_type="reboot",
+    )
+    assert stored.status == {"a": "succeeded", "b": "failed"}[winner]
+    assert host.reboot_required == (winner == "b")
+    assert len(deliveries) == 1
+
+
+def test_second_submit_has_no_side_effects(client, db_session):
+    host_id, token = create_host(client)
+    job_id = _make_job(client, host_id)
+    client.post("/api/v1/agent/next-job", auth=signed(token))  # -> running
+    webhook_row(db_session, events=("job.succeeded", "job.failed"))
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "succeeded", "exit_code": 0, "log": "first"},
+    )
+    assert r.status_code == 200
+    db_session.expire_all()
+    assert db_session.query(WebhookDelivery).count() == 1
+
+    r = client.post(
+        f"/api/v1/jobs/{job_id}/result",
+        auth=signed(token),
+        json={"status": "failed", "exit_code": 1, "log": "late"},
+    )
+    assert r.status_code == 409
+    db_session.expire_all()
+    stored = db_session.get(Job, job_id)
+    assert stored.status == "succeeded"
+    assert stored.log == "first"  # the late submit changed nothing
+    assert db_session.query(WebhookDelivery).count() == 1  # no second event
+
+    # Unknown job stays 404.
+    r = client.post(
+        f"/api/v1/jobs/{uuid.uuid4()}/result",
+        auth=signed(token),
+        json={"status": "succeeded", "exit_code": 0},
+    )
+    assert r.status_code == 404

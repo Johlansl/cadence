@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status as http_status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_host, get_db
@@ -143,6 +143,9 @@ def submit_job_result(
             http_status.HTTP_409_CONFLICT,
             f"job is not running (status={job.status})",
         )
+    # From here on nothing is written until the conditional UPDATE below
+    # wins: existence, ownership and every payload rule are read-only checks,
+    # so a loser never stages a partial write.
     if job.job_type not in ("apt_upgrade", "health_check") and any(
         value is not None
         for value in (payload.pre_checks, payload.post_checks, payload.health_status)
@@ -175,8 +178,7 @@ def submit_job_result(
                 "a health_check job's result must carry post_checks and health_status",
             )
 
-    job.status = payload.status
-    job.log = payload.log
+    completed_at = datetime.now(timezone.utc)
     result: dict = {
         "exit_code": payload.exit_code,
         "reboot_required": payload.reboot_required,
@@ -207,18 +209,50 @@ def submit_job_result(
         )
     if payload.health_status is not None:
         result["health_status"] = payload.health_status
-    job.result = result
     # Failure classification (roadmap item 2). Only meaningful for a failed job;
     # ignore whatever the agent sent on success. The agent already caps the
     # summary, clip defensively in case it does not.
     if payload.status == "failed":
-        job.failure_category = payload.failure_category
+        failure_category = payload.failure_category
         summary = payload.failure_summary
-        job.failure_summary = summary[:500] if summary else None
+        failure_summary = summary[:500] if summary else None
     else:
-        job.failure_category = None
-        job.failure_summary = None
-    job.completed_at = datetime.now(timezone.utc)
+        failure_category = None
+        failure_summary = None
+
+    # Atomic winner election: exactly one running -> terminal transition can
+    # match. A concurrent (or late) submission finds zero rows and gets 409
+    # without writing anything. No re-read on the losing path: existence and
+    # ownership were already verified above on this transaction, so zero rows
+    # can only mean the job left "running" under us.
+    won = (
+        db.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.host_id == host.id,
+                Job.status == "running",
+            )
+            .values(
+                status=payload.status,
+                log=payload.log,
+                result=result,
+                failure_category=failure_category,
+                failure_summary=failure_summary,
+                completed_at=completed_at,
+            )
+            .returning(Job.id)
+        ).scalar_one_or_none()
+        is not None
+    )
+    if not won:
+        raise HTTPException(
+            http_status.HTTP_409_CONFLICT, "job is not running"
+        )
+    # Bypass the identity map: the job object loaded above still shows the
+    # pre-race row. Refresh it so the response, the host projection and the
+    # webhook below all read the stored (winning) values.
+    db.refresh(job)
 
     # Project only the latest agent-supplied health result onto the host. Old
     # agents omit it, in which case the previous projection remains valid.
