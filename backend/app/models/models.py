@@ -18,6 +18,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     SmallInteger,
@@ -272,6 +273,16 @@ class Report(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
+
+    # One active job per host, enforced by PostgreSQL (migration 0023). Only
+    # pending/running rows are covered; terminal rows stay unlimited.
+    __table_args__ = (
+        Index(
+            "ux_jobs_one_active_per_host",
+            "host_id",
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
+    )
 
     # status is free text on purpose (extensibility); the values used in V1 are
     # pending -> running -> succeeded | failed.

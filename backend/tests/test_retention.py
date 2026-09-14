@@ -73,11 +73,14 @@ def test_sweep_deletes_old_reports_only(client, db_session):
 
 def test_sweep_keeps_pending_and_recent_jobs(client, db_session):
     host_id, _ = create_host(client)
+    # One active job per host (migration 0023): the running job lives on a
+    # second host.
+    running_id, _ = create_host(client, hostname="vm-running")
     _job(db_session, host_id, status="succeeded", completed_age_days=200)
     _job(db_session, host_id, status="failed", completed_age_days=200)
     _job(db_session, host_id, status="succeeded", completed_age_days=5)
     _job(db_session, host_id, status="pending", created_age_days=300)
-    _job(db_session, host_id, status="running", created_age_days=300)
+    _job(db_session, running_id, status="running", created_age_days=300)
     db_session.flush()
 
     _, jobs, _, _ = retention_sweep(
@@ -88,7 +91,7 @@ def test_sweep_keeps_pending_and_recent_jobs(client, db_session):
     remaining = {
         j.status
         for j in db_session.execute(
-            select(Job).where(Job.host_id == host_id)
+            select(Job).where(Job.host_id.in_([host_id, running_id]))
         ).scalars()
     }
     assert remaining == {"succeeded", "pending", "running"}

@@ -139,11 +139,12 @@ _INSERT_CH = (
 
 
 def test_jobs_job_type_check_accepts_the_three_known_types(db_session):
-    host_id = _host(db_session)
+    # One host per row: a bare INSERT defaults to pending, and migration 0023
+    # allows only one active job per host.
     for jt in ("apt_upgrade", "reboot", "apt_dry_run"):
         db_session.execute(
             text("INSERT INTO jobs (host_id, job_type) VALUES (:h, :jt)"),
-            {"h": host_id, "jt": jt},
+            {"h": _host(db_session), "jt": jt},
         )
     db_session.flush()
 

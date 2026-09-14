@@ -62,7 +62,8 @@ def test_reports_keyset_returns_every_row_once(client, db_session):
 def test_jobs_keyset_returns_every_row_once(client, db_session):
     hid, _ = create_host(client)
     for ts in STAMPS:
-        db_session.add(Job(host_id=uuid.UUID(hid), created_at=ts))
+        # Terminal rows: migration 0023 allows one active job per host only.
+        db_session.add(Job(host_id=uuid.UUID(hid), created_at=ts, status="succeeded"))
     db_session.commit()
 
     paged = _page_through(client, f"/api/v1/hosts/{hid}/jobs")
