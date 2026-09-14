@@ -101,10 +101,24 @@ def _cached(cache: dict, key: str, ttl: float, loader) -> Any:
     return value
 
 
+def _normalize_issuer(value: Any) -> Any:
+    """Issuer comparison form: a single trailing slash is insignificant.
+
+    Applied symmetrically to both sides of every issuer comparison (never
+    to one side alone), so `"https://host/app"` and `"https://host/app/"`
+    name the same provider whichever side carries the slash. Nothing else
+    is folded: distinct paths or hosts still mismatch. Non-strings pass
+    through unchanged so a missing/non-string `iss` still fails closed.
+    """
+    if isinstance(value, str) and value.endswith("/"):
+        return value[:-1]
+    return value
+
+
 def discovery(issuer: str) -> dict[str, Any]:
     """Fetch and cache the provider metadata for `issuer` (trailing slash
     tolerated). Requires the three endpoints the code flow needs."""
-    normalized = issuer.rstrip("/")
+    normalized = _normalize_issuer(issuer)
     if not normalized.startswith("https://"):
         raise OidcError("issuer must be an https URL")
 
@@ -231,14 +245,14 @@ def validate_id_token(
 ) -> dict[str, Any]:
     """Validate an ID token end to end and return its claims. Every failure
     raises `OidcError`: bad structure, unexpected `alg`, missing/unknown
-    `kid`, bad signature, `iss` mismatch (exact), `aud` not containing this
-    client (string or array form), expired or premature token, `nonce`
-    mismatch."""
+    `kid`, bad signature, `iss` mismatch (one trailing slash tolerated on
+    either side, nothing else), `aud` not containing this client (string
+    or array form), expired or premature token, `nonce` mismatch."""
     header, claims, signing_input, signature = parse_compact(token)
     alg = header.get("alg")
     jwk = select_jwk(jwks, header.get("kid"), alg if isinstance(alg, str) else "")
     _verify_signature(signing_input, signature, jwk, alg)
-    if claims.get("iss") != issuer:
+    if _normalize_issuer(claims.get("iss")) != _normalize_issuer(issuer):
         raise OidcError("iss mismatch")
     aud = claims.get("aud")
     audiences = [aud] if isinstance(aud, str) else aud if isinstance(aud, list) else []

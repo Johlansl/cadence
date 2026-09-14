@@ -272,7 +272,10 @@ class Settings:
         # default) the auth endpoints 404 and every admin write keeps
         # requiring the shared X-Admin-Key exactly as before.
         self.oidc_enabled: bool = _bool_env("CADENCE_OIDC_ENABLED", False)
-        self.oidc_issuer: str = os.environ.get("CADENCE_OIDC_ISSUER", "").rstrip("/")
+        # Kept verbatim (including any trailing slash): every comparison
+        # normalizes both sides symmetrically (app.auth.oidc), so copying
+        # the `issuer` from the discovery document as-is always works.
+        self.oidc_issuer: str = os.environ.get("CADENCE_OIDC_ISSUER", "")
         self.oidc_client_id: str = os.environ.get("CADENCE_OIDC_CLIENT_ID", "")
         # Secret, same handling as the other secrets (0600 .env, never
         # logged): used only for the back-channel code exchange.

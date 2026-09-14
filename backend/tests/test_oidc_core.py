@@ -4,8 +4,9 @@ Tokens are minted in-test with self-signed RSA/EC keys, so no test touches
 the network. The adversarial vectors mirror the approved validation
 checklist: bad structure, unexpected alg (including case variants of none),
 alg confusion across key types, missing/unknown/misbound kid, tampered
-payload, iss/aud mismatches (aud as string and as array), expiry,
-premature iat, and nonce mismatch.
+payload, iss/aud mismatches (aud as string and as array, one trailing
+slash in iss tolerated symmetrically), expiry, premature iat, and nonce
+mismatch.
 """
 
 from __future__ import annotations
@@ -205,6 +206,30 @@ def test_issuer_mismatch_rejected(jwks, rsa_key):
     token = _mint(rsa_key, RSA_KID, "RS256", _claims(iss="https://evil.example.com/"))
     with pytest.raises(OidcError):
         _check(token, jwks)
+
+
+def test_issuer_trailing_slash_tolerated_symmetrically(jwks, rsa_key):
+    """One trailing slash is insignificant, whichever side carries it (real
+    providers vary); anything beyond that still mismatches."""
+    assert ISSUER.endswith("/")
+    noslash = ISSUER[:-1]
+    slashed = _mint(rsa_key, RSA_KID, "RS256", _claims(iss=ISSUER))
+    assert (
+        validate_id_token(
+            slashed, jwks=jwks, issuer=noslash, client_id=CLIENT_ID, nonce=NONCE, now=NOW
+        )["sub"]
+        == "user-uuid-1"
+    )
+    bare = _mint(rsa_key, RSA_KID, "RS256", _claims(iss=noslash))
+    assert _check(bare, jwks)["sub"] == "user-uuid-1"
+    for bad in (
+        "https://auth.example.com/application/o/other/",
+        "https://auth.example.com/application/o/other",
+        "https://evil.example.com/application/o/cadence/",
+        None,
+    ):
+        with pytest.raises(OidcError):
+            _check(_mint(rsa_key, RSA_KID, "RS256", _claims(iss=bad)), jwks)
 
 
 def test_audience_string_and_array(jwks, rsa_key):
