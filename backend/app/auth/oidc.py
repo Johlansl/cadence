@@ -13,6 +13,7 @@ import binascii
 import json
 import logging
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -26,6 +27,11 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 log = logging.getLogger("cadence.oidc")
 
 SESSION_PURPOSE = "cadence-session-v1"
+STATE_PURPOSE = "cadence-oidc-state-v1"
+
+# Short life for the login-flow state: long enough to type a password at
+# the provider, short enough to bound replay.
+STATE_TTL_SECONDS = 600
 
 # Header `alg` values this client verifies, nothing else. Compared byte for
 # byte: "none", "None", "NONE" and every other spelling are rejected, and the
@@ -43,6 +49,12 @@ _jwks_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 class OidcError(ValueError):
     """Anything wrong with an OIDC response, token, or session: callers turn
     this into a 401/400 without leaking which check failed to the client."""
+
+
+class UnknownKidError(OidcError):
+    """The token's `kid` matches no cached JWKS entry: exactly one refresh
+    is warranted before rejecting (key rotation), unlike every other
+    failure, which is final."""
 
 
 def _f(**fields: object) -> dict:
@@ -169,7 +181,7 @@ def select_jwk(jwks: dict[str, Any], kid: str | None, alg: str) -> dict[str, Any
     for key in jwks.get("keys", []):
         if isinstance(key, dict) and key.get("kid") == kid:
             return key
-    raise OidcError("unknown kid")
+    raise UnknownKidError("unknown kid")
 
 
 def _verify_signature(signing_input: bytes, signature: bytes, jwk: dict, alg: str) -> None:
@@ -258,22 +270,48 @@ def actor_from_claims(claims: dict[str, Any]) -> str:
     return str(claims.get("sub", "unknown"))
 
 
-def seal_session(
-    fernet_key: str, *, sub: str, email: str | None, name: str | None, ttl_seconds: int
-) -> str:
-    """Seal a session payload with Fernet (URL-safe token for the cookie).
-    The purpose marker keeps session tokens disjoint from agent tokens even
-    though they share the key; expiry lives inside the payload."""
+def seal_token(fernet_key: str, purpose: str, data: dict[str, Any], ttl_seconds: int) -> str:
+    """Seal an arbitrary payload with Fernet (URL-safe token for a cookie).
+    The purpose marker keeps token kinds disjoint even though they share the
+    key; expiry lives inside the payload."""
     now = int(time.time())
-    payload = {
-        "v": SESSION_PURPOSE,
-        "sub": sub,
-        "email": email,
-        "name": name,
-        "iat": now,
-        "exp": now + ttl_seconds,
-    }
+    payload = {"v": purpose, "iat": now, "exp": now + ttl_seconds, **data}
     return Fernet(fernet_key.encode()).encrypt(json.dumps(payload).encode()).decode()
+
+
+def open_token(fernet_key: str, purpose: str, token: str) -> dict[str, Any] | None:
+    """Open a sealed cookie token: None when tampered, expired, or of another
+    purpose (never raises)."""
+    if _canonical_raw(token) is None:
+        return None
+    try:
+        payload = json.loads(Fernet(fernet_key.encode()).decrypt(token.encode()))
+    except (InvalidToken, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("v") != purpose:
+        return None
+    exp = payload.get("exp")
+    if not isinstance(exp, int) or int(time.time()) >= exp:
+        return None
+    return payload
+
+
+def seal_session(
+    fernet_key: str,
+    *,
+    sub: str,
+    email: str | None,
+    name: str | None,
+    ttl_seconds: int,
+    actor: str | None = None,
+) -> str:
+    """Seal a session payload (URL-safe token for the cookie). The resolved
+    audit actor is sealed alongside so request handling never re-derives it
+    (and cannot disagree with what login saw)."""
+    data: dict[str, Any] = {"sub": sub, "email": email, "name": name}
+    if actor is not None:
+        data["actor"] = actor
+    return seal_token(fernet_key, SESSION_PURPOSE, data, ttl_seconds)
 
 
 def _canonical_raw(token: str) -> bytes | None:
@@ -292,19 +330,81 @@ def _canonical_raw(token: str) -> bytes | None:
 
 
 def open_session(fernet_key: str, token: str) -> dict[str, Any] | None:
-    """Open a session cookie: None when tampered, expired, or not a session
-    token (never raises)."""
-    if _canonical_raw(token) is None:
-        return None
-    try:
-        payload = json.loads(Fernet(fernet_key.encode()).decrypt(token.encode()))
-    except (InvalidToken, ValueError, UnicodeDecodeError):
-        return None
-    if not isinstance(payload, dict) or payload.get("v") != SESSION_PURPOSE:
-        return None
-    exp = payload.get("exp")
-    if not isinstance(exp, int) or int(time.time()) >= exp:
+    """Open a session cookie: None when tampered, expired, not a session
+    token, or missing its subject (never raises)."""
+    payload = open_token(fernet_key, SESSION_PURPOSE, token)
+    if payload is None:
         return None
     if not isinstance(payload.get("sub"), str) or not payload["sub"]:
         return None
     return payload
+
+
+def exchange_code(
+    token_endpoint: str,
+    *,
+    code: str,
+    redirect_uri: str,
+    client_id: str,
+    client_secret: str,
+    timeout: float = 10.0,
+    max_bytes: int = 64 * 1024,
+) -> dict[str, Any]:
+    """Exchange an authorization code for tokens (confidential client, HTTP
+    Basic with the client credentials, form-encoded as the spec requires).
+    Returns the decoded token response; any provider error raises."""
+    body = urllib.parse.urlencode(
+        {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri}
+    ).encode()
+    credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    req = urllib.request.Request(
+        token_endpoint,
+        data=body,
+        headers={
+            "User-Agent": "cadence-backend",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": f"Basic {credentials}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        raise OidcError(f"token endpoint HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise OidcError(f"token endpoint unreachable: {exc}") from exc
+    if len(raw) > max_bytes:
+        raise OidcError("token response too large")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise OidcError("token response is not JSON") from exc
+    if not isinstance(data, dict):
+        raise OidcError("token response is not an object")
+    if "error" in data:
+        raise OidcError(f"token endpoint error: {data.get('error')}")
+    if not isinstance(data.get("id_token"), str):
+        raise OidcError("token response has no id_token")
+    return data
+
+
+def build_authorize_url(
+    authorization_endpoint: str,
+    *,
+    client_id: str,
+    redirect_uri: str,
+    scope: str,
+    state: str,
+    nonce: str,
+) -> str:
+    """Authorization redirect target for the login entry point."""
+    return authorization_endpoint + "?" + urllib.parse.urlencode(
+        {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "nonce": nonce,
+        }
+    )

@@ -12,6 +12,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.oidc import open_session
 from app.core.config import settings
 from app.core.crypto import decrypt_token_secret
 from app.core.ratelimit import note_rejected, ratelimiter
@@ -60,13 +61,55 @@ def _enforce_rate_limit(
         )
 
 
+def _oidc_sessions_honored() -> bool:
+    """Sessions authenticate only while OIDC is enabled and fully configured:
+    flipping the kill switch must instantly stop honoring cookies, including
+    ones sealed before it was turned off."""
+    return bool(
+        settings.oidc_enabled
+        and settings.oidc_issuer
+        and settings.oidc_client_id
+        and settings.oidc_client_secret
+        and settings.oidc_redirect_uri
+    )
+
+
+def session_actor(request: Request) -> str | None:
+    """Verified OIDC identity for this request from its session cookie (None
+    when absent, invalid, actorless, or OIDC not currently configured)."""
+    if not _oidc_sessions_honored():
+        return None
+    session = open_session(
+        settings.token_encryption_key, request.cookies.get("cadence_session", "")
+    )
+    if session is None:
+        return None
+    actor = session.get("actor")
+    return actor if isinstance(actor, str) and actor else None
+
+
 async def require_admin_key(
     request: Request, x_admin_key: str = Header(..., alias="X-Admin-Key")
 ) -> None:
+    """Dependency enforcing admin authentication. The header stays required
+    (a missing one is still 422, as before), but its value may now lose: a
+    valid OIDC session authenticates with the verified identity (which wins
+    over any key for audit purposes) and a wrong key without a session fails
+    exactly as before. A session success neither counts nor resets the key
+    throttle: the two mechanisms stay independent."""
+    ip = client_ip(request)
+    actor = session_actor(request)
+    if actor is not None:
+        request.state.oidc_actor = actor
+        request.state.auth_scheme = "oidc"
+        _enforce_rate_limit(
+            request, f"admin:{ip}", limit=settings.ratelimit_admin_max,
+            surface="admin", key_label=ip,
+        )
+        return
     ok = hmac.compare_digest(x_admin_key, settings.admin_key)
     if settings.admin_key_previous:
         ok |= hmac.compare_digest(x_admin_key, settings.admin_key_previous)
-    ip = client_ip(request)
     if not ok:
         await _reject_401(ip, "admin-key", "invalid admin key")
     throttle.record_success(ip)  # clear any backoff earned by earlier typos

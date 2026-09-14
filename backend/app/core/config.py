@@ -277,6 +277,11 @@ class Settings:
         # Secret, same handling as the other secrets (0600 .env, never
         # logged): used only for the back-channel code exchange.
         self.oidc_client_secret: str = os.environ.get("CADENCE_OIDC_CLIENT_SECRET", "")
+        # Absolute public callback URL the provider redirects to (registered
+        # at the provider side too). Explicit setting on purpose: deriving it
+        # from Host headers would let a forged Host steer the code to an
+        # attacker. Empty means OIDC stays inert.
+        self.oidc_redirect_uri: str = os.environ.get("CADENCE_OIDC_REDIRECT_URI", "")
         self.oidc_scopes: str = os.environ.get(
             "CADENCE_OIDC_SCOPES", "openid email profile"
         )
@@ -289,6 +294,10 @@ class Settings:
         self.oidc_clock_skew_seconds: int = _positive_int(
             "CADENCE_OIDC_CLOCK_SKEW_SECONDS", 120
         )
+        # Secure flag on the session and state cookies. Always on in
+        # production (Caddy serves https); the knob exists only so tests can
+        # exercise the flow over plain http.
+        self.oidc_cookie_secure: bool = _bool_env("CADENCE_OIDC_COOKIE_SECURE", True)
 
         # The shared `packages` dimension is get-or-created on every report and
         # never shrinks. A weekly scheduler sweep deletes rows no host_packages

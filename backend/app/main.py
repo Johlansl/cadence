@@ -13,6 +13,7 @@ from sqlalchemy import text
 from app import __version__
 from app.api.routes import (
     admin,
+    auth,
     campaigns,
     enrollments,
     exclusions,
@@ -123,6 +124,7 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
         return response
 
     app.include_router(admin.router)
+    app.include_router(auth.router)
     app.include_router(campaigns.router)
     app.include_router(campaigns.admin_router)
     app.include_router(enrollments.admin_router)

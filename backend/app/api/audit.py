@@ -29,14 +29,21 @@ def record_audit(
     """Stage an audit row on `db` (no commit).
 
     - `action` is "resource.verb" (e.g. "host.create"), an open set.
-    - `actor` comes from the optional `X-Actor` header (free text, no RBAC),
-      falling back to 'admin' when absent or blank.
+    - `actor` is the verified OIDC identity (`request.state.oidc_actor`,
+      set by the admin guard) whenever the call arrived on a session, so a
+      self-asserted `X-Actor` can never spoof it; otherwise it comes from the
+      optional `X-Actor` header (free text, no RBAC), falling back to 'admin'
+      when absent or blank.
     - `client` is the throttle's XFF-aware caller IP, so it records the real
       client rather than the Caddy container's address.
     - `request_id` is the id the logging middleware put on `request.state`.
     - `target_id` is stringified so any id type (UUID, int) fits the column.
     """
-    actor = (request.headers.get("x-actor") or "").strip() or "admin"
+    actor = (
+        getattr(request.state, "oidc_actor", None)
+        or (request.headers.get("x-actor") or "").strip()
+        or "admin"
+    )
     db.add(
         AuditLog(
             action=action,
