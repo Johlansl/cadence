@@ -129,7 +129,7 @@ docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
 Each image carries a Sigstore build-provenance attestation:
 
 ```sh
-gh attestation verify oci://ghcr.io/johlansl/cadence-backend:0.2.0 --repo Johlansl/cadence
+gh attestation verify oci://ghcr.io/johlansl/cadence-backend:0.4.0 --repo Johlansl/cadence
 ```
 
 `scripts/deploy.sh` on the central server always builds from source and ignores
