@@ -121,7 +121,7 @@ Instead of `--build`, pull the images published to GHCR on each `v*` release
 overlay and set `CADENCE_VERSION` in `.env` (omit it for `:latest`):
 
 ```sh
-echo 'CADENCE_VERSION=0.2.0' >> .env
+echo 'CADENCE_VERSION=0.4.0' >> .env
 docker compose -f docker-compose.yml -f docker-compose.release.yml pull
 docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
 ```
