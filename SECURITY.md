@@ -75,6 +75,28 @@ caller's IP; `X-Forwarded-For` is only honoured for connections from
 `CADENCE_TRUSTED_PROXIES`, otherwise the direct peer is recorded. Rows are
 pruned after `CADENCE_AUDIT_RETENTION_DAYS` (default 365).
 
+### Admin SSO (OIDC)
+
+Operators can additionally sign in through an OIDC provider (see
+`docs/oidc.md`; inert unless `CADENCE_OIDC_ENABLED=true` with issuer, client
+id/secret and redirect URI all set). A signed-in operator's writes record the
+verified subject as `actor`, and a self-asserted `X-Actor` is ignored on a
+session. New trust this adds, stated plainly:
+
+- a compromised provider (or its signing keys) mints admin sessions until
+  they expire (default 8 h); the shared key path is unaffected and stays
+  available as break-glass;
+- a stolen session cookie impersonates that operator until expiry: cookies
+  are HttpOnly/Secure/SameSite=Lax, served over the Caddy TLS front only,
+  and there is no per-session revoke -- emergency revocation is a
+  `CADENCE_TOKEN_ENCRYPTION_KEY` rotation (kills every session and every
+  agent token at once, same story as the token plane);
+- logout ends the Cadence session only, not the provider SSO session;
+- sign-in transport failures (dead provider) answer 502/401 with no detail
+  to the browser and no traceback in the log;
+- historic `admin` audit rows are never rewritten and keep meaning
+  "someone with the shared key", before or after SSO exists.
+
 ### Agent tokens
 
 Per-host tokens in the `agent_tokens` table (one per host at provisioning,

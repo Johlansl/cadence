@@ -259,6 +259,19 @@ rather than something to defer until someone asks.
   username/password (agent endpoints, which carry HMAC plus mTLS, are exempt).
   On by default; Caddy binds to loopback by default. Enough to keep a fleet
   inventory off the open internet without building a user system.
+- **Admin SSO via OIDC complements the shared key, it does not replace it**
+  (roadmap item 10). Any OIDC provider works; the reference deployment is
+  Authentik. Authorization Code Flow, ID tokens validated locally (`iss`
+  with one trailing slash tolerated symmetrically and nothing else folded,
+  `aud` as string or array, expiry with skew, nonce, exact `kid`,
+  `alg` allowlist with `alg`/`kty` cross-check), sessions as Fernet-sealed
+  cookies (8 h fixed TTL, HttpOnly/Secure/Lax), no DB table, no new Python
+  dependency (`cryptography` was already required). A valid session sets the
+  audit actor to the verified subject and `X-Actor` is ignored; the key path
+  behaves exactly as before, so a dead provider never locks out the admin.
+  Logout is local-only (the provider SSO session survives). Emergency
+  session revocation is a Fernet key rotation, same story as agent tokens.
+  See [oidc.md](oidc.md) for the operator setup.
 
 ## Data & schema
 

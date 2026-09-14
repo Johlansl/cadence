@@ -8,6 +8,15 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 
 ## Unreleased
 
+- Admin SSO via OIDC (Authentik as reference). Dashboard operators can sign
+  in at the provider; the backend validates the ID token locally and seals
+  a stateless session cookie (8 h, HttpOnly/Secure/Lax, no DB table, no new
+  dependency). Writes in a session audit under the verified subject and
+  ignore `X-Actor`; the shared `X-Admin-Key` keeps working exactly as
+  before, so a dead provider never locks out the admin. Inert unless
+  `CADENCE_OIDC_ENABLED=true` with issuer, client id/secret and redirect
+  URI all set. The issuer tolerates one trailing slash on either side;
+  provider transport failures answer 502/401, never 500. See `docs/oidc.md`.
 - CVE severity (CVSS). Every CVE already linked via a DSA/DLA can now show a
   cached CVSS base score and severity, resolved per CVE from the NVD CVE API
   2.0 by the scheduler (new `cve_scores` table, migration `0022`, refreshed
