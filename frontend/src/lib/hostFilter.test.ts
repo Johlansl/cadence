@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { EMPTY_FILTERS, filterHosts, filtersActive } from './hostFilter'
+import {
+  attentionRank,
+  EMPTY_FILTERS,
+  filterHosts,
+  filtersActive,
+  needsAttention,
+} from './hostFilter'
 import type { HostSummary } from '../types'
 
 function host(over: Partial<HostSummary> = {}): HostSummary {
@@ -80,12 +86,59 @@ describe('filterHosts', () => {
     ).toEqual(['a'])
   })
 
-  it('overdue filter keeps only non-fresh hosts', () => {
-    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    const hosts = [host({ hostname: 'fresh' }), host({ hostname: 'stale', last_seen_at: old })]
+  it('freshness filter keeps late and silent hosts, drops fresh ones', () => {
+    const late = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    const silent = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const hosts = [
+      host({ hostname: 'fresh' }),
+      host({ hostname: 'late', last_seen_at: late }),
+      host({ hostname: 'silent', last_seen_at: silent }),
+    ]
     expect(
       filterHosts(hosts, { ...EMPTY_FILTERS, freshness: 'silent' }).map((h) => h.hostname),
-    ).toEqual(['stale'])
+    ).toEqual(['late', 'silent'])
+  })
+
+  it('attention filter keeps only hosts matching the fleet needs-attention definition', () => {
+    const hosts = [
+      host({ hostname: 'ok', health_status: 'healthy' }),
+      host({ hostname: 'unhealthy', health_status: 'unhealthy' }),
+      host({ hostname: 'sec', health_status: 'healthy', status: 'security_updates_available' }),
+      host({ hostname: 'reboot', health_status: 'healthy', reboot_required: true }),
+      host({
+        hostname: 'inactive-unhealthy',
+        health_status: 'unhealthy',
+        is_active: false,
+      }),
+    ]
+    expect(
+      filterHosts(hosts, { ...EMPTY_FILTERS, attention: true }).map((h) => h.hostname),
+    ).toEqual(['unhealthy', 'sec', 'reboot'])
+  })
+})
+
+describe('attentionRank', () => {
+  it('orders unhealthy before security before degraded before reboot before updates before unknown before stale-only', () => {
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const rank = (over: Partial<HostSummary>) =>
+      attentionRank(host({ health_status: 'healthy', ...over }))
+    const ranks = [
+      rank({ health_status: 'unhealthy' }),
+      rank({ status: 'security_updates_available' }),
+      rank({ health_status: 'degraded' }),
+      rank({ reboot_required: true }),
+      rank({ status: 'updates_available' }),
+      rank({ health_status: 'unknown' }),
+      rank({ last_seen_at: old }),
+    ]
+    expect([...ranks].sort((a, b) => a - b)).toEqual(ranks)
+    expect(attentionRank(host({ health_status: 'healthy' }))).toBe(99)
+  })
+
+  it('needsAttention matches the fleet filter: active and ranked', () => {
+    expect(needsAttention(host({ health_status: 'unhealthy' }))).toBe(true)
+    expect(needsAttention(host({ health_status: 'healthy' }))).toBe(false)
+    expect(needsAttention(host({ health_status: 'unhealthy', is_active: false }))).toBe(false)
   })
 })
 
@@ -95,5 +148,6 @@ describe('filtersActive', () => {
     expect(filtersActive({ ...EMPTY_FILTERS, q: 'x' })).toBe(true)
     expect(filtersActive({ ...EMPTY_FILTERS, status: 'security' })).toBe(true)
     expect(filtersActive({ ...EMPTY_FILTERS, tag: 'env' })).toBe(true)
+    expect(filtersActive({ ...EMPTY_FILTERS, attention: true })).toBe(true)
   })
 })

@@ -64,20 +64,24 @@ describe('summarize', () => {
 
 describe('SilentBanner', () => {
   it('renders nothing when every active host is fresh', () => {
-    const { container } = render(<SilentBanner hosts={[host()]} onSelect={() => {}} />)
+    const { container } = render(<SilentBanner hosts={[host()]} onShowSilent={() => {}} />)
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows silent hosts and selects the first on click', async () => {
-    const onSelect = vi.fn()
+  it('shows silent hosts and notifies instead of selecting one host on click', async () => {
+    const onShowSilent = vi.fn()
     render(
       <SilentBanner
-        hosts={[host({ id: 's1', hostname: 'vm-silent', last_seen_at: stale() })]}
-        onSelect={onSelect}
+        hosts={[
+          host({ id: 's1', hostname: 'vm-silent-a', last_seen_at: stale() }),
+          host({ id: 's2', hostname: 'vm-silent-b', last_seen_at: stale() }),
+        ]}
+        onShowSilent={onShowSilent}
       />,
     )
-    expect(screen.getByText(/host.*silent/i)).toBeInTheDocument()
+    expect(screen.getByText(/2 hosts silent/i)).toBeInTheDocument()
+    expect(screen.getByText('show late or silent')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button'))
-    expect(onSelect).toHaveBeenCalledWith('s1')
+    expect(onShowSilent).toHaveBeenCalledTimes(1)
   })
 })

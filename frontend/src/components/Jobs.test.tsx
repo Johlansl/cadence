@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { installFetchMock, renderWithProviders } from '../test/harness'
@@ -34,6 +34,119 @@ afterEach(() => {
   vi.unstubAllGlobals()
   sessionStorage.clear()
   localStorage.clear()
+})
+
+describe('Jobs loading / empty / stale', () => {
+  it('shows loading on the first fetch, not the empty state', () => {
+    installFetchMock({ [JOBS_URL]: { body: [] } })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(screen.getByText('loading…')).toBeInTheDocument()
+    expect(screen.queryByText('No jobs yet.')).not.toBeInTheDocument()
+  })
+
+  it('shows the empty state only after a successful fetch returns no jobs', async () => {
+    installFetchMock({ [JOBS_URL]: { body: [] } })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText('No jobs yet.')).toBeInTheDocument()
+    expect(screen.queryByText('loading…')).not.toBeInTheDocument()
+  })
+
+  it('shows an error distinct from the empty state when the first fetch fails', async () => {
+    installFetchMock({ [JOBS_URL]: { status: 500, body: {} } })
+    renderWithProviders(<Jobs hostId="h1" />)
+
+    expect(await screen.findByText("couldn't load jobs.")).toBeInTheDocument()
+    expect(screen.queryByText('No jobs yet.')).not.toBeInTheDocument()
+    expect(screen.queryByText('loading…')).not.toBeInTheDocument()
+  })
+
+  it('keeps the loaded jobs and marks them stale when a refresh fails', async () => {
+    vi.useFakeTimers()
+    try {
+      let fail = false
+      installFetchMock({
+        [JOBS_URL]: () => (fail ? { status: 500, body: {} } : { body: [job()] }),
+      })
+      renderWithProviders(<Jobs hostId="h1" />)
+      await act(async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve()
+      })
+      expect(screen.getByText('apt_upgrade')).toBeInTheDocument()
+
+      fail = true
+      await act(async () => {
+        vi.advanceTimersByTime(15_000)
+        for (let i = 0; i < 20; i++) await Promise.resolve()
+      })
+      // Previous data stays on screen, flagged as stale instead of vanishing.
+      expect(screen.getByText('apt_upgrade')).toBeInTheDocument()
+      expect(screen.getByText(/stale/)).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('Jobs destructive confirmation', () => {
+  it('opens the clear confirmation in danger mode with focus on Cancel', async () => {
+    installFetchMock({ [JOBS_URL]: { body: [job()] } })
+    renderWithProviders(<Jobs hostId="h1" />)
+    await screen.findByText('apt_upgrade')
+
+    await userEvent.click(screen.getByRole('button', { name: 'clear' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(screen.getByText('Clear job history?')).toBeInTheDocument()
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
+  })
+})
+
+describe('Jobs verdict and details', () => {
+  it('shows the failure verdict with visible details for a failed job', async () => {
+    installFetchMock({
+      [JOBS_URL]: {
+        body: [
+          job({
+            status: 'failed',
+            failure_category: 'dpkg_error',
+            failure_summary: 'boom summary',
+            requested_by: 'dashboard',
+            result: { exit_code: 1, held_conflicts: ['docker-ce'] },
+          }),
+        ],
+      },
+    })
+    renderWithProviders(<Jobs hostId="h1" />)
+    await screen.findByText('apt_upgrade')
+
+    expect(screen.getByText('dpkg error')).toBeInTheDocument()
+    expect(screen.getByText('boom summary')).toBeInTheDocument()
+    expect(screen.getByText(/hold conflict: docker-ce/)).toBeInTheDocument()
+    expect(screen.getByText(/exit 1/)).toBeInTheDocument()
+    // Verdict line precedes the technical details in the DOM.
+    const html = screen.getByText('apt_upgrade').closest('li')!.innerHTML
+    expect(html.indexOf('dpkg error')).toBeLessThan(html.indexOf('by dashboard'))
+  })
+
+  it('explains disabled actions while a job is active', async () => {
+    installFetchMock({ [JOBS_URL]: { body: [job({ status: 'running' })] } })
+    renderWithProviders(<Jobs hostId="h1" />)
+    await screen.findByText('apt_upgrade')
+
+    expect(screen.getByRole('button', { name: /dry run/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /health check/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /job in progress/i })).toBeDisabled()
+    expect(screen.getByText(/actions are available again when it finishes/)).toBeInTheDocument()
+  })
+
+  it('labels the raw output as technical log', async () => {
+    installFetchMock({ [JOBS_URL]: { body: [job({ log: 'line1' })] } })
+    renderWithProviders(<Jobs hostId="h1" />)
+    await screen.findByText('apt_upgrade')
+
+    expect(screen.getByText('technical log')).toBeInTheDocument()
+  })
 })
 
 describe('Jobs', () => {

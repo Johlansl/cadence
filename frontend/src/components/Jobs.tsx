@@ -53,6 +53,17 @@ function FailureBadge({ category, summary }: { category: string; summary: string
   )
 }
 
+function hasDetails(j: Job): boolean {
+  return Boolean(
+    (j.status === 'failed' && j.failure_summary) ||
+    j.requested_by ||
+    typeof j.params.reboot === 'string' ||
+    j.result?.exit_code != null ||
+    j.result?.reboot_required ||
+    (j.result?.held_conflicts != null && j.result.held_conflicts.length > 0),
+  )
+}
+
 function duration(from: string | null, to: string | null): string | null {
   if (!from || !to) return null
   const s = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 1000)
@@ -68,6 +79,9 @@ export function Jobs({ hostId }: { hostId: string }) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [showAll, setShowAll] = useState(false)
   const [stale, setStale] = useState(false)
+  // True once the first fetch succeeds. Before that, an empty list means
+  // "still loading" (or a failed load), never "no jobs".
+  const [loaded, setLoaded] = useState(false)
   // Pages fetched past the polled first page, and whether the tail is reached.
   const [older, setOlder] = useState<Job[]>([])
   const [exhausted, setExhausted] = useState(false)
@@ -78,6 +92,7 @@ export function Jobs({ hostId }: { hostId: string }) {
   const refresh = useCallback(async () => {
     try {
       setJobs(await api.getHostJobs(hostId, { limit: PAGE }))
+      setLoaded(true)
       setStale(false)
     } catch {
       setStale(true)
@@ -85,16 +100,20 @@ export function Jobs({ hostId }: { hostId: string }) {
   }, [hostId])
 
   // Background poll, guarded so a slow response for a host we've navigated
-  // away from can't overwrite the new host's jobs.
+  // away from can't overwrite the new host's jobs. A failed poll keeps the
+  // previous list on screen and only marks it stale.
   useEffect(() => {
     setOlder([])
     setExhausted(false)
+    setLoaded(false)
+    setStale(false)
     let cancelled = false
     const poll = async () => {
       try {
         const j = await api.getHostJobs(hostId, { limit: PAGE })
         if (!cancelled) {
           setJobs(j)
+          setLoaded(true)
           setStale(false)
         }
       } catch {
@@ -244,7 +263,7 @@ export function Jobs({ hostId }: { hostId: string }) {
                 type="button"
                 onClick={() => void doClear()}
                 disabled={clear.busy}
-                className="text-xs text-zinc-600 hover:text-red-400 disabled:opacity-50"
+                className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
               >
                 clear
               </button>
@@ -252,10 +271,19 @@ export function Jobs({ hostId }: { hostId: string }) {
           </div>
         )}
       </div>
+      {!collapsed && active && (
+        <p className="mt-1 text-xs text-zinc-600">
+          Job in progress — actions are available again when it finishes.
+        </p>
+      )}
 
       {collapsed ? (
-        <p className="mt-1 text-xs text-zinc-600">
-          {last ? (
+        <p className={`mt-1 text-xs ${!loaded && stale ? 'text-red-400' : 'text-zinc-600'}`}>
+          {!loaded && stale ? (
+            "couldn't load jobs."
+          ) : !loaded ? (
+            'loading…'
+          ) : last ? (
             <>
               last {last.status} <RelativeTime iso={last.created_at} />
             </>
@@ -270,7 +298,11 @@ export function Jobs({ hostId }: { hostId: string }) {
             onKeyAccepted={() => void refresh()}
           />
 
-          {jobs.length === 0 ? (
+          {!loaded && stale ? (
+            <p className="mt-2 text-xs text-red-400">couldn't load jobs.</p>
+          ) : !loaded ? (
+            <p className="mt-2 text-xs text-zinc-600">loading…</p>
+          ) : jobs.length === 0 ? (
             <p className="mt-2 text-xs text-zinc-600">No jobs yet.</p>
           ) : (
             <>
@@ -300,24 +332,31 @@ export function Jobs({ hostId }: { hostId: string }) {
                       <span>
                         · <RelativeTime iso={j.created_at} />
                       </span>
-                      {j.requested_by && <span>· by {j.requested_by}</span>}
-                      {typeof j.params.reboot === 'string' && (
-                        <span>· reboot {j.params.reboot}</span>
-                      )}
                       {duration(j.started_at, j.completed_at) && (
                         <span>· {duration(j.started_at, j.completed_at)}</span>
-                      )}
-                      {j.result?.exit_code != null && <span>· exit {j.result.exit_code}</span>}
-                      {j.result?.reboot_required && (
-                        <span className="text-orange-400">· reboot required</span>
                       )}
                       {j.status === 'pending' && (
                         <span className="text-zinc-600">· the agent picks it up within ~1 min</span>
                       )}
                     </div>
-                    {j.status === 'failed' && j.failure_summary && (
-                      <p className="mt-1 text-zinc-500">{j.failure_summary}</p>
-                    )}
+                    {hasDetails(j) ? (
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-zinc-500">
+                        {j.status === 'failed' && j.failure_summary && (
+                          <span>{j.failure_summary}</span>
+                        )}
+                        {j.requested_by && <span>· by {j.requested_by}</span>}
+                        {typeof j.params.reboot === 'string' && (
+                          <span>· reboot {j.params.reboot}</span>
+                        )}
+                        {j.result?.exit_code != null && <span>· exit {j.result.exit_code}</span>}
+                        {j.result?.reboot_required && (
+                          <span className="text-orange-400">· reboot required</span>
+                        )}
+                        {j.result?.held_conflicts != null && j.result.held_conflicts.length > 0 && (
+                          <span>· hold conflict: {j.result.held_conflicts.join(', ')}</span>
+                        )}
+                      </div>
+                    ) : null}
                     {j.job_type === 'apt_dry_run' && j.result?.dry_run && (
                       <DryRunResult data={j.result.dry_run} />
                     )}
@@ -331,7 +370,7 @@ export function Jobs({ hostId }: { hostId: string }) {
                     {j.log && (
                       <details className="mt-1">
                         <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">
-                          log
+                          technical log
                         </summary>
                         <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed text-zinc-400">
                           {j.log}

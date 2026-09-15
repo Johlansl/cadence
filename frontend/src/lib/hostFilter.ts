@@ -10,6 +10,7 @@ export interface HostFilters {
   freshness: FreshnessFilter
   showInactive: boolean
   tag: string
+  attention: boolean
 }
 
 export const EMPTY_FILTERS: HostFilters = {
@@ -18,6 +19,7 @@ export const EMPTY_FILTERS: HostFilters = {
   freshness: 'all',
   showInactive: false,
   tag: '',
+  attention: false,
 }
 
 export function filtersActive(f: HostFilters): boolean {
@@ -26,8 +28,27 @@ export function filtersActive(f: HostFilters): boolean {
     f.status !== 'all' ||
     f.freshness !== 'all' ||
     f.showInactive ||
-    f.tag.trim() !== ''
+    f.tag.trim() !== '' ||
+    f.attention
   )
+}
+
+// Host health leads package state because it can halt a rollout. Shared with
+// the fleet overview so the sidebar and Fleet use the same "needs attention"
+// definition. 99 means healthy and fresh: not attention-worthy.
+export function attentionRank(h: HostSummary): number {
+  if (h.health_status === 'unhealthy') return 0
+  if (h.status === 'security_updates_available') return 1
+  if (h.health_status === 'degraded') return 2
+  if (h.reboot_required) return 3
+  if (h.status === 'updates_available') return 4
+  if (h.health_status === 'unknown') return 5
+  if (staleness(h.last_seen_at) !== 'fresh') return 6
+  return 99
+}
+
+export function needsAttention(h: HostSummary): boolean {
+  return h.is_active && attentionRank(h) < 99
 }
 
 // A tag query is either "key" (host has that key) or "key=value" (exact pair).
@@ -65,6 +86,7 @@ export function filterHosts(hosts: HostSummary[], f: HostFilters): HostSummary[]
     if (q && !`${h.hostname} ${h.description ?? ''}`.toLowerCase().includes(q)) return false
     if (!matchesStatus(h, f.status)) return false
     if (f.freshness === 'silent' && staleness(h.last_seen_at) === 'fresh') return false
+    if (f.attention && !needsAttention(h)) return false
     if (!matchesTag(h.tags, f.tag)) return false
     return true
   })

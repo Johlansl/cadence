@@ -68,10 +68,10 @@ export function OverviewChips({ hosts }: { hosts: HostSummary[] }) {
 
 export function SilentBanner({
   hosts,
-  onSelect,
+  onShowSilent,
 }: {
   hosts: HostSummary[]
-  onSelect: (id: string) => void
+  onShowSilent: () => void
 }) {
   useNow()
   const silent = hosts.filter((h) => h.is_active && staleness(h.last_seen_at) === 'stale')
@@ -83,10 +83,13 @@ export function SilentBanner({
     .join(', ')
   const extra = silent.length > 3 ? ` +${silent.length - 3}` : ''
 
+  // Shows the whole late-or-silent set in the sidebar instead of opening a
+  // single arbitrary host. The result intentionally covers late hosts too,
+  // matching the existing freshness filter, hence the explicit label.
   return (
     <button
       type="button"
-      onClick={() => onSelect(silent[0].id)}
+      onClick={onShowSilent}
       className="w-full border-b border-red-500/30 bg-red-500/10 px-6 py-2 text-left text-xs text-red-300 hover:bg-red-500/15"
     >
       <span className="font-medium">
@@ -96,7 +99,8 @@ export function SilentBanner({
       <span className="font-mono">
         {shown}
         {extra}
-      </span>
+      </span>{' '}
+      <span className="underline">show late or silent</span>
     </button>
   )
 }
