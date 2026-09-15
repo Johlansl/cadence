@@ -6,6 +6,24 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
+## 0.4.1
+
+- Job robustness, no new capability. One active job per host is now
+  enforced in PostgreSQL by a partial unique index
+  (`ux_jobs_one_active_per_host`, migration `0023`), replacing the
+  application-level SELECT-then-INSERT check that raced under
+  concurrency; a concurrent `23505` on that index maps back to host-busy
+  in `create_job_for_host` via a savepoint, so every caller keeps its
+  contract. Job completion (`submit_job_result`) now runs as a single
+  conditional `UPDATE ... WHERE status='running' ... RETURNING` instead
+  of read-then-write, so exactly one concurrent or late submission wins
+  and every other gets 409 without writing the job, the host projection
+  or the outbox. Covered by new concurrency tests on real PostgreSQL
+  transactions (`test_jobs_active_guard.py`, `test_robustness_t0.py`).
+- Dashboard polish: shared "attention" filter between the sidebar and
+  Fleet Overview, hidden-by-filters selection count in the bulk action
+  bar, dynamic confirmation dialog and contrast fixes.
+
 ## 0.4.0
 
 - Admin SSO via OIDC (Authentik as reference). Dashboard operators can sign
