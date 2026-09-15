@@ -33,6 +33,7 @@ interface Pending extends ConfirmOptions {
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null)
   const confirmBtn = useRef<HTMLButtonElement>(null)
+  const cancelBtn = useRef<HTMLButtonElement>(null)
 
   const confirm = useCallback<ConfirmFn>(
     (opts) => new Promise<boolean>((resolve) => setPending({ ...opts, resolve })),
@@ -48,7 +49,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!pending) return
-    confirmBtn.current?.focus()
+    // A dangerous confirmation rests on Cancel so an immediate Enter cannot
+    // validate the destructive action. Neutral ones keep focusing Confirm.
+    if (pending.danger) cancelBtn.current?.focus()
+    else confirmBtn.current?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') settle(false)
     }
@@ -75,6 +79,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             {pending.body && <p className="mt-1 text-xs text-zinc-400">{pending.body}</p>}
             <div className="mt-4 flex justify-end gap-2">
               <button
+                ref={cancelBtn}
                 type="button"
                 onClick={() => settle(false)}
                 className="rounded border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"

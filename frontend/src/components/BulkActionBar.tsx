@@ -12,10 +12,12 @@ type RebootChoice = 'default' | RebootPolicy
 // no multi-host sequencing (out of scope for V1, see docs/decisions.md).
 export function BulkActionBar({
   hostIds,
+  hiddenCount,
   onClear,
   onDone,
 }: {
   hostIds: string[]
+  hiddenCount: number
   onClear: () => void
   onDone: () => void
 }) {
@@ -68,13 +70,21 @@ export function BulkActionBar({
 
   const start = async (kind: 'upgrade' | 'reboot') => {
     if (
-      kind === 'reboot' &&
-      !(await confirm({
-        title: `Reboot ${hostIds.length} host${hostIds.length === 1 ? '' : 's'}?`,
-        body: 'Queues a reboot job on every selected host. Each reboots as its agent picks the job up.',
-        confirmLabel: 'Reboot all',
-        danger: true,
-      }))
+      !(await confirm(
+        kind === 'reboot'
+          ? {
+              title: `Reboot ${hostIds.length} host${hostIds.length === 1 ? '' : 's'}?`,
+              body: 'Queues a reboot job on every selected host. Each reboots as its agent picks the job up.',
+              confirmLabel: 'Reboot all',
+              danger: true,
+            }
+          : {
+              title: `Upgrade ${hostIds.length} host${hostIds.length === 1 ? '' : 's'}?`,
+              body: 'Queues a dist-upgrade job on every selected host. Each upgrades as its agent picks the job up.',
+              confirmLabel: 'Upgrade all',
+              danger: true,
+            },
+      ))
     )
       return
     const key = getAdminKey()
@@ -99,7 +109,12 @@ export function BulkActionBar({
   return (
     <div className="border-b border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-zinc-300">{hostIds.length} selected</span>
+        <span className="text-zinc-300">
+          {hostIds.length} selected
+          {hiddenCount > 0 && (
+            <span className="text-zinc-500"> · {hiddenCount} hidden by filters</span>
+          )}
+        </span>
         <label className="flex items-center gap-1 text-zinc-500">
           reboot
           <select

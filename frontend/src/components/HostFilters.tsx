@@ -55,7 +55,16 @@ export function HostFilters({
             onChange={(e) => set('freshness', e.target.checked ? 'silent' : 'all')}
             className="accent-zinc-400"
           />
-          overdue
+          late or silent
+        </label>
+        <label className="flex items-center gap-1 select-none">
+          <input
+            type="checkbox"
+            checked={value.attention}
+            onChange={(e) => set('attention', e.target.checked)}
+            className="accent-zinc-400"
+          />
+          needs attention
         </label>
         <label className="flex items-center gap-1 select-none">
           <input

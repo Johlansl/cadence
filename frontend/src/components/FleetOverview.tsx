@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/client'
+import { attentionRank } from '../lib/hostFilter'
 import { TONE_TEXT } from '../lib/pill'
-import { relativeTime, staleness } from '../lib/time'
+import { relativeTime } from '../lib/time'
 import { useNow } from '../lib/useNow'
 import type { FleetSummary, HostSummary } from '../types'
 import { Freshness } from './Freshness'
@@ -30,35 +31,34 @@ function Tile({
   )
 }
 
-// Host health leads package state because it can halt a rollout.
-function attentionRank(h: HostSummary): number {
-  if (h.health_status === 'unhealthy') return 0
-  if (h.status === 'security_updates_available') return 1
-  if (h.health_status === 'degraded') return 2
-  if (h.reboot_required) return 3
-  if (h.status === 'updates_available') return 4
-  if (h.health_status === 'unknown') return 5
-  if (staleness(h.last_seen_at) !== 'fresh') return 6
-  return 99
-}
-
 export function FleetOverview({
   hosts,
   onSelect,
+  onShowAttention,
 }: {
   hosts: HostSummary[]
   onSelect: (id: string) => void
+  onShowAttention: () => void
 }) {
   useNow() // keep the staleness-ranked "needs attention" list moving between polls
   const [summary, setSummary] = useState<FleetSummary | null>(null)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const load = () =>
       api
         .getFleetSummary()
-        .then((s) => !cancelled && setSummary(s))
-        .catch(() => {})
+        .then((s) => {
+          if (cancelled) return
+          setSummary(s)
+          setSummaryError(null)
+        })
+        .catch((e) => {
+          // Keep the previous summary on screen so a failed refresh reads as
+          // stale data, never as zero. A null summary stays unavailable.
+          if (!cancelled) setSummaryError(e instanceof Error ? e.message : String(e))
+        })
     void load()
     const t = setInterval(load, 30_000)
     return () => {
@@ -66,6 +66,10 @@ export function FleetOverview({
       clearInterval(t)
     }
   }, [])
+
+  // A tile driven by the fleet summary: real value (including 0) once loaded,
+  // "n/a" when unavailable, "…" while the first fetch is still in flight.
+  const pending = summary === null ? (summaryError ? 'n/a' : '…') : null
 
   const attention = hosts
     .filter((h) => h.is_active && attentionRank(h) < 99)
@@ -79,7 +83,15 @@ export function FleetOverview({
 
   return (
     <div className="space-y-4 overflow-auto p-6">
-      <h2 className="text-sm uppercase tracking-widest text-zinc-400">Fleet overview</h2>
+      <h2 className="text-sm uppercase tracking-widest text-zinc-400">
+        Fleet overview
+        {summaryError && summary && (
+          <span className="ml-2 normal-case text-red-500/70">· stale</span>
+        )}
+      </h2>
+      {summaryError && !summary && (
+        <p className="text-xs text-red-400">sync error: {summaryError}</p>
+      )}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
         <Tile
@@ -89,7 +101,7 @@ export function FleetOverview({
         />
         <Tile
           label="Security"
-          value={s ? s.security_updates_available : '-'}
+          value={s ? s.security_updates_available : (pending ?? 'n/a')}
           sub={
             s ? `${s.security_updates} package${s.security_updates === 1 ? '' : 's'}` : undefined
           }
@@ -103,14 +115,14 @@ export function FleetOverview({
         />
         <Tile
           label="Needs updates"
-          value={s ? s.updates_available + s.security_updates_available : '-'}
+          value={s ? s.updates_available + s.security_updates_available : (pending ?? 'n/a')}
           sub={s ? `${s.pending_updates} package${s.pending_updates === 1 ? '' : 's'}` : undefined}
           tone={s && s.updates_available + s.security_updates_available > 0 ? 'warn' : undefined}
         />
-        <Tile label="Reboot" value={s ? s.reboot_required : '-'} tone="reboot" />
+        <Tile label="Reboot" value={s ? s.reboot_required : (pending ?? 'n/a')} tone="reboot" />
         <Tile
           label="Overdue"
-          value={s ? s.late + s.silent : '-'}
+          value={s ? s.late + s.silent : (pending ?? 'n/a')}
           sub={
             s?.oldest_report_age_seconds != null
               ? `oldest ${relativeTime(new Date(Date.now() - s.oldest_report_age_seconds * 1000).toISOString())}`
@@ -120,7 +132,7 @@ export function FleetOverview({
         />
         <Tile
           label="Jobs 24h"
-          value={s ? `${s.jobs_succeeded_24h}✓ ${s.jobs_failed_24h}✕` : '-'}
+          value={s ? `${s.jobs_succeeded_24h}✓ ${s.jobs_failed_24h}✕` : (pending ?? 'n/a')}
           sub={s && s.jobs_running > 0 ? `${s.jobs_running} running` : undefined}
           tone={s && s.jobs_failed_24h > 0 ? 'danger' : undefined}
         />
@@ -154,7 +166,15 @@ export function FleetOverview({
               </li>
             ))}
             {attention.length > 12 && (
-              <li className="px-3 py-1.5 text-xs text-zinc-600">+{attention.length - 12} more</li>
+              <li>
+                <button
+                  type="button"
+                  onClick={onShowAttention}
+                  className="w-full px-3 py-1.5 text-left text-xs text-zinc-500 hover:text-zinc-300"
+                >
+                  +{attention.length - 12} more — show all {attention.length}
+                </button>
+              </li>
             )}
           </ul>
         )}

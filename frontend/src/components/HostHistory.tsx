@@ -51,7 +51,11 @@ export function HostHistory({ hostId }: { hostId: string }) {
         )}
       </div>
 
-      {chrono.length < 2 ? (
+      {reports === null && stale ? (
+        <p className="mt-2 text-xs text-red-400">couldn't load history.</p>
+      ) : reports === null ? (
+        <p className="mt-2 text-xs text-zinc-600">loading…</p>
+      ) : chrono.length < 2 ? (
         <p className="mt-2 text-xs text-zinc-600">Not enough history yet.</p>
       ) : (
         <div className="mt-2 flex flex-wrap items-center gap-4">

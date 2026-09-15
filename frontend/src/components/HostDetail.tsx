@@ -15,43 +15,75 @@ import { StatusBadge } from './StatusBadge'
 import { TagChips } from './TagChips'
 import { useToast } from './Toast'
 
-function RebootPolicyControl({ hostId, value }: { hostId: string; value: RebootPolicy }) {
-  const [choice, setChoice] = useState<RebootPolicy>(value)
-  const choiceRef = useRef<RebootPolicy>(value)
+function RebootPolicyControl({
+  hostId,
+  value,
+  onChanged,
+}: {
+  hostId: string
+  value: RebootPolicy
+  onChanged: () => void
+}) {
+  // Same dirty/save pattern as TagsControl below: picking a value only edits
+  // the local draft, and Save sends it. Nothing is written on select.
+  const [draft, setDraft] = useState<RebootPolicy>(value)
+  const draftRef = useRef<RebootPolicy>(value)
+
+  // Reset when the host (or its saved policy) changes underneath us, so a
+  // stale local draft can never overwrite a newer server value.
   useEffect(() => {
-    setChoice(value)
-    choiceRef.current = value
-  }, [value])
+    setDraft(value)
+    draftRef.current = value
+  }, [hostId, value])
 
   const patch = useCallback(
-    (key: string) => api.patchHost(hostId, key, { reboot_policy: choiceRef.current }),
+    (key: string) => api.patchHost(hostId, key, { reboot_policy: draftRef.current }),
     [hostId],
   )
   const act = useAdminKeyAction(patch)
 
-  const change = (next: RebootPolicy) => {
-    setChoice(next)
-    choiceRef.current = next
-    void act.run()
+  const afterSave = (r: { ok: boolean } | undefined) => {
+    if (r?.ok) onChanged()
   }
+  const save = async () => afterSave(await act.run())
+
+  const dirty = draft !== value
 
   return (
     <div>
       <dt className="text-xs uppercase tracking-wide text-zinc-600">Reboot policy</dt>
       <dd className="mt-0.5 flex items-center gap-2 font-mono text-sm text-zinc-200">
         <select
-          value={choice}
+          value={draft}
           disabled={act.busy}
-          onChange={(e) => change(e.target.value as RebootPolicy)}
+          onChange={(e) => {
+            const next = e.target.value as RebootPolicy
+            setDraft(next)
+            draftRef.current = next
+          }}
+          aria-label="Reboot policy"
           className="rounded border border-zinc-700 bg-zinc-900 px-1 py-0.5 text-sm text-zinc-200 outline-none focus:border-zinc-500 disabled:opacity-50"
         >
           <option value="never">never</option>
           <option value="auto">auto</option>
           <option value="prompt">prompt</option>
         </select>
-        {act.busy && <span className="text-xs text-zinc-500">saving…</span>}
+        {dirty && (
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={act.busy}
+            className="rounded bg-zinc-100 px-2 py-0.5 font-sans text-xs font-medium text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500"
+          >
+            {act.busy ? 'saving…' : 'save'}
+          </button>
+        )}
       </dd>
-      <AdminActionFeedback actions={act} errorClassName="mt-1 text-xs text-red-400" />
+      <AdminActionFeedback
+        actions={act}
+        errorClassName="mt-1 text-xs text-red-400"
+        onKeyAccepted={(r) => afterSave(r)}
+      />
     </div>
   )
 }
@@ -292,7 +324,7 @@ function HostActions({
           type="button"
           onClick={() => void doDelete()}
           disabled={remove.busy}
-          className="text-zinc-600 hover:text-red-400 disabled:opacity-50"
+          className="rounded border border-red-500/40 px-2 py-0.5 text-red-300 hover:bg-red-500/10 disabled:opacity-50"
         >
           delete
         </button>
@@ -389,7 +421,7 @@ export function HostDetail({
               'never'
             )}
           </Meta>
-          <RebootPolicyControl hostId={host.id} value={host.reboot_policy} />
+          <RebootPolicyControl hostId={host.id} value={host.reboot_policy} onChanged={onChanged} />
           <Meta label="Updates">
             {withUpdates}
             {host.security_updates_count > 0 && (
@@ -408,8 +440,8 @@ export function HostDetail({
         </dl>
 
         <TagsControl hostId={host.id} tags={host.tags} onChanged={onChanged} />
-        <HostHistory hostId={host.id} />
         <Jobs hostId={host.id} />
+        <HostHistory hostId={host.id} />
         <Schedule hostId={host.id} />
 
         <PackageTable packages={host.packages} />

@@ -60,6 +60,7 @@ export default function App() {
   // indicator; a host-detail poll failure is shown in the detail pane only,
   // so a transient 500 on one host never blanks the whole header.
   const [listError, setListError] = useState<string | null>(null)
+  const [listLoaded, setListLoaded] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<Date | null>(null)
   const [detailReload, setDetailReload] = useState(0)
@@ -67,6 +68,9 @@ export default function App() {
   const [checked, setChecked] = useState<Set<string>>(new Set())
 
   const visibleHosts = useMemo(() => filterHosts(hosts, filters), [hosts, filters])
+  // Selected hosts hidden by the current filters: the selection persists, so
+  // the bar must say how many of its targets are out of sight.
+  const visibleIds = useMemo(() => new Set(visibleHosts.map((h) => h.id)), [visibleHosts])
 
   const toggleChecked = useCallback((id: string) => {
     setChecked((s) => {
@@ -82,6 +86,7 @@ export default function App() {
     try {
       setHosts(await api.listHosts())
       setListError(null)
+      setListLoaded(true)
       setLastSync(new Date())
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e))
@@ -266,7 +271,7 @@ export default function App() {
             >
               Enrollment
             </button>
-            <OverviewChips hosts={hosts} />
+            {listLoaded && <OverviewChips hosts={hosts} />}
           </div>
           <div className="flex items-center gap-3 text-xs text-zinc-600">
             <SessionButton />
@@ -282,7 +287,13 @@ export default function App() {
           </div>
         </header>
 
-        <SilentBanner hosts={hosts} onSelect={select} />
+        <SilentBanner
+          hosts={hosts}
+          onShowSilent={() => {
+            select(null)
+            setFilters((f) => ({ ...f, freshness: 'silent' }))
+          }}
+        />
 
         <div className="flex min-h-0 flex-1">
           <aside className="flex w-80 shrink-0 flex-col overflow-hidden border-r border-zinc-800">
@@ -295,6 +306,7 @@ export default function App() {
             {checked.size > 0 && (
               <BulkActionBar
                 hostIds={[...checked]}
+                hiddenCount={[...checked].filter((id) => !visibleIds.has(id)).length}
                 onClear={clearChecked}
                 onDone={() => {
                   clearChecked()
@@ -306,6 +318,7 @@ export default function App() {
               <HostList
                 hosts={visibleHosts}
                 selectedId={selectedId}
+                attentionOrder={filters.attention}
                 onSelect={select}
                 emptyLabel={
                   hosts.length === 0 ? 'No hosts registered.' : 'No hosts match the filter.'
@@ -319,7 +332,7 @@ export default function App() {
             {showEnrollment ? (
               <EnrollmentView hosts={hosts} />
             ) : showCampaigns ? (
-              <CampaignsView />
+              <CampaignsView onSelectHost={select} />
             ) : showWebhooks ? (
               <WebhooksView />
             ) : showExclusions ? (
@@ -343,8 +356,16 @@ export default function App() {
               <p className="p-6 text-sm text-red-400">
                 {detailError ? `failed to load host: ${detailError}` : 'loading…'}
               </p>
+            ) : !listLoaded && listError ? (
+              <p className="p-6 text-sm text-red-400">failed to load hosts: {listError}</p>
+            ) : !listLoaded ? (
+              <p className="p-6 text-sm text-zinc-500">loading…</p>
             ) : (
-              <FleetOverview hosts={hosts} onSelect={select} />
+              <FleetOverview
+                hosts={hosts}
+                onSelect={select}
+                onShowAttention={() => setFilters((f) => ({ ...f, attention: true }))}
+              />
             )}
           </main>
         </div>

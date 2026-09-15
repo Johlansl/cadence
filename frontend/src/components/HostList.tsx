@@ -1,4 +1,5 @@
 import type { HostSummary } from '../types'
+import { attentionRank } from '../lib/hostFilter'
 import { Freshness } from './Freshness'
 import { HealthBadge } from './HealthBadge'
 import { StatusBadge } from './StatusBadge'
@@ -11,6 +12,7 @@ interface Props {
   emptyLabel?: string
   checkedIds: Set<string>
   onToggleCheck: (id: string) => void
+  attentionOrder?: boolean
 }
 
 export function HostList({
@@ -20,14 +22,18 @@ export function HostList({
   emptyLabel = 'No hosts.',
   checkedIds,
   onToggleCheck,
+  attentionOrder = false,
 }: Props) {
   if (hosts.length === 0) {
     return <p className="p-4 text-sm text-zinc-500">{emptyLabel}</p>
   }
 
-  // Active hosts first, then inactive; alphabetical within each group.
-  const ordered = [...hosts].sort(
-    (a, b) => Number(b.is_active) - Number(a.is_active) || a.hostname.localeCompare(b.hostname),
+  // Default: active hosts first, then inactive; alphabetical within each group.
+  // With the needs-attention filter on, most urgent first (fleet priority).
+  const ordered = [...hosts].sort((a, b) =>
+    attentionOrder
+      ? attentionRank(a) - attentionRank(b) || a.hostname.localeCompare(b.hostname)
+      : Number(b.is_active) - Number(a.is_active) || a.hostname.localeCompare(b.hostname),
   )
 
   return (

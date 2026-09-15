@@ -22,6 +22,8 @@ const primaryBtn =
   'rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-500'
 const ghostBtn =
   'rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50'
+const dangerBtn =
+  'rounded border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50'
 
 const STATUS_TONE: Record<CampaignStatus, Tone> = {
   draft: 'neutral',
@@ -63,7 +65,7 @@ function progress(c: Campaign): string {
   return `${stage} · ${parts.join(' · ')}`
 }
 
-export function CampaignsView() {
+export function CampaignsView({ onSelectHost }: { onSelectHost: (id: string) => void }) {
   const [rows, setRows] = useState<Campaign[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -93,17 +95,21 @@ export function CampaignsView() {
 
       <CreateForm onCreated={refresh} />
 
-      {error && <p className="text-xs text-red-400">sync error: {error}</p>}
+      {error && rows !== null && <p className="text-xs text-red-400">sync error: {error}</p>}
 
       {rows === null ? (
-        <p className="text-sm text-zinc-600">loading…</p>
+        error ? (
+          <p className="text-sm text-red-400">couldn't load campaigns.</p>
+        ) : (
+          <p className="text-sm text-zinc-600">loading…</p>
+        )
       ) : rows.length === 0 ? (
         <p className="text-sm text-zinc-600">No campaigns yet.</p>
       ) : (
         <ul className="space-y-3">
           {rows.map((c) => (
             <li key={c.id}>
-              <CampaignRow campaign={c} onChanged={refresh} />
+              <CampaignRow campaign={c} onChanged={refresh} onSelectHost={onSelectHost} />
             </li>
           ))}
         </ul>
@@ -112,7 +118,15 @@ export function CampaignsView() {
   )
 }
 
-function CampaignRow({ campaign, onChanged }: { campaign: Campaign; onChanged: () => void }) {
+function CampaignRow({
+  campaign,
+  onChanged,
+  onSelectHost,
+}: {
+  campaign: Campaign
+  onChanged: () => void
+  onSelectHost: (id: string) => void
+}) {
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<CampaignDetail | null>(null)
   const toast = useToast()
@@ -208,7 +222,7 @@ function CampaignRow({ campaign, onChanged }: { campaign: Campaign; onChanged: (
               type="button"
               onClick={() => void run(cancel, 'cancelled', false)}
               disabled={cancel.busy}
-              className={ghostBtn}
+              className={dangerBtn}
             >
               cancel
             </button>
@@ -219,9 +233,12 @@ function CampaignRow({ campaign, onChanged }: { campaign: Campaign; onChanged: (
       <div className="space-y-2 px-3 py-2 text-xs text-zinc-500">
         <p>
           {campaign.stages.length} stage{campaign.stages.length === 1 ? '' : 's'} ·{' '}
-          <span className="font-mono text-[11px]">[{campaign.stages.join(', ')}]</span> ·
-          concurrency {campaign.max_concurrency} · max failures {campaign.max_failures} · window{' '}
-          {campaign.observation_window_seconds}s
+          <span className="font-mono text-[11px]">[{campaign.stages.join(', ')}]</span>
+        </p>
+        <p>
+          concurrency <span className="font-mono">{campaign.max_concurrency}</span> · max failures{' '}
+          <span className="font-mono">{campaign.max_failures}</span> · window{' '}
+          <span className="font-mono">{campaign.observation_window_seconds}s</span>
         </p>
         {campaign.halt_reason && <p className="text-red-400">stopped: {campaign.halt_reason}</p>}
         <p>
@@ -246,7 +263,7 @@ function CampaignRow({ campaign, onChanged }: { campaign: Campaign; onChanged: (
           ) : (
             <div className="space-y-3 pt-1">
               <StageBreakdown detail={detail} />
-              <HostTable detail={detail} />
+              <HostTable detail={detail} onSelectHost={onSelectHost} />
             </div>
           ))}
       </div>
@@ -261,25 +278,40 @@ function CampaignRow({ campaign, onChanged }: { campaign: Campaign; onChanged: (
 function StageBreakdown({ detail }: { detail: CampaignDetail }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {detail.stages_detail.map((st) => (
-        <div key={st.index} className="rounded border border-zinc-800 px-2 py-1">
-          <span className="text-zinc-400">
-            stage {st.index + 1}{' '}
-            <span className="font-mono text-[10px]">({String(st.size_spec)})</span>
-          </span>
-          <span className="ml-2 text-zinc-500">
-            {st.done}/{st.hosts_total} done
-            {st.skipped > 0 && ` · ${st.skipped} skipped`}
-            {st.orphaned > 0 && ` · ${st.orphaned} orphaned`}
-            {st.running > 0 && ` · ${st.running} running`}
-          </span>
-        </div>
-      ))}
+      {detail.stages_detail.map((st) => {
+        // current_stage_index is the first stage with pending/running work
+        // (None when nothing is left to do): the stage the engine is on.
+        const active = detail.current_stage_index === st.index
+        return (
+          <div
+            key={st.index}
+            className={`rounded border px-2 py-1 ${active ? 'border-sky-500/50' : 'border-zinc-800'}`}
+          >
+            <span className="text-zinc-400">
+              stage {st.index + 1}{' '}
+              <span className="font-mono text-[10px]">({String(st.size_spec)})</span>
+            </span>
+            {active && <span className={`ml-1.5 ${pill('info')}`}>active</span>}
+            <span className="ml-2 text-zinc-500">
+              {st.done}/{st.hosts_total} done
+              {st.skipped > 0 && ` · ${st.skipped} skipped`}
+              {st.orphaned > 0 && ` · ${st.orphaned} orphaned`}
+              {st.running > 0 && ` · ${st.running} running`}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-function HostTable({ detail }: { detail: CampaignDetail }) {
+function HostTable({
+  detail,
+  onSelectHost,
+}: {
+  detail: CampaignDetail
+  onSelectHost: (id: string) => void
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-[11px]">
@@ -295,7 +327,15 @@ function HostTable({ detail }: { detail: CampaignDetail }) {
         <tbody className="text-zinc-400">
           {detail.hosts.map((h) => (
             <tr key={h.host_id} className="border-t border-zinc-800/60">
-              <td className="py-1 pr-3 font-mono">{h.hostname}</td>
+              <td className="py-1 pr-3 font-mono">
+                <button
+                  type="button"
+                  onClick={() => onSelectHost(h.host_id)}
+                  className="hover:text-zinc-100 hover:underline"
+                >
+                  {h.hostname}
+                </button>
+              </td>
               <td className="py-1 pr-3">{h.stage_index + 1}</td>
               <td className="py-1 pr-3">
                 <span className={pill(HOST_TONE[h.state])}>{h.state}</span>
@@ -352,6 +392,25 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
   const toggleHost = (id: string) =>
     setHostIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+
+  // Inline recap of what Create would send. Host count is exact (explicit
+  // selection); a tag target shows the exact criterion with no host estimate,
+  // which only the server could resolve. Stops when skipped hosts exceed max
+  // failures, so 0 stops at the first skipped host; an empty window means the
+  // server default, whose value the frontend does not know.
+  const previewStages = parseStages(stages)
+  const previewNames = hostIds
+    .map((id) => hosts.find((h) => h.id === id)?.hostname)
+    .filter((n): n is string => Boolean(n))
+  const previewMaxFailures = maxFailures.trim() === '' ? null : Number(maxFailures)
+  const previewTarget =
+    mode === 'hosts'
+      ? `${hostIds.length} host${hostIds.length === 1 ? '' : 's'}${
+          previewNames.length > 0 && previewNames.length <= 5 ? ` (${previewNames.join(', ')})` : ''
+        }`
+      : tag.trim()
+        ? `tag "${tag.trim()}"`
+        : 'tag (none yet)'
 
   const canSubmit =
     name.trim().length > 0 &&
@@ -472,6 +531,27 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             </div>
           )}
         </fieldset>
+
+        <div className="space-y-2 rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-500">
+          <p>target: {previewTarget}</p>
+          <p>
+            stages <span className="font-mono">[{previewStages.join(', ')}]</span> ·{' '}
+            {previewStages.length} wave{previewStages.length === 1 ? '' : 's'} · concurrency{' '}
+            <span className="font-mono">{maxConcurrency.trim() === '' ? '—' : maxConcurrency}</span>{' '}
+            jobs at once · max failures{' '}
+            <span className="font-mono">
+              {previewMaxFailures === null ? '—' : previewMaxFailures}
+            </span>
+            {previewMaxFailures !== null &&
+              (previewMaxFailures === 0
+                ? ' (stops at the first skipped host)'
+                : ` (stops above ${previewMaxFailures} skipped)`)}
+            {' · '}window{' '}
+            <span className="font-mono">
+              {window.trim() === '' ? 'server default' : `${window.trim()}s between stages`}
+            </span>
+          </p>
+        </div>
 
         <div>
           <button
