@@ -79,7 +79,7 @@ export function EnrollmentView({ hosts }: { hosts: HostSummary[] }) {
   return (
     <div className="space-y-4 overflow-auto p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm uppercase tracking-widest text-zinc-400">Enrollment</h2>
+        <h2 className="text-sm font-medium uppercase tracking-widest text-zinc-300">Enrollment</h2>
         <button
           type="button"
           onClick={() => void refresh()}
@@ -106,7 +106,7 @@ export function EnrollmentView({ hosts }: { hosts: HostSummary[] }) {
 
       <section className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-xs uppercase tracking-wide text-zinc-600">Enrollment codes</h3>
+          <h3 className="text-xs uppercase tracking-wide text-zinc-500">Enrollment codes</h3>
           <select
             value={stateFilter}
             onChange={(event) => setStateFilter(event.target.value as StateFilter)}
@@ -218,7 +218,7 @@ function CreateEnrollmentForm({
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
-      <h3 className="text-xs uppercase tracking-wide text-zinc-600">Generate a code</h3>
+      <h3 className="text-xs uppercase tracking-wide text-zinc-500">Generate a code</h3>
 
       {created && (
         <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-xs">

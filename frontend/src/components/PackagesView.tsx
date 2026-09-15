@@ -90,7 +90,7 @@ export function PackagesView({ onSelectHost }: { onSelectHost: (id: string) => v
 
   return (
     <div className="space-y-4 overflow-auto p-6">
-      <h2 className="text-sm uppercase tracking-widest text-zinc-400">Packages</h2>
+      <h2 className="text-sm font-medium uppercase tracking-widest text-zinc-300">Packages</h2>
 
       <div className="flex flex-wrap items-center gap-3">
         <input

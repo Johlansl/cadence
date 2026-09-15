@@ -58,7 +58,7 @@ export function OverviewChips({ hosts }: { hosts: HostSummary[] }) {
       {c.degraded > 0 && <span className="text-amber-400">{c.degraded} degraded</span>}
       {c.unknownHealth > 0 && <span>{c.unknownHealth} health unknown</span>}
       {c.updates > 0 && <span className="text-amber-400">{c.updates} updates</span>}
-      {c.upToDate > 0 && <span className="text-emerald-500">{c.upToDate} up to date</span>}
+      {c.upToDate > 0 && <span className="text-zinc-500">{c.upToDate} up to date</span>}
       {c.reboot > 0 && <span className="text-orange-400">{c.reboot} reboot</span>}
       {c.silent > 0 && <span className="text-red-400">{c.silent} silent</span>}
       {c.late > 0 && <span className="text-amber-400">{c.late} late</span>}

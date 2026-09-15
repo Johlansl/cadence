@@ -47,7 +47,7 @@ export function ExclusionsView() {
 
   return (
     <div className="space-y-4 overflow-auto p-6">
-      <h2 className="text-sm uppercase tracking-widest text-zinc-400">Exclusions</h2>
+      <h2 className="text-sm font-medium uppercase tracking-widest text-zinc-300">Exclusions</h2>
       <p className="max-w-2xl text-xs text-zinc-500">
         Packages matching a rule here are never touched by an apt_upgrade job: Cadence holds them
         (dpkg <span className="font-mono text-[11px]">apt-mark hold</span>) and re-aligns dpkg's
@@ -115,7 +115,7 @@ function CreateForm({ hosts, onCreated }: { hosts: HostSummary[]; onCreated: () 
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
-      <h3 className="text-xs uppercase tracking-wide text-zinc-600">Add a rule</h3>
+      <h3 className="text-xs uppercase tracking-wide text-zinc-500">Add a rule</h3>
 
       <div className="mt-2 flex flex-col gap-2">
         <div className="flex flex-wrap gap-2">

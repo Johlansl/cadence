@@ -86,7 +86,7 @@ export function CampaignsView({ onSelectHost }: { onSelectHost: (id: string) => 
 
   return (
     <div className="space-y-4 overflow-auto p-6">
-      <h2 className="text-sm uppercase tracking-widest text-zinc-400">Campaigns</h2>
+      <h2 className="text-sm font-medium uppercase tracking-widest text-zinc-300">Campaigns</h2>
       <p className="max-w-2xl text-xs text-zinc-500">
         A staged rollout of dist-upgrades across a fixed host set: canary waves, a global
         concurrency cap, and an automatic stop when failures pile up. Created paused as a{' '}
@@ -182,11 +182,11 @@ function CampaignRow({
           className="flex items-center gap-2 text-left"
         >
           <span className="text-zinc-500">{open ? '▾' : '▸'}</span>
-          <span className="text-xs font-medium text-zinc-200">{campaign.name}</span>
+          <span className="text-sm font-medium text-zinc-100">{campaign.name}</span>
           <span className={pill(STATUS_TONE[s])}>{s}</span>
+          <span className="text-xs tabular-nums text-zinc-300">{progress(campaign)}</span>
         </button>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-zinc-500">{progress(campaign)}</span>
           {s === 'draft' && (
             <button
               type="button"
@@ -230,7 +230,7 @@ function CampaignRow({
         </div>
       </div>
 
-      <div className="space-y-2 px-3 py-2 text-xs text-zinc-500">
+      <div className="space-y-2 px-3 py-2 text-xs text-zinc-400">
         <p>
           {campaign.stages.length} stage{campaign.stages.length === 1 ? '' : 's'} ·{' '}
           <span className="font-mono text-[11px]">[{campaign.stages.join(', ')}]</span>
@@ -241,7 +241,7 @@ function CampaignRow({
           <span className="font-mono">{campaign.observation_window_seconds}s</span>
         </p>
         {campaign.halt_reason && <p className="text-red-400">stopped: {campaign.halt_reason}</p>}
-        <p>
+        <p className="text-zinc-600">
           created <RelativeTime iso={campaign.created_at} />
           {campaign.started_at && (
             <>
@@ -285,7 +285,7 @@ function StageBreakdown({ detail }: { detail: CampaignDetail }) {
         return (
           <div
             key={st.index}
-            className={`rounded border px-2 py-1 ${active ? 'border-sky-500/50' : 'border-zinc-800'}`}
+            className={`rounded border px-2 py-1 ${active ? 'border-sky-500/50 bg-sky-500/[0.06]' : 'border-zinc-800'}`}
           >
             <span className="text-zinc-400">
               stage {st.index + 1}{' '}
@@ -419,10 +419,20 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
     !creator.busy
 
   return (
-    <section className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
-      <h3 className="text-xs uppercase tracking-wide text-zinc-600">New campaign</h3>
+    <section className="rounded border border-zinc-700 bg-zinc-900/40">
+      <div className="flex items-center justify-between gap-2 border-b border-zinc-800 px-3 py-2">
+        <h3 className="text-xs uppercase tracking-wide text-zinc-500">New campaign</h3>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={!canSubmit}
+          className={primaryBtn}
+        >
+          {creator.busy ? 'creating…' : 'create draft'}
+        </button>
+      </div>
 
-      <div className="mt-2 flex flex-col gap-2">
+      <div className="flex flex-col gap-2 p-3">
         <input
           type="text"
           value={name}
@@ -552,20 +562,11 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             </span>
           </p>
         </div>
-
-        <div>
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={!canSubmit}
-            className={primaryBtn}
-          >
-            {creator.busy ? 'creating…' : 'create draft'}
-          </button>
-        </div>
       </div>
 
-      <AdminActionFeedback actions={creator} />
+      <div className="px-3 pb-3">
+        <AdminActionFeedback actions={creator} />
+      </div>
     </section>
   )
 }

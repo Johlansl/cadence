@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { SilentBanner, summarize } from './Overview'
+import { OverviewChips, SilentBanner, summarize } from './Overview'
 import type { HostSummary } from '../types'
 
 function host(over: Partial<HostSummary> = {}): HostSummary {
@@ -59,6 +59,21 @@ describe('summarize', () => {
     expect(c.unhealthy).toBe(1)
     expect(c.degraded).toBe(1)
     expect(c.unknownHealth).toBe(1)
+  })
+})
+
+describe('OverviewChips', () => {
+  it('mutes the healthy count so alerts keep the color', () => {
+    const { container } = render(<OverviewChips hosts={[host(), host()]} />)
+    const healthy = screen.getByText('2 up to date')
+    expect(healthy.className).toContain('text-zinc-500')
+    expect(container.querySelector('.text-emerald-500')).toBeNull()
+  })
+
+  it('keeps alert tones while the healthy count stays muted', () => {
+    render(<OverviewChips hosts={[host(), host({ status: 'security_updates_available' })]} />)
+    expect(screen.getByText('1 security').className).toContain('text-red-400')
+    expect(screen.getByText('1 up to date').className).toContain('text-zinc-500')
   })
 })
 

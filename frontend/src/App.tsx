@@ -217,61 +217,82 @@ export default function App() {
     <SessionProvider>
       <div className="flex h-full flex-col bg-zinc-950">
         <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-          <div className="flex items-baseline gap-3">
+          <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={() => select(null)}
-              className="text-sm font-semibold uppercase tracking-widest text-zinc-300 hover:text-zinc-100"
+              className="rounded px-1 py-1 text-sm font-semibold uppercase tracking-widest text-zinc-300 hover:text-zinc-100"
               title="Back to the fleet overview"
             >
               Cadence
             </button>
-            <button
-              type="button"
-              onClick={selectPackages}
-              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-                showPackages ? 'text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Packages
-            </button>
-            <button
-              type="button"
-              onClick={selectWebhooks}
-              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-                showWebhooks ? 'text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Webhooks
-            </button>
-            <button
-              type="button"
-              onClick={selectExclusions}
-              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-                showExclusions ? 'text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Exclusions
-            </button>
-            <button
-              type="button"
-              onClick={selectCampaigns}
-              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-                showCampaigns ? 'text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Campaigns
-            </button>
-            <button
-              type="button"
-              onClick={selectEnrollment}
-              className={`text-xs uppercase tracking-widest hover:text-zinc-200 ${
-                showEnrollment ? 'text-zinc-200' : 'text-zinc-500'
-              }`}
-            >
-              Enrollment
-            </button>
-            {listLoaded && <OverviewChips hosts={hosts} />}
+            <nav aria-label="Primary" className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={selectPackages}
+                aria-current={showPackages ? 'page' : undefined}
+                className={`rounded px-2 py-1 text-xs uppercase tracking-widest ${
+                  showPackages
+                    ? 'bg-zinc-800/70 text-zinc-100'
+                    : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300'
+                }`}
+              >
+                Packages
+              </button>
+              <button
+                type="button"
+                onClick={selectWebhooks}
+                aria-current={showWebhooks ? 'page' : undefined}
+                className={`rounded px-2 py-1 text-xs uppercase tracking-widest ${
+                  showWebhooks
+                    ? 'bg-zinc-800/70 text-zinc-100'
+                    : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300'
+                }`}
+              >
+                Webhooks
+              </button>
+              <button
+                type="button"
+                onClick={selectExclusions}
+                aria-current={showExclusions ? 'page' : undefined}
+                className={`rounded px-2 py-1 text-xs uppercase tracking-widest ${
+                  showExclusions
+                    ? 'bg-zinc-800/70 text-zinc-100'
+                    : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300'
+                }`}
+              >
+                Exclusions
+              </button>
+              <button
+                type="button"
+                onClick={selectCampaigns}
+                aria-current={showCampaigns ? 'page' : undefined}
+                className={`rounded px-2 py-1 text-xs uppercase tracking-widest ${
+                  showCampaigns
+                    ? 'bg-zinc-800/70 text-zinc-100'
+                    : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300'
+                }`}
+              >
+                Campaigns
+              </button>
+              <button
+                type="button"
+                onClick={selectEnrollment}
+                aria-current={showEnrollment ? 'page' : undefined}
+                className={`rounded px-2 py-1 text-xs uppercase tracking-widest ${
+                  showEnrollment
+                    ? 'bg-zinc-800/70 text-zinc-100'
+                    : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300'
+                }`}
+              >
+                Enrollment
+              </button>
+            </nav>
+            {listLoaded && (
+              <div className="border-l border-zinc-800 pl-3">
+                <OverviewChips hosts={hosts} />
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 text-xs text-zinc-600">
             <SessionButton />

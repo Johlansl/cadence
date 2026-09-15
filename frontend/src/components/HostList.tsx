@@ -44,8 +44,11 @@ export function HostList({
         return (
           <li
             key={h.id}
-            className={`flex items-start ${active ? 'bg-zinc-800/80' : 'hover:bg-zinc-900'}`}
+            className={`relative flex items-start ${active ? 'bg-zinc-800/60' : 'hover:bg-zinc-900'}`}
           >
+            {active && (
+              <span aria-hidden="true" className="absolute inset-y-0 left-0 w-0.5 bg-zinc-200" />
+            )}
             <input
               type="checkbox"
               checked={checkedIds.has(h.id)}
@@ -69,7 +72,7 @@ export function HostList({
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-2 text-xs text-zinc-500">
+              <div className="flex items-center justify-between gap-2 text-xs text-zinc-600">
                 <span className="truncate">
                   {(h.os_name ?? h.os_family) + (h.os_version ? ` ${h.os_version}` : '')}
                 </span>

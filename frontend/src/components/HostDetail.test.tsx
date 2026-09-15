@@ -192,3 +192,23 @@ describe('HostDetail destructive confirmation', () => {
     expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Retire' }))
   })
 })
+
+describe('HostDetail visual hierarchy', () => {
+  it('contrasts operational metadata above administrative context', () => {
+    renderDetail()
+
+    expect(screen.getByText('Last report').nextElementSibling?.className).toContain('text-zinc-100')
+    expect(screen.getByText('Updates').nextElementSibling?.className).toContain('text-zinc-100')
+    expect(screen.getByText('OS').nextElementSibling?.className).toContain('text-zinc-400')
+    expect(screen.getByText('FQDN').nextElementSibling?.className).toContain('text-zinc-400')
+  })
+
+  it('separates destructive actions from identity and keeps reboot operational', () => {
+    renderDetail({ reboot_required: true })
+
+    const retire = screen.getByRole('button', { name: 'retire' })
+    expect(retire.closest('div.border-l')).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'delete' }).className).toContain('red')
+    expect(screen.getByRole('button', { name: 'reboot now' }).className).toContain('orange')
+  })
+})

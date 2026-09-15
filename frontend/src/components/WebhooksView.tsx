@@ -49,7 +49,7 @@ export function WebhooksView() {
 
   return (
     <div className="space-y-4 overflow-auto p-6">
-      <h2 className="text-sm uppercase tracking-widest text-zinc-400">Webhooks</h2>
+      <h2 className="text-sm font-medium uppercase tracking-widest text-zinc-300">Webhooks</h2>
       <p className="max-w-2xl text-xs text-zinc-500">
         Cadence POSTs a signed JSON body to each enabled endpoint when a subscribed event fires. The
         full URL and the signing secret are shown once, at creation.
@@ -111,7 +111,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <section className="rounded border border-zinc-800 bg-zinc-900/40 p-3">
-      <h3 className="text-xs uppercase tracking-wide text-zinc-600">Add a webhook</h3>
+      <h3 className="text-xs uppercase tracking-wide text-zinc-500">Add a webhook</h3>
 
       {created && (
         <div className="mt-2 rounded border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs">

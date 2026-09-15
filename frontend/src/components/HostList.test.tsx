@@ -95,3 +95,37 @@ describe('HostList ordering', () => {
     }
   })
 })
+
+describe('HostList selection', () => {
+  function renderSelected() {
+    return render(
+      <HostList
+        hosts={[host({ hostname: 'vm-a' }), host({ hostname: 'vm-b' })]}
+        selectedId="vm-a"
+        onSelect={() => {}}
+        checkedIds={new Set()}
+        onToggleCheck={() => {}}
+      />,
+    )
+  }
+
+  it('marks only the selected row with a position-stable witness', () => {
+    const { container } = renderSelected()
+    const witnesses = container.querySelectorAll('.bg-zinc-200.w-0\\.5')
+    expect(witnesses).toHaveLength(1)
+    expect(screen.getByText('vm-a').className).toContain('text-zinc-100')
+  })
+
+  it('shows no witness without a selection', () => {
+    const { container } = render(
+      <HostList
+        hosts={[host({ hostname: 'vm-a' })]}
+        selectedId={null}
+        onSelect={() => {}}
+        checkedIds={new Set()}
+        onToggleCheck={() => {}}
+      />,
+    )
+    expect(container.querySelector('.bg-zinc-200.w-0\\.5')).toBeNull()
+  })
+})

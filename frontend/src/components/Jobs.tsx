@@ -212,7 +212,7 @@ export function Jobs({ hostId }: { hostId: string }) {
         <button
           type="button"
           onClick={toggleCollapsed}
-          className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-zinc-600 hover:text-zinc-400"
+          className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-zinc-500 hover:text-zinc-300"
         >
           <span className="inline-block w-2 text-zinc-500">{collapsed ? '▸' : '▾'}</span>
           Jobs

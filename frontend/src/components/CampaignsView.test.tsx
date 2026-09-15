@@ -445,3 +445,51 @@ describe('CampaignsView', () => {
     expect(screen.getByText('vm-b')).toBeInTheDocument()
   })
 })
+
+describe('CampaignsView visual hierarchy', () => {
+  it('distinguishes the creation block from existing campaign rows', async () => {
+    installFetchMock({
+      [LIST]: { body: [campaign({ status: 'running' })] },
+      [HOSTS]: { body: [] },
+    })
+    renderWithProviders(<CampaignsView onSelectHost={() => {}} />)
+    await screen.findByText('march rollout')
+
+    const createSection = screen.getByRole('button', { name: 'create draft' }).closest('section')
+    expect(createSection?.className).toContain('border-zinc-700')
+    const row = screen.getByText('march rollout').closest('div.rounded')
+    expect(row?.className).toContain('border-zinc-800')
+    expect(row?.className).not.toContain('border-zinc-700')
+  })
+
+  it('reads name, status and progress before secondary parameters', async () => {
+    installFetchMock({
+      [LIST]: {
+        body: [
+          campaign({ status: 'running', current_stage_index: 1, hosts_done: 1, hosts_skipped: 1 }),
+        ],
+      },
+      [HOSTS]: { body: [] },
+    })
+    renderWithProviders(<CampaignsView onSelectHost={() => {}} />)
+
+    const name = await screen.findByText('march rollout')
+    expect(name.className).toContain('text-zinc-100')
+    const progress = screen.getByText(/stage 2\/2 · 1\/3 done · 1 skipped/)
+    expect(progress.className).toContain('text-zinc-300')
+  })
+
+  it('accents only the active stage box', async () => {
+    installFetchMock({
+      [LIST]: { body: [campaign()] },
+      [HOSTS]: { body: [] },
+      'GET /api/v1/campaigns/c1': { body: detail() },
+    })
+    renderWithProviders(<CampaignsView onSelectHost={() => {}} />)
+    await screen.findByText('march rollout')
+
+    await userEvent.click(screen.getByText('march rollout'))
+    const active = await screen.findByText('active')
+    expect(active.closest('div')?.className).toContain('bg-sky-500')
+  })
+})

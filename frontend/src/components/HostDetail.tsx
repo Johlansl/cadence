@@ -154,7 +154,7 @@ function TagsControl({
   return (
     <section className="border-t border-zinc-800 px-6 py-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs uppercase tracking-wide text-zinc-600">Tags</h3>
+        <h3 className="text-xs uppercase tracking-wide text-zinc-500">Tags</h3>
         {dirty && (
           <button
             type="button"
@@ -347,11 +347,25 @@ function HostActions({
   )
 }
 
-function Meta({ label, children }: { label: string; children: ReactNode }) {
+function Meta({
+  label,
+  children,
+  priority = false,
+}: {
+  label: string
+  children: ReactNode
+  priority?: boolean
+}) {
   return (
     <div>
-      <dt className="text-xs uppercase tracking-wide text-zinc-600">{label}</dt>
-      <dd className="mt-0.5 font-mono text-sm text-zinc-200">{children}</dd>
+      <dt
+        className={`text-xs uppercase tracking-wide ${priority ? 'text-zinc-500' : 'text-zinc-600'}`}
+      >
+        {label}
+      </dt>
+      <dd className={`mt-0.5 font-mono text-sm ${priority ? 'text-zinc-100' : 'text-zinc-400'}`}>
+        {children}
+      </dd>
     </div>
   )
 }
@@ -374,7 +388,7 @@ export function HostDetail({
     <div className="flex h-full flex-col">
       <header className="border-b border-zinc-800 px-6 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <h2 className="font-mono text-lg text-zinc-100">{host.hostname}</h2>
             <HealthBadge status={host.health_status} includeLabel />
             <StatusBadge status={host.status} />
@@ -384,14 +398,18 @@ export function HostDetail({
               </span>
             )}
             {host.reboot_required && <span className={pill('reboot')}>reboot required</span>}
-            {host.reboot_required && <RebootNowButton hostId={host.id} onChanged={onChanged} />}
           </div>
-          <HostActions
-            hostId={host.id}
-            isActive={host.is_active}
-            onChanged={onChanged}
-            onDeleted={onDeleted}
-          />
+          <div className="flex items-start gap-3">
+            {host.reboot_required && <RebootNowButton hostId={host.id} onChanged={onChanged} />}
+            <div className="border-l border-zinc-800 pl-3">
+              <HostActions
+                hostId={host.id}
+                isActive={host.is_active}
+                onChanged={onChanged}
+                onDeleted={onDeleted}
+              />
+            </div>
+          </div>
         </div>
         {host.description && <p className="mt-1 text-sm text-zinc-500">{host.description}</p>}
         {Object.keys(host.tags).length > 0 && (
@@ -409,7 +427,7 @@ export function HostDetail({
           <Meta label="Agent">{host.agent_version ?? '-'}</Meta>
           <Meta label="Manager">{host.package_manager}</Meta>
           <Meta label="FQDN">{host.fqdn ?? '-'}</Meta>
-          <Meta label="Last report">
+          <Meta label="Last report" priority>
             <Freshness iso={host.last_seen_at} />
           </Meta>
           <Meta label="Health checked">
@@ -422,7 +440,7 @@ export function HostDetail({
             )}
           </Meta>
           <RebootPolicyControl hostId={host.id} value={host.reboot_policy} onChanged={onChanged} />
-          <Meta label="Updates">
+          <Meta label="Updates" priority>
             {withUpdates}
             {host.security_updates_count > 0 && (
               <span className="text-red-400"> · {host.security_updates_count} security</span>

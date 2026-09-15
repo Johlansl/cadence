@@ -34,7 +34,7 @@ export function HostHistory({ hostId }: { hostId: string }) {
   return (
     <section className="border-t border-zinc-800 px-6 py-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs uppercase tracking-wide text-zinc-600">
+        <h3 className="text-xs uppercase tracking-wide text-zinc-500">
           History
           {stale && <span className="ml-1.5 normal-case text-red-500/70">· stale</span>}
         </h3>

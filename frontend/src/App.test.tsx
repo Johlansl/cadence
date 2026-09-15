@@ -106,6 +106,23 @@ describe('App enrollment navigation', () => {
   })
 })
 
+describe('App primary navigation', () => {
+  it('marks the active tab with a distinct background and aria-current', async () => {
+    window.history.replaceState(null, '', '#packages')
+    installAppFetchMock()
+    renderWithProviders(<App />)
+
+    const active = await screen.findByRole('button', { name: 'Packages' })
+    expect(active).toHaveAttribute('aria-current', 'page')
+    expect(active.className).toContain('bg-zinc-800/70')
+
+    const idle = screen.getByRole('button', { name: 'Enrollment' })
+    expect(idle).not.toHaveAttribute('aria-current')
+    expect(idle.className).toContain('text-zinc-500')
+    expect(idle.className).not.toContain('bg-zinc-800/70')
+  })
+})
+
 describe('App host-list loading / error', () => {
   it('shows loading in the main view before the first host fetch resolves', () => {
     installAppFetchMock()

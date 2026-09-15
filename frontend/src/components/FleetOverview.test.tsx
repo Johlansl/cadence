@@ -130,7 +130,38 @@ describe('FleetOverview summary states', () => {
       vi.useRealTimers()
     }
   })
+})
 
+describe('FleetOverview tile hierarchy', () => {
+  it('keeps healthy tiles neutral with no alert box or emerald value', async () => {
+    installFetchMock({ [URL]: { body: summary() } })
+    const { container } = render(
+      <FleetOverview hosts={[]} onSelect={() => {}} onShowAttention={() => {}} />,
+    )
+
+    await screen.findByText('0✓ 0✕')
+    expect(container.querySelector('.text-emerald-400')).toBeNull()
+    expect(container.querySelector('.border-red-500\\/25')).toBeNull()
+    expect(container.querySelector('.border-amber-500\\/25')).toBeNull()
+    expect(container.querySelector('.border-orange-500\\/25')).toBeNull()
+  })
+
+  it('accents only the tile carrying an actionable anomaly', async () => {
+    installFetchMock({
+      [URL]: {
+        body: summary({ active_hosts: 3, security_updates_available: 2, security_updates: 2 }),
+      },
+    })
+    render(<FleetOverview hosts={[]} onSelect={() => {}} onShowAttention={() => {}} />)
+
+    await screen.findByText('2 packages')
+    const tile = screen.getByText('Security').parentElement
+    expect(tile?.className).toContain('border-red-500/25')
+    expect(screen.getByText('Hosts').parentElement?.className).not.toContain('border-red-500/25')
+  })
+})
+
+describe('FleetOverview attention list', () => {
   it('renders 12 attention hosts plus an action delegating the rest', async () => {
     installFetchMock({ [URL]: { body: summary() } })
     const onShowAttention = vi.fn()
