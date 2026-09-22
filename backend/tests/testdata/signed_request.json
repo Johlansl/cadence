@@ -1,0 +1,12 @@
+{
+  "_comment": "TEST KEY ONLY — never use in production. Signed by the real agent Client.sign; verified by backend _auth_signed.",
+  "_regen": "cd agent && CADENCE_WRITE_GOLDEN=1 go test ./internal/client/ -run TestWriteSignedGolden -v",
+  "key": "cadence-test-golden-key-01-do-not-use-in-prod",
+  "method": "POST",
+  "path": "/api/v1/reports",
+  "timestamp": "1790088308",
+  "token_hash": "09beaa8ec207f2ba95179832f257f578afef50b634e586803f7240f06a476190",
+  "signature": "c7d12daf2ae5b0239ebc6f87189c044d752c89e0fdfa4ddc2c907d9aa5abdc6d",
+  "body_sha256": "1948a2de2094aaeb62c64398c666b846a36df279a5ef8d9e3f75b8d95526bfd3",
+  "body": "{\"golden\":true}"
+}
