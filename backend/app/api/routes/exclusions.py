@@ -16,15 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_db, require_admin_key
+from app.api.deps import get_db, require_operate
 from app.models.models import Host, PackageExclusion
 from app.schemas.schemas import PackageExclusionCreate, PackageExclusionOut
 from app.tag_filter import tag_matches
 
 router = APIRouter(prefix="/api/v1", tags=["exclusions"])
-admin_router = APIRouter(
-    prefix="/api/v1/admin", tags=["exclusions"], dependencies=[Depends(require_admin_key)]
-)
+admin_router = APIRouter(prefix="/api/v1/admin", tags=["exclusions"])
 
 
 @router.get("/package-exclusions", response_model=list[PackageExclusionOut])
@@ -66,6 +64,7 @@ def get_exclusion(exclusion_id: uuid.UUID, db: Session = Depends(get_db)) -> Pac
     "/package-exclusions",
     response_model=PackageExclusionOut,
     status_code=http_status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
 )
 def create_exclusion(
     request: Request, payload: PackageExclusionCreate, db: Session = Depends(get_db)
@@ -100,7 +99,9 @@ def create_exclusion(
 
 
 @admin_router.delete(
-    "/package-exclusions/{exclusion_id}", status_code=http_status.HTTP_204_NO_CONTENT
+    "/package-exclusions/{exclusion_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
 )
 def delete_exclusion(
     request: Request, exclusion_id: uuid.UUID, db: Session = Depends(get_db)

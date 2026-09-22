@@ -195,9 +195,11 @@ def test_callback_sets_session_and_redirects(client, oidc_on, stub_provider):
     assert "cadence_session" in r.cookies
 
 
-def test_admin_write_with_session_records_oidc_actor(
-    client, db_session, oidc_on, stub_provider
+def test_operator_write_with_session_records_oidc_actor(
+    client, db_session, oidc_on, stub_provider, monkeypatch
 ):
+    # The stubbed login seals the role from the allowlist at login time.
+    monkeypatch.setattr(settings, "oidc_operator_emails", ["johlan@example.com"])
     ctx = stub_provider
     state_cookie, data, _ = _login_state(client, ctx)
     r = _callback(client, state_cookie, state=data["state"])
@@ -214,6 +216,25 @@ def test_admin_write_with_session_records_oidc_actor(
     rows = client.get("/api/v1/admin/audit", headers={"X-Admin-Key": ""}).json()
     created = [a for a in rows if a["action"] == "host.create"]
     assert created and created[0]["actor"] == "johlan@example.com"
+
+
+def test_reader_write_forbidden_without_audit(
+    client, db_session, oidc_on, stub_provider
+):
+    # Empty operator allowlist (the default): the session is a reader, the
+    # write is refused before the handler, and nothing is audited.
+    ctx = stub_provider
+    state_cookie, data, _ = _login_state(client, ctx)
+    r = _callback(client, state_cookie, state=data["state"])
+    assert r.status_code == 302, r.text
+    r = client.post(
+        "/api/v1/admin/hosts",
+        json={"hostname": "sso-reader-host"},
+        headers={"X-Admin-Key": ""},
+    )
+    assert r.status_code == 403, r.text
+    rows = client.get("/api/v1/admin/audit", headers={"X-Admin-Key": ""}).json()
+    assert [a for a in rows if a["action"] == "host.create"] == []
 
 
 def test_callback_rejects_bad_state_and_provider_error(

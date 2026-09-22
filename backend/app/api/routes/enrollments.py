@@ -15,7 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_current_host, get_db, require_admin_key
+from app.api.deps import get_current_host, get_db, require_operate, require_read_private
 from app.core.config import settings
 from app.core.crypto import encrypt_token_secret
 from app.core.ratelimit import note_rejected, ratelimiter
@@ -37,13 +37,11 @@ from app.schemas.schemas import (
 admin_router = APIRouter(
     prefix="/api/v1/admin/enrollments",
     tags=["admin", "enrollment"],
-    dependencies=[Depends(require_admin_key)],
 )
 agent_router = APIRouter(prefix="/api/v1/agent", tags=["agent", "enrollment"])
 certificate_admin_router = APIRouter(
     prefix="/api/v1/admin",
     tags=["admin", "agent certificates"],
-    dependencies=[Depends(require_admin_key)],
 )
 
 EnrollmentStateFilter = Literal["pending", "expired", "consumed", "revoked"]
@@ -77,7 +75,12 @@ def _out(row: EnrollmentCode, now: datetime) -> EnrollmentOut:
     )
 
 
-@admin_router.post("", response_model=EnrollmentCreated, status_code=status.HTTP_201_CREATED)
+@admin_router.post(
+    "",
+    response_model=EnrollmentCreated,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
+)
 def create_enrollment(
     request: Request, payload: EnrollmentCreate, db: Session = Depends(get_db)
 ) -> EnrollmentCreated:
@@ -130,7 +133,9 @@ def create_enrollment(
     )
 
 
-@admin_router.get("", response_model=list[EnrollmentOut])
+@admin_router.get(
+    "", response_model=list[EnrollmentOut], dependencies=[Depends(require_read_private)]
+)
 def list_enrollments(
     state_filter: EnrollmentStateFilter | None = Query(None, alias="state"),
     limit: int = Query(100, ge=1, le=500),
@@ -167,7 +172,11 @@ def list_enrollments(
     return [_out(row, now) for row in rows]
 
 
-@admin_router.delete("/{enrollment_id}", status_code=status.HTTP_204_NO_CONTENT)
+@admin_router.delete(
+    "/{enrollment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
+)
 def revoke_enrollment(
     request: Request, enrollment_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Response:
@@ -386,7 +395,9 @@ def _certificate_state(row: AgentCertificate, now: datetime) -> str:
 
 
 @certificate_admin_router.get(
-    "/hosts/{host_id}/certificates", response_model=list[CertificateOut]
+    "/hosts/{host_id}/certificates",
+    response_model=list[CertificateOut],
+    dependencies=[Depends(require_read_private)],
 )
 def list_certificates(
     host_id: uuid.UUID, db: Session = Depends(get_db)
@@ -419,6 +430,7 @@ def list_certificates(
 @certificate_admin_router.delete(
     "/hosts/{host_id}/certificates/{certificate_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
 )
 def revoke_certificate(
     request: Request,

@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_db, require_admin_key
+from app.api.deps import get_db, require_operate
 from app.campaigns.lifecycle import finalize_campaign_hosts
 from app.campaigns.targeting import resolve_targets, slice_into_stages
 from app.core.config import settings
@@ -32,9 +32,7 @@ from app.schemas.schemas import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["campaigns"])
-admin_router = APIRouter(
-    prefix="/api/v1/admin", tags=["campaigns"], dependencies=[Depends(require_admin_key)]
-)
+admin_router = APIRouter(prefix="/api/v1/admin", tags=["campaigns"])
 
 
 # --- derived views -------------------------------------------------------------
@@ -150,6 +148,7 @@ def get_campaign(
     "/campaigns",
     response_model=CampaignDetailOut,
     status_code=http_status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
 )
 def create_campaign(
     request: Request, payload: CampaignCreate, db: Session = Depends(get_db)
@@ -227,7 +226,11 @@ def _load_for_transition(
     return campaign
 
 
-@admin_router.post("/campaigns/{campaign_id}/activate", response_model=CampaignDetailOut)
+@admin_router.post(
+    "/campaigns/{campaign_id}/activate",
+    response_model=CampaignDetailOut,
+    dependencies=[Depends(require_operate)],
+)
 def activate_campaign(
     request: Request, campaign_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> CampaignDetailOut:
@@ -243,7 +246,11 @@ def activate_campaign(
     return _to_detail(campaign, _host_rows(db, campaign.id))
 
 
-@admin_router.post("/campaigns/{campaign_id}/pause", response_model=CampaignDetailOut)
+@admin_router.post(
+    "/campaigns/{campaign_id}/pause",
+    response_model=CampaignDetailOut,
+    dependencies=[Depends(require_operate)],
+)
 def pause_campaign(
     request: Request, campaign_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> CampaignDetailOut:
@@ -258,7 +265,11 @@ def pause_campaign(
     return _to_detail(campaign, _host_rows(db, campaign.id))
 
 
-@admin_router.post("/campaigns/{campaign_id}/resume", response_model=CampaignDetailOut)
+@admin_router.post(
+    "/campaigns/{campaign_id}/resume",
+    response_model=CampaignDetailOut,
+    dependencies=[Depends(require_operate)],
+)
 def resume_campaign(
     request: Request, campaign_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> CampaignDetailOut:
@@ -273,7 +284,11 @@ def resume_campaign(
     return _to_detail(campaign, _host_rows(db, campaign.id))
 
 
-@admin_router.post("/campaigns/{campaign_id}/cancel", response_model=CampaignDetailOut)
+@admin_router.post(
+    "/campaigns/{campaign_id}/cancel",
+    response_model=CampaignDetailOut,
+    dependencies=[Depends(require_operate)],
+)
 def cancel_campaign(
     request: Request, campaign_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> CampaignDetailOut:

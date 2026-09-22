@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_db, require_admin_key
+from app.api.deps import get_db, require_operate, require_read_private
 from app.api.pagination import before_keyset
 from app.core.config import settings
 from app.core.crypto import encrypt_token_secret
@@ -31,11 +31,7 @@ from app.schemas.schemas import (
     TokenOut,
 )
 
-router = APIRouter(
-    prefix="/api/v1/admin",
-    tags=["admin"],
-    dependencies=[Depends(require_admin_key)],
-)
+router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
 def _default_token_expiry() -> datetime:
@@ -46,7 +42,12 @@ def _default_token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=settings.token_default_expiry_days)
 
 
-@router.post("/hosts", response_model=HostCreated, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/hosts",
+    response_model=HostCreated,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
+)
 def create_host(
     request: Request, payload: HostCreate, db: Session = Depends(get_db)
 ) -> HostCreated:
@@ -84,7 +85,11 @@ def create_host(
     return HostCreated(id=host.id, hostname=host.hostname, token=token)
 
 
-@router.patch("/hosts/{host_id}", response_model=HostPatched)
+@router.patch(
+    "/hosts/{host_id}",
+    response_model=HostPatched,
+    dependencies=[Depends(require_operate)],
+)
 def update_host(
     request: Request,
     host_id: uuid.UUID,
@@ -110,7 +115,11 @@ def update_host(
     return host
 
 
-@router.delete("/hosts/{host_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/hosts/{host_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
+)
 def delete_host(
     request: Request, host_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Response:
@@ -134,6 +143,7 @@ def delete_host(
     "/hosts/{host_id}/jobs",
     response_model=JobOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
 )
 def create_job(
     request: Request,
@@ -173,7 +183,11 @@ def create_job(
     return job
 
 
-@router.delete("/hosts/{host_id}/jobs", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/hosts/{host_id}/jobs",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
+)
 def clear_host_jobs(
     request: Request, host_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Response:
@@ -198,7 +212,11 @@ def _token_state(tok: AgentToken, now: datetime) -> str:
     return "active"
 
 
-@router.get("/hosts/{host_id}/tokens", response_model=list[TokenOut])
+@router.get(
+    "/hosts/{host_id}/tokens",
+    response_model=list[TokenOut],
+    dependencies=[Depends(require_read_private)],
+)
 def list_host_tokens(host_id: uuid.UUID, db: Session = Depends(get_db)) -> list[TokenOut]:
     """Every agent token for the host -- active, expired and revoked -- so a
     stale one is obvious at a glance. The hash is never returned."""
@@ -229,6 +247,7 @@ def list_host_tokens(host_id: uuid.UUID, db: Session = Depends(get_db)) -> list[
     "/hosts/{host_id}/tokens",
     response_model=TokenIssued,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
 )
 def issue_host_token(
     request: Request,
@@ -267,7 +286,9 @@ def issue_host_token(
 
 
 @router.delete(
-    "/hosts/{host_id}/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT
+    "/hosts/{host_id}/tokens/{token_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
 )
 def revoke_host_token(
     request: Request, host_id: uuid.UUID, token_id: int, db: Session = Depends(get_db)
@@ -287,7 +308,9 @@ def revoke_host_token(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/audit", response_model=list[AuditEntry])
+@router.get(
+    "/audit", response_model=list[AuditEntry], dependencies=[Depends(require_read_private)]
+)
 def list_audit(
     limit: int = Query(50, ge=1, le=500),
     action: str | None = Query(None, description="exact match on the action verb"),

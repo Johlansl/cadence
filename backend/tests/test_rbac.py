@@ -286,3 +286,295 @@ def test_me_reports_reader_for_pre_rbac_session(client, oidc_shaped):
     ).json()
     assert body["authenticated"] is True
     assert body["role"] == roles.READER
+
+
+# --- lot 2: route-level guards ---------------------------------------------------
+#
+# The six admin routers carry no router-level guard anymore; every route
+# declares its own named permission. These tests lock that structure:
+# the filet fails if a route loses its guard entirely, the mapping test
+# fails on a wrong permission level, the live matrix proves the behavior.
+
+from app.api.deps import require_operate as dep_operate  # noqa: E402
+from app.api.deps import require_read_private as dep_read_private  # noqa: E402
+from app.api.routes import (  # noqa: E402
+    admin,
+    campaigns,
+    enrollments,
+    exclusions,
+    schedules,
+    webhooks,
+)
+from app.main import app as cadence_app  # noqa: E402
+
+ADMIN_ROUTERS = [
+    admin.router,
+    campaigns.admin_router,
+    enrollments.admin_router,
+    enrollments.certificate_admin_router,
+    exclusions.admin_router,
+    schedules.admin_router,
+    webhooks.admin_router,
+]
+
+DUMMY_UUID = "00000000-0000-0000-0000-000000000000"
+
+# Router paths keep their {placeholders}; the live matrix concretizes them.
+OPERATE_ROUTES = [
+    ("POST", "/api/v1/admin/hosts"),
+    ("PATCH", "/api/v1/admin/hosts/{host_id}"),
+    ("DELETE", "/api/v1/admin/hosts/{host_id}"),
+    ("POST", "/api/v1/admin/hosts/{host_id}/jobs"),
+    ("DELETE", "/api/v1/admin/hosts/{host_id}/jobs"),
+    ("POST", "/api/v1/admin/hosts/{host_id}/tokens"),
+    ("DELETE", "/api/v1/admin/hosts/{host_id}/tokens/{token_id}"),
+    ("POST", "/api/v1/admin/campaigns"),
+    ("POST", "/api/v1/admin/campaigns/{campaign_id}/activate"),
+    ("POST", "/api/v1/admin/campaigns/{campaign_id}/pause"),
+    ("POST", "/api/v1/admin/campaigns/{campaign_id}/resume"),
+    ("POST", "/api/v1/admin/campaigns/{campaign_id}/cancel"),
+    ("POST", "/api/v1/admin/enrollments"),
+    ("DELETE", "/api/v1/admin/enrollments/{enrollment_id}"),
+    ("DELETE", "/api/v1/admin/hosts/{host_id}/certificates/{certificate_id}"),
+    ("POST", "/api/v1/admin/hosts/{host_id}/schedules"),
+    ("PATCH", "/api/v1/admin/schedules/{schedule_id}"),
+    ("DELETE", "/api/v1/admin/schedules/{schedule_id}"),
+    ("POST", "/api/v1/admin/package-exclusions"),
+    ("DELETE", "/api/v1/admin/package-exclusions/{exclusion_id}"),
+    ("POST", "/api/v1/admin/webhooks"),
+    ("PATCH", "/api/v1/admin/webhooks/{webhook_id}"),
+    ("DELETE", "/api/v1/admin/webhooks/{webhook_id}"),
+    ("POST", "/api/v1/admin/webhooks/{webhook_id}/test"),
+]
+
+READ_PRIVATE_ROUTES = [
+    ("GET", "/api/v1/admin/hosts/{host_id}/tokens"),
+    ("GET", "/api/v1/admin/audit"),
+    ("GET", "/api/v1/admin/enrollments"),
+    ("GET", "/api/v1/admin/hosts/{host_id}/certificates"),
+]
+
+
+def _concrete(path: str) -> str:
+    """Fill path placeholders with valid values (dependency runs before
+    the handler, but invalid ids could 422 before it)."""
+    return (
+        path.replace("{token_id}", "1")
+        .replace("{certificate_id}", "1")
+        .replace("{host_id}", DUMMY_UUID)
+        .replace("{campaign_id}", DUMMY_UUID)
+        .replace("{enrollment_id}", DUMMY_UUID)
+        .replace("{schedule_id}", DUMMY_UUID)
+        .replace("{exclusion_id}", DUMMY_UUID)
+        .replace("{webhook_id}", DUMMY_UUID)
+    )
+
+
+def _router_route_permissions() -> dict:
+    """(method, path) -> permission | None, read off the seven admin
+    routers by dependency function identity."""
+    found = {}
+    for router in ADMIN_ROUTERS:
+        for route in router.routes:
+            deps = {d.dependency for d in getattr(route, "dependencies", [])}
+            if dep_operate in deps:
+                perm: str | None = roles.OPERATE
+            elif dep_read_private in deps:
+                perm = roles.READ_PRIVATE
+            else:
+                perm = None
+            methods = sorted(
+                m
+                for m in getattr(route, "methods", set())
+                if m not in ("HEAD", "OPTIONS")
+            )
+            for method in methods:
+                found[(method, route.path)] = perm
+    return found
+
+
+def _app_admin_routes() -> set:
+    """(method, path) for every /api/v1/admin path in the live app schema,
+    so a route added on any router (or a new router) cannot slip past."""
+    return {
+        (method.upper(), path)
+        for path, item in cadence_app.openapi()["paths"].items()
+        if path.startswith("/api/v1/admin")
+        for method in item
+        if method.upper() not in ("HEAD", "OPTIONS", "PARAMETERS")
+    }
+
+
+def test_no_admin_route_without_named_permission():
+    missing = sorted(
+        f"{method} {path}"
+        for (method, path), perm in _router_route_permissions().items()
+        if perm is None
+    )
+    assert missing == []
+
+
+def test_admin_route_permission_mapping_is_exact():
+    expected = {route: roles.OPERATE for route in OPERATE_ROUTES}
+    expected.update({route: roles.READ_PRIVATE for route in READ_PRIVATE_ROUTES})
+    assert _router_route_permissions() == expected
+    assert _app_admin_routes() == set(expected)
+
+
+def _op_headers() -> dict:
+    cookie = _session_cookie(actor=OPERATOR_EMAIL, role=roles.OPERATOR)
+    return {"X-Admin-Key": "", "Cookie": f"cadence_session={cookie}"}
+
+
+def _reader_headers() -> dict:
+    cookie = _session_cookie(role=roles.READER)
+    return {"X-Admin-Key": "", "Cookie": f"cadence_session={cookie}"}
+
+
+def test_reader_forbidden_on_every_operate_route(client, oidc_shaped):
+    headers = _reader_headers()
+    for method, path in OPERATE_ROUTES:
+        url = _concrete(path)
+        r = client.request(method, url, headers=headers, json={})
+        assert r.status_code == 403, (method, url, r.status_code, r.text)
+
+
+def test_operator_allowed_on_protected_reads(client, db_session, oidc_shaped):
+    host_id = _create_host_op(client)
+    for _method, path in READ_PRIVATE_ROUTES:
+        url = _concrete(path).replace(DUMMY_UUID, host_id)
+        assert client.get(url, headers=_reader_headers()).status_code == 200, path
+    assert (
+        client.get("/api/v1/admin/audit", headers=_op_headers()).status_code == 200
+    )
+
+
+def _create_host_op(client) -> str:
+    r = client.post(
+        "/api/v1/admin/hosts", headers=_op_headers(), json={"hostname": "rbac-matrix"}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_operator_writes_hosts_jobs_tokens(client, oidc_shaped):
+    host_id = _create_host_op(client)
+    headers = _op_headers()
+    assert (
+        client.patch(
+            f"/api/v1/admin/hosts/{host_id}",
+            headers=headers,
+            json={"tags": {"env": "rbac"}},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/v1/admin/hosts/{host_id}/jobs", headers=headers, json={}
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            f"/api/v1/admin/hosts/{host_id}/tokens", headers=headers, json={}
+        ).status_code
+        == 201
+    )
+
+
+def test_operator_writes_schedules_exclusions(client, oidc_shaped):
+    host_id = _create_host_op(client)
+    headers = _op_headers()
+    r = client.post(
+        f"/api/v1/admin/hosts/{host_id}/schedules",
+        headers=headers,
+        json={"kind": "weekly", "weekday": 6, "hour": 3, "minute": 0, "timezone": "UTC"},
+    )
+    assert r.status_code == 201, r.text
+    sched_id = r.json()["id"]
+    assert (
+        client.patch(
+            f"/api/v1/admin/schedules/{sched_id}", headers=headers, json={"hour": 4}
+        ).status_code
+        == 200
+    )
+    r = client.post(
+        "/api/v1/admin/package-exclusions",
+        headers=headers,
+        json={"scope": "global", "pattern": "linux-image*"},
+    )
+    assert r.status_code == 201, r.text
+    assert (
+        client.delete(
+            f"/api/v1/admin/package-exclusions/{r.json()['id']}", headers=headers
+        ).status_code
+        == 204
+    )
+    assert (
+        client.delete(f"/api/v1/admin/schedules/{sched_id}", headers=headers).status_code
+        == 204
+    )
+
+
+def test_operator_writes_webhooks_campaigns_enrollments(
+    client, oidc_shaped, tmp_path, monkeypatch
+):
+    from app.pki.client_ca import ensure_client_ca
+
+    material = ensure_client_ca(tmp_path / "server-ca")
+    monkeypatch.setattr(
+        "app.api.routes.enrollments.settings.server_ca_file",
+        str(material.root_certificate),
+    )
+    host_id = _create_host_op(client)
+    headers = _op_headers()
+    r = client.post(
+        "/api/v1/admin/webhooks",
+        headers=headers,
+        json={
+            "url": "https://hooks.example.test/api/webhooks/42/aaaaaaaaaaaaaaaa",
+            "event_types": ["job.succeeded"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    hook_id = r.json()["id"]
+    assert (
+        client.patch(
+            f"/api/v1/admin/webhooks/{hook_id}",
+            headers=headers,
+            json={"description": "rbac"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(f"/api/v1/admin/webhooks/{hook_id}/test", headers=headers).status_code
+        == 202
+    )
+    r = client.post(
+        "/api/v1/admin/campaigns",
+        headers=headers,
+        json={
+            "name": "rbac tuesday",
+            "host_ids": [host_id],
+            "stages": [1],
+            "max_concurrency": 1,
+            "max_failures": 1,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert (
+        client.post(
+            f"/api/v1/admin/campaigns/{r.json()['id']}/activate", headers=headers
+        ).status_code
+        == 200
+    )
+    r = client.post(
+        "/api/v1/admin/enrollments",
+        headers=headers,
+        json={"expected_hostname": "rbac-new"},
+    )
+    assert r.status_code == 201, r.text
+    assert (
+        client.delete(f"/api/v1/admin/webhooks/{hook_id}", headers=headers).status_code
+        == 204
+    )

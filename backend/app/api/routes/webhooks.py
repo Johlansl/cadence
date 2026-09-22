@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_db, require_admin_key
+from app.api.deps import get_db, require_operate
 from app.core.crypto import encrypt_token_secret
 from app.models.models import Webhook, WebhookDelivery
 from app.schemas.schemas import (
@@ -33,9 +33,7 @@ from app.webhooks import mask_url
 from app.webhooks.enqueue import enqueue_test
 
 router = APIRouter(prefix="/api/v1", tags=["webhooks"])
-admin_router = APIRouter(
-    prefix="/api/v1/admin", tags=["webhooks"], dependencies=[Depends(require_admin_key)]
-)
+admin_router = APIRouter(prefix="/api/v1/admin", tags=["webhooks"])
 
 
 def _aggregates(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
@@ -117,7 +115,10 @@ def get_webhook(webhook_id: uuid.UUID, db: Session = Depends(get_db)) -> Webhook
 
 
 @admin_router.post(
-    "/webhooks", response_model=WebhookCreated, status_code=http_status.HTTP_201_CREATED
+    "/webhooks",
+    response_model=WebhookCreated,
+    status_code=http_status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
 )
 def create_webhook(
     request: Request, payload: WebhookCreate, db: Session = Depends(get_db)
@@ -157,7 +158,11 @@ def create_webhook(
     )
 
 
-@admin_router.patch("/webhooks/{webhook_id}", response_model=WebhookOut)
+@admin_router.patch(
+    "/webhooks/{webhook_id}",
+    response_model=WebhookOut,
+    dependencies=[Depends(require_operate)],
+)
 def update_webhook(
     request: Request,
     webhook_id: uuid.UUID,
@@ -207,7 +212,9 @@ def update_webhook(
 
 
 @admin_router.delete(
-    "/webhooks/{webhook_id}", status_code=http_status.HTTP_204_NO_CONTENT
+    "/webhooks/{webhook_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
 )
 def delete_webhook(
     request: Request, webhook_id: uuid.UUID, db: Session = Depends(get_db)
@@ -232,6 +239,7 @@ def delete_webhook(
     "/webhooks/{webhook_id}/test",
     response_model=WebhookTestAccepted,
     status_code=http_status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_operate)],
 )
 def test_webhook(
     request: Request, webhook_id: uuid.UUID, db: Session = Depends(get_db)

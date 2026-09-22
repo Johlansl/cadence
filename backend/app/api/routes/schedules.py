@@ -16,15 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.audit import record_audit
-from app.api.deps import get_db, require_admin_key
+from app.api.deps import get_db, require_operate
 from app.core.schedule_timing import next_run_at
 from app.models.models import Host, Schedule
 from app.schemas.schemas import ScheduleIn, ScheduleOut, ScheduleUpdate
 
 router = APIRouter(prefix="/api/v1", tags=["schedules"])
-admin_router = APIRouter(
-    prefix="/api/v1/admin", tags=["schedules"], dependencies=[Depends(require_admin_key)]
-)
+admin_router = APIRouter(prefix="/api/v1/admin", tags=["schedules"])
 
 
 def _recompute(schedule: Schedule, *, now: datetime) -> None:
@@ -56,6 +54,7 @@ def list_host_schedules(host_id: uuid.UUID, db: Session = Depends(get_db)) -> li
     "/hosts/{host_id}/schedules",
     response_model=ScheduleOut,
     status_code=http_status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operate)],
 )
 def create_schedule(
     request: Request,
@@ -87,7 +86,11 @@ def create_schedule(
     return schedule
 
 
-@admin_router.patch("/schedules/{schedule_id}", response_model=ScheduleOut)
+@admin_router.patch(
+    "/schedules/{schedule_id}",
+    response_model=ScheduleOut,
+    dependencies=[Depends(require_operate)],
+)
 def update_schedule(
     request: Request,
     schedule_id: uuid.UUID,
@@ -127,7 +130,11 @@ def update_schedule(
     return schedule
 
 
-@admin_router.delete("/schedules/{schedule_id}", status_code=http_status.HTTP_204_NO_CONTENT)
+@admin_router.delete(
+    "/schedules/{schedule_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_operate)],
+)
 def delete_schedule(
     request: Request, schedule_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Response:
