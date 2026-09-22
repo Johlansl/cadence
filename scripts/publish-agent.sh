@@ -38,7 +38,7 @@ agent_version=$(git -C "$repo" describe --tags --match 'agent-v*' --dirty 2>/dev
 	| sed 's/^agent-v//' || true)
 
 echo "publish-agent.sh: building the agent (linux/amd64, static)${agent_version:+, version $agent_version}"
-docker run --rm -e "AGENT_VERSION=$agent_version" -v "$repo/agent":/s -w /s golang:1.23 sh -c '
+docker run --rm -e "AGENT_VERSION=$agent_version" -v "$repo/agent":/s -w /s golang:1.27 sh -c '
 	set -e
 	ldflags=""
 	[ -n "$AGENT_VERSION" ] && ldflags="-X main.agentVersion=$AGENT_VERSION"
