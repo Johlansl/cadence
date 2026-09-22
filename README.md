@@ -289,20 +289,45 @@ All configuration is environment variables. Server variables live in `.env`
 | `POSTGRES_USER` / `POSTGRES_DB` | `cadence` / `cadence` | database role and name |
 | `POSTGRES_PASSWORD` | - | **read only on first boot** of the `pgdata` volume; changing it later needs `down -v` or an `ALTER ROLE` |
 | `CADENCE_ADMIN_KEY` | - | shared secret for every admin write (`X-Admin-Key`). Use a strong value |
+| `CADENCE_ADMIN_KEY_PREVIOUS` | - (empty) | previous key still accepted while clients catch up during rotation |
 | `CADENCE_INTERNAL_PROXY_KEY` | - | separate 32+ character secret authenticating Caddy's transport-identity headers to the backend |
 | `CADENCE_DASHBOARD_AUTH` | `on` | basic-auth gate at Caddy on the dashboard + read/admin API (agent endpoints exempt). `off` disables it |
 | `CADENCE_DASHBOARD_USER` | `cadence` | basic-auth username |
 | `CADENCE_DASHBOARD_PASSWORD_HASH` | - | bcrypt hash of the password, **with every `$` doubled** (`gen-secrets.sh` / `rotate-dashboard-password.sh` handle this; Caddy refuses to start on a malformed hash, and logs a warning at boot if the bcrypt cost is below 12, the generators use 14) |
 | `CADENCE_SITE_ADDRESS` | `cadence.lan` | hostname Caddy serves and issues a cert for |
 | `CADENCE_AGENT_PORT` | `8443` | dedicated HTTPS port requiring an agent client certificate |
+| `CADENCE_API_DOCS_ENABLED` | `false` | serve `/docs`, `/redoc`, `/openapi.json` (behind basic-auth); `true` only in a dev `.env` |
+| `CADENCE_OIDC_ENABLED` | `false` | operator sign-in via OIDC; inert unless issuer, client id/secret and redirect URI are all set. See [docs/oidc.md](docs/oidc.md) |
+| `CADENCE_OIDC_ISSUER` / `CLIENT_ID` / `REDIRECT_URI` | - (empty) | required when enabled; issuer copied verbatim from the discovery document |
+| `CADENCE_OIDC_CLIENT_SECRET` | - (empty) | required when enabled; back-channel code exchange only, never logged. No default by design |
+| `CADENCE_OIDC_SCOPES` | `openid email profile` | requested scopes |
+| `CADENCE_OIDC_SESSION_TTL_SECONDS` | `28800` (8 h) | fixed session lifetime, re-login after; no sliding renewal |
+| `CADENCE_OIDC_CLOCK_SKEW_SECONDS` | `120` | leeway for `exp`/`iat` checks against provider clock drift |
+| `CADENCE_OIDC_COOKIE_SECURE` | `true` | `Secure` flag on session cookies; exists so tests can run the flow over plain HTTP |
 | `CADENCE_LEGACY_AGENT_ENDPOINTS` | no implicit value | explicit `on` during host migration, then `off`; Compose refuses to start if unset |
 | `CADENCE_ENROLLMENT_DEFAULT_TTL_MINUTES` | `30` | default one-time code lifetime; must be from 5 to 240 minutes |
 | `CADENCE_HTTP_BIND` | `127.0.0.1` | interface for Caddy's 80/443/8443; set `0.0.0.0` to serve the LAN |
 | `CADENCE_BACKEND_BIND` / `CADENCE_FRONTEND_BIND` | `127.0.0.1` | interface for the backend / plain-HTTP frontend ports; keep on loopback |
 | `CADENCE_TRUSTED_PROXIES` | - (empty) | reverse-proxy networks (CIDRs) whose `X-Forwarded-For` is trusted for the auth throttle and audit `client`; empty = use the direct peer IP. Set to the compose network subnet, see [Recording the real client IP](#recording-the-real-client-ip) |
 | `CADENCE_REPORTS_RETENTION_DAYS` / `CADENCE_JOBS_RETENTION_DAYS` | `90` | daily prune of `reports` / terminal `jobs`; `0` = keep forever |
+| `CADENCE_BACKUP_DIR` | `<repo>/backups` | base directory for `scripts/backup.sh` output, relative to the server checkout (not a fixed system path like `/var/backups`) |
+| `CADENCE_BACKUP_KEEP` | `14` | how many timestamped backup dirs to keep |
+| `CADENCE_PACKAGES_GC_ENABLED` | `true` | weekly sweep deleting `packages` rows no host references anymore |
 | `CADENCE_AUDIT_RETENTION_DAYS` | `365` | daily prune of the admin audit trail (`audit_log`); `0` = keep forever |
+| `CADENCE_TOKEN_DEFAULT_EXPIRY_DAYS` | `365` | default `expires_at` for new agent tokens; pass an explicit date to differ |
+| `CADENCE_TOKEN_ENCRYPTION_KEY` | - | required Fernet key resealing token secrets at rest; keep `.env` at mode `0600` |
+| `CADENCE_TOKEN_ENCRYPTION_KEY_PREVIOUS` | - (empty) | previous Fernet key still accepted for decryption during rotation |
+| `CADENCE_TOKEN_RETENTION_DAYS` | `90` | days since revocation/expiry before a dead token row is deleted; `0` = keep forever |
+| `CADENCE_SIGNATURE_WINDOW_SECONDS` | `300` | max drift between `X-Cadence-Timestamp` and server clock; bounds replay, not a nonce |
+| `CADENCE_RATELIMIT_ENABLED` | `true` | master switch for the successful-traffic rate limiter (auth failures use the separate throttle) |
+| `CADENCE_RATELIMIT_WINDOW_SECONDS` | `60` | counting window for the caps below |
+| `CADENCE_RATELIMIT_AGENT_MAX` / `ADMIN_MAX` / `DASHBOARD_MAX` / `ENROLLMENT_MAX` | `20` / `60` / `120` / `10` | max successful requests per window per key (agent token hash / admin IP / dashboard IP / enrollment peer) |
 | `CADENCE_JOB_RUNNING_TIMEOUT_SECONDS` | `7200` | a job stuck `running` longer than this is failed by the scheduler; `0` = off |
+| `CADENCE_MAX_REPORT_BYTES` / `CADENCE_MAX_REPORT_PACKAGES` | `5242880` (5 MiB) / `10000` | caps on a report body (stored verbatim); `0` disables that check. See [SECURITY.md](SECURITY.md) |
+| `CADENCE_ADVISORY_REFRESH_ENABLED` | `true` | scheduler pull of the Debian DSA/DLA feeds; `false` for CI / air-gapped installs |
+| `CADENCE_ADVISORY_FEED_URLS` | built-in Debian defaults | space/comma-separated feed override; empty = defaults in `app.advisories.debian` |
+| `CADENCE_CVE_SCORE_REFRESH_ENABLED` | `true` | scheduler resolution of cached CVSS scores from the NVD; `false` for CI / air-gapped installs |
+| `CADENCE_NVD_API_KEY` | - (empty, optional) | raises the NVD rate allowance; sent as `apiKey` header, never logged or stored |
 | `CADENCE_UPGRADE_MINIMUM_AVAILABLE_BYTES` | `1073741824` (1 GiB) | minimum free space for the filesystem backing `/var` before and after an upgrade |
 | `CADENCE_UPGRADE_BOOT_MINIMUM_AVAILABLE_BYTES` | `209715200` (200 MiB) | minimum free space for filesystems backing `/boot` and `/boot/efi`; missing paths are ignored |
 | `CADENCE_UPGRADE_LOCK_WAIT_SECONDS` | `120` | how long a pre-check waits for apt/dpkg advisory locks to clear; maximum 3600 |
@@ -329,6 +354,7 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_ENABLE_UPGRADES` | no | `true` | kill-switch: if `false`, a triggered job is reported `failed` |
 | `CADENCE_ENABLE_REBOOT` | no | `true` | kill-switch: if `false`, never reboot even under an `auto` policy |
 | `CADENCE_HTTP_TIMEOUT_SECONDS` | no | `30` | HTTP client timeout |
+| `CADENCE_LOG_LEVEL` | no | - (unset) | anything but `debug` logs at info and above; `debug` enables debug lines (timestamps come from journald) |
 
 ## Operations
 
