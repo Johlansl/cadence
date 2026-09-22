@@ -482,7 +482,11 @@ runner minutes) and `.github/workflows/ci.yml` on the public GitHub mirror
 The host that runs the Cadence stack is **monitored like any other host but
 never auto-patched by Cadence.** Give it (and the hypervisor it runs on) a
 `reboot_policy` of `never`, point no schedule at it, and apply its own updates
-out of band. Rationale: the box running the control plane must not restart
+out of band. `GET /api/v1/metrics` (Prometheus text, same basic-auth as the
+dashboard; `cadence_db_up 0` at 200 when the database is down) is the scrape
+surface for an external monitor; no metrics library is vendored on purpose
+(hand-rolled exposition over small/bounded tables only, never
+reports/`host_packages`). Rationale: the box running the control plane must not restart
 itself mid-job, or apply an upgrade on Cadence's own say-so and take the
 scheduler / API down with it. Cadence still reports its pending updates so they
 are visible, the operator acts on them manually.

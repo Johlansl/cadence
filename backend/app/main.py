@@ -6,11 +6,14 @@ import logging
 import time
 import uuid
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
 
 from app import __version__
+from app.api.deps import get_db
 from app.api.routes import (
     admin,
     auth,
@@ -146,6 +149,21 @@ def create_app(*, enable_docs: bool | None = None) -> FastAPI:
     def healthz() -> dict[str, str]:
         """Liveness: the process is up. Does not touch the database."""
         return {"status": "ok"}
+
+    @app.get("/api/v1/metrics", tags=["meta"])
+    def metrics(db: Session = Depends(get_db)) -> Response:
+        """Self-monitoring for an external Prometheus scraper (see
+        app.metrics). Behind Caddy basic-auth like the other dashboard
+        reads. Answers 200 even with a dead database -- the body then
+        carries only `cadence_db_up 0`, since scrapers ignore non-2xx
+        bodies."""
+        from app.metrics import CONTENT_TYPE, collect_metrics, render_down
+
+        try:
+            body = collect_metrics(db)
+        except DBAPIError:
+            body = render_down()
+        return PlainTextResponse(body, media_type=CONTENT_TYPE)
 
     @app.get("/readyz", tags=["meta"])
     def readyz() -> dict[str, str]:

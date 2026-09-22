@@ -572,6 +572,26 @@ curl -s https://<site>/api/v1/admin/audit -H "X-Admin-Key: $CADENCE_ADMIN_KEY"
 Callers may set `X-Actor: alice` on their writes to stamp the `actor` column
 (it defaults to `admin`, the shared key proves no identity on its own).
 
+### Self-monitoring
+
+Beyond `/healthz` (liveness) and `/readyz` (database reachability),
+`GET /api/v1/metrics` exposes Prometheus-text gauges for an external
+scraper: job counts by status and type, campaigns by status, webhook
+delivery backlog and recent failures, hosts by freshness bucket and
+unhealthy count, agent versions across the fleet, and the scheduler
+heartbeat age. It sits behind the same basic-auth as the dashboard reads
+(agent endpoints stay exempt); a dead database still answers 200 with only
+`cadence_db_up 0`, since scrapers ignore non-2xx bodies:
+
+```yaml
+scrape_configs:
+  - job_name: cadence
+    basic_auth: {username: cadence, password: <dashboard password>}
+    static_configs: [{targets: ["cadence.lan:443"]}]
+    metrics_path: /api/v1/metrics
+    scheme: https
+```
+
 ### Webhooks
 
 Cadence can POST a signed JSON body to an endpoint you control when a job
