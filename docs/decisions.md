@@ -296,6 +296,9 @@ rather than something to defer until someone asks.
   refreshed by ~30 s polling, no websocket. Dark theme only.
 - **Pinned base images** (`postgres:16`, `node:22-alpine`, `nginx:1.27-alpine`,
   Go 1.23): stable, no reason to move.
+- Revoir les versions majeures épinglées (postgres, caddy, python, node,
+  nginx, Go) à chaque release mineure, et consigner l'écart accepté le cas
+  échéant.
 
 ## Versioning
 
