@@ -131,6 +131,19 @@ def initialize_client_pki() -> None:
     )
 
 
+def warn_rbac_without_operators() -> None:
+    """Loud fail-safe for the RBAC default: OIDC on with an empty operator
+    allowlist silently turns every OIDC account into a reader at next
+    login. Warn at boot so no deploy discovers it by surprise (the shared
+    key keeps working regardless)."""
+    if settings.oidc_enabled and not settings.oidc_operator_emails:
+        log.warning(
+            "OIDC is enabled but CADENCE_OIDC_OPERATOR_EMAILS is empty: "
+            "every OIDC account will be a reader (writes refused with 403). "
+            "List operator emails or keep using the shared X-Admin-Key."
+        )
+
+
 def main() -> None:
     configure_logging()
     # Alembic's fileConfig (run in-process by command.upgrade) resets the root
@@ -139,6 +152,7 @@ def main() -> None:
     wait_for_db()
     run_migrations()
     initialize_client_pki()
+    warn_rbac_without_operators()
 
 
 if __name__ == "__main__":

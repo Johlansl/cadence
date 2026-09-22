@@ -26,6 +26,30 @@ operator setup; the design rationale lives in
 If the provider is down, sign-in fails closed and the shared key keeps
 working -- there is no lock-out path through SSO.
 
+## Roles (RBAC v1)
+
+OIDC accounts carry one of two roles. A **reader** observes: every public
+read plus the reads that need an authenticated caller (token, enrollment
+and certificate lists, audit trail). An **operator** does everything the
+shared `X-Admin-Key` does, under their nominative identity. The key itself
+stays outside this model: a total bypass, unchanged.
+
+Membership is static config: `CADENCE_OIDC_OPERATOR_EMAILS` lists the
+operator emails (comma or space separated, matched case-insensitively
+against the session actor or the ID token email -- list the value shown
+by `/api/v1/auth/me`). The role is resolved at login and sealed into the
+session, so edits apply at the next login (bounded by the 8 h session
+TTL), and sessions sealed before RBAC existed read as reader.
+
+> **Breaking change for existing OIDC deployments.** Before RBAC, every
+> signed-in account had full access through the session. After this
+> version, an account NOT listed in `CADENCE_OIDC_OPERATOR_EMAILS`
+> becomes a reader at next login and its writes are refused with 403.
+> Before deploying: put your own account in the variable. If you miss
+> it, nothing breaks irreversibly -- the shared key still works, and a
+> backend boot with OIDC on and an empty allowlist logs an explicit
+> warning. Recovery is listing the email and signing in again.
+
 ## Provider setup (Authentik)
 
 In the Authentik admin interface:

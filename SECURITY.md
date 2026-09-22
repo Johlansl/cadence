@@ -19,9 +19,11 @@ exposing it beyond a LAN you control.
 
 ### One shared credential guards the dashboard and read/admin API
 
-There is **no RBAC or user management** (a deliberate V1 choice): OIDC signs
-operators in individually, but every signed-in operator has the same powers.
-Instead,
+There is no user management, and RBAC is two roles only (a deliberate
+V1 choice): OIDC signs operators in individually; an account listed in
+`CADENCE_OIDC_OPERATOR_EMAILS` is an **operator** with full powers, every
+other signed-in account is a **reader** (reads only, writes refused with
+403). The shared `X-Admin-Key` bypasses roles entirely. Instead,
 Caddy applies HTTP **basic auth**, a single shared username/password
 (`CADENCE_DASHBOARD_*`), to everything except the agent endpoints
 (`/api/v1/reports`, `/api/v1/agent/*`, `/api/v1/jobs/*/result`, which use
@@ -99,6 +101,12 @@ session. New trust this adds, stated plainly:
 - logout ends the Cadence session only, not the provider SSO session;
 - sign-in transport failures (dead provider) answer 502/401 with no detail
   to the browser and no traceback in the log;
+- operator membership is static config (`CADENCE_OIDC_OPERATOR_EMAILS`,
+  matched against the session actor or token email); an account not
+  listed is a reader, and sessions sealed before RBAC read as reader.
+  Authenticated-but-forbidden writes answer 403; the frontend hides
+  nothing (write buttons refuse with an explanation, the backend is the
+  boundary);
 - historic `admin` audit rows are never rewritten and keep meaning
   "someone with the shared key", before or after SSO exists.
 

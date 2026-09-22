@@ -6,6 +6,23 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
+## 0.5.0
+
+- RBAC v1 for OIDC accounts: reader by default, operator for the emails
+  in the new `CADENCE_OIDC_OPERATOR_EMAILS` setting (resolved at login,
+  sealed in the session; pre-RBAC sessions read as reader). All writes
+  need the operator role, the four reads that required the key need any
+  authenticated caller, public reads are unchanged, and the shared
+  `X-Admin-Key` stays a total bypass. Breaking change for existing OIDC
+  deployments: an unlisted account becomes a reader at next login
+  (list your own account before deploying; boot warns when OIDC is on
+  with an empty allowlist). Covered by `test_rbac.py` (role resolution,
+  named-permission dependencies, exact 28-route permission mapping plus
+  a filet against unguarded admin routes, live reader/operator matrix)
+  and dashboard role gating in `SessionAuth` (`useAdminKeyAction`
+  refuses readers locally; the backend stays the boundary).
+  See `docs/oidc.md` "Roles" and `SECURITY.md`.
+
 ## 0.4.1
 
 - Job robustness, no new capability. One active job per host is now
