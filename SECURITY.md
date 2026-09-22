@@ -4,9 +4,10 @@
 
 Please report security issues **privately**, not as a public issue:
 
-- GitHub: use **Report a vulnerability** under the repository's *Security* tab
-  (private vulnerability reporting), or
-- email the maintainers at `<security contact>`.
+- GitHub: open a draft advisory at
+  `https://github.com/Johlansl/cadence/security/advisories/new`
+  (**Report a vulnerability** under the repository's *Security* tab,
+  private vulnerability reporting).
 
 Please include a description, affected version/commit, and a reproduction if you
 have one. We aim to acknowledge within a few days.
