@@ -24,7 +24,7 @@ pieces fit, and [README.md](README.md) for deployment/ops.
 
 ```sh
 # agent
-docker run --rm -v "$PWD/agent":/s -w /s golang:1.23 \
+docker run --rm -v "$PWD/agent":/s -w /s golang:1.27 \
   sh -c 'go vet ./... && go test ./... && CGO_ENABLED=0 go build -o /dev/null ./cmd/agent'
 
 # backend (needs the db service; runs pytest against a real PostgreSQL)

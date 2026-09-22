@@ -30,6 +30,7 @@ jobs:
       backend: ${{ steps.f.outputs.backend }}
       frontend: ${{ steps.f.outputs.frontend }}
       scripts: ${{ steps.f.outputs.scripts }}
+      go-pins: ${{ steps.f.outputs.go-pins }}
       stack: ${{ steps.f.outputs.stack }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -47,7 +48,7 @@ jobs:
           all_changed() {
             {
               echo "agent=true"; echo "backend=true"; echo "frontend=true"
-              echo "scripts=true"; echo "stack=true"
+              echo "scripts=true"; echo "go-pins=true"; echo "stack=true"
             } >> "$GITHUB_OUTPUT"
             echo "changes: range undetermined -> running the full matrix"
             exit 0
@@ -78,6 +79,7 @@ jobs:
             echo "backend=$(match '^backend/|^agent/internal/report/|^agent/internal/client/|^docs/decisions\.md$|^\.github/workflows/ci\.yml$')"
             echo "frontend=$(match '^frontend/|^\.github/workflows/ci\.yml$')"
             echo "scripts=$(match '^scripts/|^caddy/|^packaging/.*\.sh$|^\.github/workflows/ci\.yml$')"
+            echo "go-pins=$(match '^agent/go\.mod$|^\.gitlab-ci\.yml$|^\.github/workflows/ci\.yml$|^\.github/workflows/release\.yml$|^scripts/publish-agent\.sh$|^scripts/check-go-pins\.sh$|^README\.md$|^CONTRIBUTING\.md$|^CLAUDE\.md$')"
             echo "stack=$(match '^docker-compose\.yml$|^Caddyfile$|^caddy/|^backend/|^frontend/|^\.env\.example$|^\.github/workflows/ci\.yml$')"
           } >> "$GITHUB_OUTPUT"
 
@@ -131,6 +133,14 @@ jobs:
             echo "FAIL: entrypoint should skip the check when auth is off"; exit 1
           fi
           echo "entrypoint validation checks OK"
+
+  go-pins:
+    needs: changes
+    if: needs.changes.outputs.go-pins == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sh scripts/check-go-pins.sh
 
   backend:
     needs: changes
@@ -255,7 +265,7 @@ jobs:
   # Single required-check surface. Green when every component job either passed
   # or was skipped; red if any executed job failed or was cancelled.
   gate:
-    needs: [changes, agent, backend, frontend, scripts, stack]
+    needs: [changes, agent, backend, frontend, scripts, go-pins, stack]
     if: always()
     runs-on: ubuntu-latest
     steps:
