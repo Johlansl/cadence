@@ -77,9 +77,11 @@ describe('SessionAuth', () => {
     expect(methods).toContain('POST')
   })
 
-  it('runs admin actions on the session without asking for a key', async () => {
+  it('runs admin actions on an operator session without asking for a key', async () => {
     const seen: string[] = []
-    installFetchMock({ [ME_URL]: { body: { authenticated: true, actor: 'op@example.com' } } })
+    installFetchMock({
+      [ME_URL]: { body: { authenticated: true, actor: 'op@example.com', role: 'operator' } },
+    })
     function Probe() {
       const a = useAdminKeyAction(async (key: string): Promise<AdminWriteResult<null>> => {
         seen.push(key)
@@ -88,7 +90,12 @@ describe('SessionAuth', () => {
       const { loading } = useSession()
       // findByRole below waits for the session to load before clicking.
       if (loading) return <p>loading</p>
-      return <button onClick={() => void a.run()}>go</button>
+      return (
+        <>
+          <button onClick={() => void a.run()}>go</button>
+          {a.error && <p>{a.error}</p>}
+        </>
+      )
     }
     render(
       <SessionProvider>
@@ -98,5 +105,75 @@ describe('SessionAuth', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'go' }))
     await waitFor(() => expect(seen).toEqual(['']))
     expect(screen.queryByPlaceholderText(/admin key/i)).not.toBeInTheDocument()
+  })
+
+  it('refuses admin actions on a reader session without calling the backend', async () => {
+    const seen: string[] = []
+    installFetchMock({
+      [ME_URL]: { body: { authenticated: true, actor: 'ro@example.com', role: 'reader' } },
+    })
+    function Probe() {
+      const a = useAdminKeyAction(async (key: string): Promise<AdminWriteResult<null>> => {
+        seen.push(key)
+        return { ok: true, status: 200, data: null }
+      })
+      const { loading } = useSession()
+      if (loading) return <p>loading</p>
+      return (
+        <>
+          <button onClick={() => void a.run()}>go</button>
+          {a.error && <p>{a.error}</p>}
+        </>
+      )
+    }
+    render(
+      <SessionProvider>
+        <Probe />
+      </SessionProvider>,
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'go' }))
+    await screen.findByText(/reader role/i)
+    expect(seen).toEqual([])
+    expect(screen.queryByPlaceholderText(/admin key/i)).not.toBeInTheDocument()
+  })
+
+  it('refuses admin actions on a pre-RBAC session without a role', async () => {
+    const seen: string[] = []
+    installFetchMock({ [ME_URL]: { body: { authenticated: true, actor: 'old@example.com' } } })
+    function Probe() {
+      const a = useAdminKeyAction(async (key: string): Promise<AdminWriteResult<null>> => {
+        seen.push(key)
+        return { ok: true, status: 200, data: null }
+      })
+      const { loading } = useSession()
+      if (loading) return <p>loading</p>
+      return (
+        <>
+          <button onClick={() => void a.run()}>go</button>
+          {a.error && <p>{a.error}</p>}
+        </>
+      )
+    }
+    render(
+      <SessionProvider>
+        <Probe />
+      </SessionProvider>,
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'go' }))
+    await screen.findByText(/reader role/i)
+    expect(seen).toEqual([])
+  })
+
+  it('shows the session role badge next to the actor', async () => {
+    installFetchMock({
+      [ME_URL]: { body: { authenticated: true, actor: 'ro@example.com', role: 'reader' } },
+    })
+    render(
+      <SessionProvider>
+        <SessionButton />
+      </SessionProvider>,
+    )
+    expect(await screen.findByText('ro@example.com')).toBeInTheDocument()
+    expect(await screen.findByText('reader')).toBeInTheDocument()
   })
 })

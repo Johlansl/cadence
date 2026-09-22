@@ -72,6 +72,14 @@ export function SessionButton() {
     return (
       <span className="flex items-center gap-2 text-xs text-zinc-400">
         <span title="Signed in via SSO">{session.actor ?? 'signed in'}</span>
+        {session.role && (
+          <span
+            title={session.role === 'operator' ? 'Can change fleet state' : 'Viewing only'}
+            className="rounded border border-zinc-700 px-1 font-mono text-[10px] uppercase tracking-widest text-zinc-500"
+          >
+            {session.role}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => void logout()}

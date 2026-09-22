@@ -12,12 +12,21 @@ export function useAdminKeyAction<T>(action: (key: string) => Promise<AdminWrite
   const [needKey, setNeedKey] = useState(false)
   const [keyDraft, setKeyDraft] = useState('')
   const {
-    session: { authenticated },
+    session: { authenticated, role },
     refresh,
   } = useSession()
 
   const run = useCallback(async (): Promise<AdminWriteResult<T> | undefined> => {
     if (authenticated) {
+      // RBAC v1: only operator sessions may write. Readers (and pre-RBAC
+      // sessions without a role, which read as reader) are refused here
+      // with an explanation instead of sending a request the backend
+      // would answer 403. Cosmetic only: the backend re-checks the sealed
+      // role on every write, this never replaces that check.
+      if (role !== 'operator') {
+        setError('Reader role: viewing only. Sign out to act with the admin key.')
+        return
+      }
       // SSO session: the cookie authenticates, the header goes empty and
       // the backend attributes the action to the verified identity.
       setBusy(true)
@@ -58,7 +67,7 @@ export function useAdminKeyAction<T>(action: (key: string) => Promise<AdminWrite
     } finally {
       setBusy(false)
     }
-  }, [action, authenticated, refresh])
+  }, [action, authenticated, role, refresh])
 
   const submitKey = useCallback(async (): Promise<AdminWriteResult<T> | undefined> => {
     if (!keyDraft.trim()) return

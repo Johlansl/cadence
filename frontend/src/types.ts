@@ -61,6 +61,9 @@ export interface SessionInfo {
   authenticated: boolean
   actor?: string | null
   sub?: string | null
+  // RBAC v1 role from /api/v1/auth/me ('operator' | 'reader'). Absent on
+  // sessions sealed before RBAC existed: those read as reader everywhere.
+  role?: string | null
 }
 
 export interface AdvisoryRef {
