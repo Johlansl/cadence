@@ -30,7 +30,17 @@ DNS) and tools that only show you the problem without fixing it. It gives you
 - **Upgrade health checks**: validate disk, dpkg, apt repositories and package
   locks before an upgrade, then verify dpkg, apt, failed services, disk and the
   reboot signal afterwards. The dashboard keeps apt's result separate from the
-  resulting host health.
+  resulting host health. A standalone `health_check` job re-runs the
+  post-checks with no upgrade attached (manually, or once per boot), so health
+  never goes stale between upgrades.
+- **Package exclusions**: keep packages or families off automatic upgrades,
+  globally, per host, or per tag (`linux-image*`, `docker-ce`, ...). The
+  server resolves the rules per host and the agent reconciles dpkg holds
+  toward them.
+- **Security advisories**: pending security updates link to their Debian
+  DSA/DLA advisories, and each linked CVE can show a cached CVSS base score
+  and severity resolved from the NVD by the scheduler. Best-effort
+  enrichment, not a vulnerability scan.
 - **Reboots**: per-host policy (`never` / `auto` / `prompt`), overridable per
   job; the agent reboots only when the upgrade actually left one pending.
 - **Maintenance windows**: one recurring weekly/monthly window per host,
@@ -41,9 +51,11 @@ DNS) and tools that only show you the problem without fixing it. It gives you
 - **History & retention**: append-only report and job logs, pruned on a
   configurable schedule.
 
-Not in v1 (see [docs/decisions.md](docs/decisions.md#v1-scope)): package
-exclusion lists, multi-host reboot orchestration, notifications, non-apt
-package managers, multi-user / RBAC.
+Not in v1 (see [docs/decisions.md](docs/decisions.md#v1-scope)):
+multi-host reboot orchestration, non-apt package managers, multi-user / RBAC.
+Webhooks carry one generic signed JSON shape; chat-native formatting
+(Discord / Slack / Teams) stays out of scope by design, relay it yourself
+(see [docs/webhooks.md](docs/webhooks.md)).
 
 ## How it fits together
 
@@ -121,7 +133,7 @@ Instead of `--build`, pull the images published to GHCR on each `v*` release
 overlay and set `CADENCE_VERSION` in `.env` (omit it for `:latest`):
 
 ```sh
-echo 'CADENCE_VERSION=0.4.0' >> .env
+echo 'CADENCE_VERSION=0.4.1' >> .env
 docker compose -f docker-compose.yml -f docker-compose.release.yml pull
 docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
 ```
@@ -129,7 +141,7 @@ docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
 Each image carries a Sigstore build-provenance attestation:
 
 ```sh
-gh attestation verify oci://ghcr.io/johlansl/cadence-backend:0.4.0 --repo Johlansl/cadence
+gh attestation verify oci://ghcr.io/johlansl/cadence-backend:0.4.1 --repo Johlansl/cadence
 ```
 
 `scripts/deploy.sh` on the central server always builds from source and ignores
@@ -196,7 +208,7 @@ deliberately does not establish first-contact trust or create credentials;
 fresh hosts must still complete enrollment first.
 
 ```sh
-VER=0.7.2; ARCH=amd64
+VER=0.14.0; ARCH=amd64
 curl -fsSLO "https://github.com/Johlansl/cadence/releases/download/agent-v$VER/cadence-agent_${VER}-1_${ARCH}.deb"
 curl -fsSLO "https://github.com/Johlansl/cadence/releases/download/agent-v$VER/cadence-agent_${VER}-1_${ARCH}.deb.sha256"
 sha256sum -c "cadence-agent_${VER}-1_${ARCH}.deb.sha256"
@@ -254,7 +266,7 @@ a separate channel, not minisign-signed (the fleet key never touches CI), but
 each carries a Sigstore build-provenance attestation:
 
 ```sh
-gh release download agent-v0.7.1 --repo Johlansl/cadence -p 'cadence-agent-linux-amd64*'
+gh release download agent-v0.14.0 --repo Johlansl/cadence -p 'cadence-agent-linux-amd64*'
 sha256sum -c cadence-agent-linux-amd64.sha256
 gh attestation verify cadence-agent-linux-amd64 --repo Johlansl/cadence
 ```
@@ -478,7 +490,7 @@ immediately before.
 ### Upgrading the agent fleet
 
 Tag the release first so the built binary reports the right version:
-`git tag -a agent-v0.7.0 -m 'agent 0.7.0'` on the commit matching the newest
+`git tag -a agent-v0.14.0 -m 'agent 0.14.0'` on the commit matching the newest
 `agent/CHANGELOG.md` heading, and push the tag. `scripts/publish-agent.sh`
 stamps that tag into the binary (`git describe`, via `-ldflags`); an untagged
 build falls back to the `agentVersion` literal in `agent/cmd/agent/main.go`.
@@ -585,7 +597,8 @@ cd frontend && npm ci && npm run lint && npm test && npm run build
 npm run dev            # http://localhost:5173, proxies /api to http://localhost:8000
 ```
 
-CI runs the three suites plus a full `docker compose` bring-up on every push.
+CI runs the matching suites on every push (jobs are path-filtered); the full
+`docker compose` bring-up (`stack` job) runs on `main` and merge requests.
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
@@ -594,7 +607,9 @@ A single shared basic-auth credential gates the dashboard and read/admin API
 (on by default; agent endpoints are exempt), Caddy binds to loopback by
 default, and `CADENCE_ADMIN_KEY` authorizes every write. Successful admin
 writes are recorded in an audit trail (`GET /api/v1/admin/audit`), though the
-shared key means it cannot attribute them to a real user. Agent tokens
+shared key means it cannot attribute them to a real user. Operators can
+alternatively sign in via OIDC (optional, see [docs/oidc.md](docs/oidc.md));
+their writes audit under the verified subject. Agent tokens
 (`agent_tokens`) can be rotated, given an expiry and revoked. There is no
 multi-user auth and agents fully trust the server. Before exposing Cadence
 beyond a network you control, read **[SECURITY.md](SECURITY.md)**. Report
