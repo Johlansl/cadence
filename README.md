@@ -11,10 +11,11 @@ DNS) and tools that only show you the problem without fixing it. It gives you
 **visibility and remediation** in one place, on a 2 vCPU / 2 GB box.
 
 > **Status: v1, single-operator.** It works and is in real use. There is no
-> multi-user auth or RBAC; a single shared basic-auth credential gates the
+> RBAC or user management; a single shared basic-auth credential gates the
 > dashboard and read/admin API (on by default), and agents fully trust the
-> server. Read [SECURITY.md](SECURITY.md) before exposing it beyond a trusted
-> network.
+> server. Operators can also sign in individually via OIDC, but permissions
+> are not differentiated. Read [SECURITY.md](SECURITY.md) before exposing it
+> beyond a trusted network.
 
 ## What it does
 
@@ -611,7 +612,8 @@ shared key means it cannot attribute them to a real user. Operators can
 alternatively sign in via OIDC (optional, see [docs/oidc.md](docs/oidc.md));
 their writes audit under the verified subject. Agent tokens
 (`agent_tokens`) can be rotated, given an expiry and revoked. There is no
-multi-user auth and agents fully trust the server. Before exposing Cadence
+RBAC or user management (OIDC signs operators in individually but grants no
+differentiated permissions), and agents fully trust the server. Before exposing Cadence
 beyond a network you control, read **[SECURITY.md](SECURITY.md)**. Report
 vulnerabilities privately (same file).
 

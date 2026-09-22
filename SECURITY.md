@@ -18,7 +18,9 @@ exposing it beyond a LAN you control.
 
 ### One shared credential guards the dashboard and read/admin API
 
-There is **no multi-user auth and no RBAC** (a deliberate V1 choice). Instead,
+There is **no RBAC or user management** (a deliberate V1 choice): OIDC signs
+operators in individually, but every signed-in operator has the same powers.
+Instead,
 Caddy applies HTTP **basic auth**, a single shared username/password
 (`CADENCE_DASHBOARD_*`), to everything except the agent endpoints
 (`/api/v1/reports`, `/api/v1/agent/*`, `/api/v1/jobs/*/result`, which use
@@ -31,8 +33,10 @@ The interactive API docs (`/docs`, `/redoc`) and the OpenAPI schema
 `CADENCE_API_DOCS_ENABLED` (set it true only in a dev `.env`). When enabled
 they are served through Caddy behind the same basic-auth as the read API.
 
-What this does *not* give you: per-user identity (writes are audited, but only
-as far as the optional `X-Actor` header, see *Admin key* below), brute-force
+What this does *not* give you: per-user identity on the shared-key path
+(key writes are audited only as far as the optional `X-Actor` header, see
+*Admin key* below; OIDC-session writes carry the verified subject instead,
+see *Admin SSO*), brute-force
 protection at the proxy (rate-limit upstream if exposed), or defence against a
 leaked shared password. `CADENCE_DASHBOARD_AUTH=off` removes the gate entirely,
 only do that behind a VPN or on a management VLAN.
