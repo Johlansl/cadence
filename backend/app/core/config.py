@@ -301,6 +301,19 @@ class Settings:
         # production (Caddy serves https); the knob exists only so tests can
         # exercise the flow over plain http.
         self.oidc_cookie_secure: bool = _bool_env("CADENCE_OIDC_COOKIE_SECURE", True)
+        # OIDC operator allowlist (RBAC v1): entries match the session actor
+        # or the ID token email, case-insensitively. Comma/space separated,
+        # like the other list settings. Empty (default) means every OIDC
+        # account is a reader; the shared X-Admin-Key is unaffected either
+        # way. Edits apply at the next login (the role is sealed in the
+        # session, bounded by its TTL).
+        self.oidc_operator_emails: list[str] = [
+            item.strip().lower()
+            for item in os.environ.get("CADENCE_OIDC_OPERATOR_EMAILS", "")
+            .replace(",", " ")
+            .split()
+            if item.strip()
+        ]
 
         # The shared `packages` dimension is get-or-created on every report and
         # never shrinks. A weekly scheduler sweep deletes rows no host_packages

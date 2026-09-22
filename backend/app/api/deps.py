@@ -12,6 +12,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth import roles
 from app.auth.oidc import open_session
 from app.core.config import settings
 from app.core.crypto import decrypt_token_secret
@@ -117,6 +118,72 @@ async def require_admin_key(
         request, f"admin:{ip}", limit=settings.ratelimit_admin_max,
         surface="admin", key_label=ip,
     )
+
+
+def session_role(request: Request) -> str | None:
+    """Sealed RBAC role for this request (None when no valid session).
+    A missing or unknown value reads as reader: cookies sealed before RBAC
+    existed fail closed instead of failing open."""
+    if not _oidc_sessions_honored():
+        return None
+    session = open_session(
+        settings.token_encryption_key, request.cookies.get("cadence_session", "")
+    )
+    if session is None or not session.get("actor"):
+        return None
+    return roles.role_from_session(session)
+
+
+async def _require_permission(
+    request: Request, x_admin_key: str, permission: str
+) -> None:
+    """Shared RBAC core behind the named-permission dependencies below. The
+    shared key bypasses every permission (super-user, unchanged behavior,
+    including the independent key throttle). A valid OIDC session takes the
+    permission from its sealed role: operator holds all v1 permissions, a
+    reader holds read_private only. Anything else is 403, never 401: the
+    caller is authenticated but not allowed."""
+    ip = client_ip(request)
+    actor = session_actor(request)
+    if actor is not None:
+        role = session_role(request) or roles.READER
+        request.state.oidc_actor = actor
+        request.state.auth_scheme = "oidc"
+        request.state.oidc_role = role
+        if permission == roles.OPERATE and role != roles.OPERATOR:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "insufficient role for this action"
+            )
+        _enforce_rate_limit(
+            request, f"admin:{ip}", limit=settings.ratelimit_admin_max,
+            surface="admin", key_label=ip,
+        )
+        return
+    ok = hmac.compare_digest(x_admin_key, settings.admin_key)
+    if settings.admin_key_previous:
+        ok |= hmac.compare_digest(x_admin_key, settings.admin_key_previous)
+    if not ok:
+        await _reject_401(ip, "admin-key", "invalid admin key")
+    throttle.record_success(ip)  # clear any backoff earned by earlier typos
+    _enforce_rate_limit(
+        request, f"admin:{ip}", limit=settings.ratelimit_admin_max,
+        surface="admin", key_label=ip,
+    )
+
+
+async def require_operate(
+    request: Request, x_admin_key: str = Header(..., alias="X-Admin-Key")
+) -> None:
+    """Every write: shared key, or an OIDC session with the operator role."""
+    await _require_permission(request, x_admin_key, roles.OPERATE)
+
+
+async def require_read_private(
+    request: Request, x_admin_key: str = Header(..., alias="X-Admin-Key")
+) -> None:
+    """Reads that need an authenticated caller: shared key, or any OIDC
+    session (operators and readers alike). Public reads take no guard."""
+    await _require_permission(request, x_admin_key, roles.READ_PRIVATE)
 
 
 def _resolve_active_token(

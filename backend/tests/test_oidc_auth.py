@@ -264,6 +264,7 @@ def test_me_and_logout(client, oidc_on, stub_provider):
         "authenticated": True,
         "actor": "johlan@example.com",
         "sub": "user-uuid-1",
+        "role": "reader",
     }
     assert client.post("/api/v1/auth/logout").json() == {"ok": True}
     assert client.get("/api/v1/auth/me").json() == {"authenticated": False}

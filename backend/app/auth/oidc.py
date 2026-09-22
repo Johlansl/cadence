@@ -332,13 +332,17 @@ def seal_session(
     name: str | None,
     ttl_seconds: int,
     actor: str | None = None,
+    role: str | None = None,
 ) -> str:
     """Seal a session payload (URL-safe token for the cookie). The resolved
     audit actor is sealed alongside so request handling never re-derives it
-    (and cannot disagree with what login saw)."""
+    (and cannot disagree with what login saw); the RBAC role rides along
+    the same way (absent on pre-RBAC cookies, which read as reader)."""
     data: dict[str, Any] = {"sub": sub, "email": email, "name": name}
     if actor is not None:
         data["actor"] = actor
+    if role is not None:
+        data["role"] = role
     return seal_token(fernet_key, SESSION_PURPOSE, data, ttl_seconds)
 
 

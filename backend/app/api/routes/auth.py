@@ -16,7 +16,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from app.auth import oidc
+from app.auth import oidc, roles
 from app.auth.oidc import (
     STATE_PURPOSE,
     STATE_TTL_SECONDS,
@@ -152,6 +152,11 @@ def oidc_callback(
     except OidcError as exc:
         raise HTTPException(status_code=401, detail="sign-in failed") from exc
     actor = actor_from_claims(claims)
+    role = roles.resolve_role(
+        actor=actor,
+        email=claims.get("email") if isinstance(claims.get("email"), str) else None,
+        operators=settings.oidc_operator_emails,
+    )
     session = oidc.seal_session(
         settings.token_encryption_key,
         sub=str(claims.get("sub", "")),
@@ -161,6 +166,7 @@ def oidc_callback(
         else None,
         ttl_seconds=settings.oidc_session_ttl_seconds,
         actor=actor,
+        role=role,
     )
     response = RedirectResponse(_safe_next(state_data.get("next")), status_code=302)
     response.set_cookie(
@@ -197,4 +203,9 @@ def me(request: Request):
     )
     if session is None or not session.get("actor"):
         return {"authenticated": False}
-    return {"authenticated": True, "actor": session["actor"], "sub": session["sub"]}
+    return {
+        "authenticated": True,
+        "actor": session["actor"],
+        "sub": session["sub"],
+        "role": roles.role_from_session(session),
+    }
