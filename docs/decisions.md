@@ -92,8 +92,10 @@ rather than something to defer until someone asks.
   added by migration `0016` alongside the campaigns tables. It was deliberately
   left free `TEXT` from `0001` until then, on the assumption campaigns would
   add a job type; they did not (a campaign orchestrates ordinary `apt_upgrade`
-  jobs), so the CHECK simply closed on the three existing values. Widening it
-  later for a genuinely new type is a drop + recreate, like `jobs.status`.
+  jobs), so the CHECK first closed on the three existing values
+  (`apt_upgrade`, `reboot`, `apt_dry_run`). Migration `0019` later widened it
+  to four for the standalone `health_check` job type. Widening it again for a
+  genuinely new type is a drop + recreate, like `jobs.status`.
 - **Health checks belong to `apt_upgrade`, not a new job type.** They protect
   every real upgrade regardless of whether it came from the dashboard, a
   schedule or a campaign. A separate check job would still leave a race before
@@ -303,7 +305,7 @@ Two version lines on purpose:
   one unit under a single version (`backend/app/__init__.py` `__version__`,
   `frontend/package.json`; `0.1.0` at first public release). They are always
   deployed together, so one number is enough.
-- **The agent** carries its own (`agent/CHANGELOG.md`; `0.6.x`, `0.7.x`). It is
+- **The agent** carries its own (`agent/CHANGELOG.md`; currently `0.14.x`). It is
   distributed and upgraded separately, runs against a range of server versions,
   and had a release history before the repo went public, forcing it back to
   `0.1.0` would erase that. It reports its version on every report so the
@@ -464,14 +466,16 @@ runner minutes) and `.github/workflows/ci.yml` on the public GitHub mirror
   (`concurrency`, `cancel-in-progress: true`).
 - **Caches are platform-specific by design** (GitLab job cache vs the
   `actions/setup-*` caches) and are not required to match.
-- **Known coverage gap:** each of the agent (Go) and backend (Python) suites
-  only checks its own internal consistency; nothing cross-checks the two
-  implementations of the HMAC canonical string ("Authentication" above) or the
-  wire JSON shapes. A coherent change to either, made with its own component's
-  tests, passes CI undetected. The path-filter cross-listing does not close
-  this. Tracked in `cadence-backlog.md` ("Infra / quality backlog"): a
-  committed golden-vector test (recommended) or a live signed round-trip in
-  the `stack` job.
+- **Cross-component contract pinning:** the agent (Go) and backend (Python)
+  suites used to check only their own consistency, so a coherent change to
+  the HMAC canonical string on both sides passed CI undetected. A committed
+  golden vector now pins it across both: `agent/internal/client/
+  golden_generate_test.go` signs with the real `Client.sign` into
+  `backend/tests/testdata/signed_request.json`, and `backend/tests/
+  test_agent_contract.py` verifies it through the real `_auth_signed`
+  (valid, tampered-body and tampered-method cases). The wire JSON shapes
+  remain covered only by each side's own suite. The path-filter
+  cross-listing above stays as the tripwire that runs both suites.
 
 ## Monitoring the control plane
 
@@ -547,6 +551,14 @@ write from item 6 on, existing rows not rewritten); outbound webhooks
 (roadmap item 1: one generic signed JSON feed, no per-platform formatting);
 campaigns (roadmap item 5: a staged, concurrency-capped, stop-on-failure
 rollout of `apt_upgrade` jobs, driven by the scheduler; see "Campaigns"
-below and [architecture.md](architecture.md#campaigns)). The `apt_upgrade`
+below and [architecture.md](architecture.md#campaigns)); dry-run (a separate
+`apt_dry_run` job type previewing an upgrade, see "Updates" above); health
+checks (roadmap item 7: pre/post checks on every `apt_upgrade`, plus a
+standalone `health_check` job type for the no-upgrade case); enrollment with
+mTLS transport auth (short-lived codes, client certificates, dedicated
+`:8443` listener); operator sign-in via OIDC (roadmap item 10, complements
+the shared admin key, see "Authentication" above); cached CVSS scores per
+CVE from the NVD (roadmap item 9); coarse `failure_category` /
+`failure_summary` on failed jobs. The `apt_upgrade`
 rollout-batching line above is now largely covered by campaigns; reboot
 sequencing still is not.
