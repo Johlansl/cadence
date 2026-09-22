@@ -39,6 +39,11 @@ os.environ["CADENCE_REQUIRE_AGENT_TRANSPORT_AUTH"] = "false"
 # Fresh per test run; nothing needs it to persist across runs -- every test
 # token is issued and used within the one run that generated it.
 os.environ["CADENCE_TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+# The T0 robustness test serves a real loopback HTTP server as a webhook
+# receiver, so the SSRF deny-list must be off in the test environment.
+# Production keeps the default (guard on); test_webhook_ssrf.py forces the
+# prod default per test where it asserts blocking.
+os.environ["CADENCE_WEBHOOK_ALLOW_PRIVATE_IPS"] = "true"
 
 
 def _test_database_url() -> str:

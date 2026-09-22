@@ -374,6 +374,14 @@ class Settings:
         self.webhook_log_max_bytes: int = _non_negative_int(
             "CADENCE_WEBHOOK_LOG_MAX_BYTES", 4096
         )
+        # SSRF guard for outbound webhook deliveries (app.webhooks.ssrf):
+        # deny-list of non-public IP ranges, pinned per-hop connections,
+        # at most 3 revalidated redirects. False (default) keeps the guard
+        # on; true lets an operator point webhooks at private or loopback
+        # addresses on a trusted network. Logged when it bypasses a block.
+        self.webhook_allow_private_ips: bool = _bool_env(
+            "CADENCE_WEBHOOK_ALLOW_PRIVATE_IPS", False
+        )
 
         # Default observation window between campaign stages (roadmap item 5):
         # a stage advances only once all its jobs are terminal AND this many

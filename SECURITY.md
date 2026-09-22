@@ -219,7 +219,7 @@ is rejected with 413 before the body is read, and more than
 the byte check but still hits the package cap; a reverse proxy (Caddy) can
 enforce an absolute request-body ceiling.
 
-### Outbound webhooks are admin-configured and only lightly constrained
+### Outbound webhooks are admin-configured and SSRF-guarded
 
 Each webhook's signing secret is stored Fernet-encrypted at rest
 (`webhooks.secret_encrypted`, `CADENCE_TOKEN_ENCRYPTION_KEY`, the same scheme as
@@ -230,17 +230,28 @@ timestamp and the body hash, keyed with that secret) with the timestamp in the
 signed scope, so a receiver that checks both the signature and a timestamp
 freshness window rejects replays.
 
-Two things a webhook operator should know. The dispatcher uses Python's stdlib
-`urllib.request` default opener, which **follows HTTP 3xx redirects** on a
-delivery: a redirecting webhook URL is treated as a misconfiguration, not a
-supported setup. And webhook URLs are **not** validated against an allowlist,
-so a configured URL can point at an internal address. Both are bounded by the
-fact that only a holder of `X-Admin-Key` can create or change a webhook URL
-(the `GET` views are unauthenticated but expose neither the raw URL nor the
-secret and cannot mutate anything); the outbound-request surface therefore
-stays at the same trust level as `CADENCE_ADVISORY_FEED_URLS`, an operator
-input. A future hardening pass could add an SSRF allowlist and disable redirect
-following.
+Three things a webhook operator should know. Deliveries go through an SSRF
+guard (`backend/app/webhooks/ssrf.py`, stdlib only): every URL is resolved
+once per hop and every returned IP is checked against a deny-list of
+non-public ranges (loopback, private, link-local including the cloud metadata
+address, multicast, reserved, unspecified). The connection then dials the
+validated IP directly while Host, TLS SNI and certificate verification keep
+using the original hostname, so a DNS record that changes between the check
+and the connection cannot steer the request elsewhere. Up to 3 redirects are
+followed and each hop is revalidated the same way; `Authorization` and
+`X-Cadence-*` headers are dropped when a redirect leaves the current origin
+(scheme, host, port), and userinfo in URLs plus non-http(s) schemes (including
+`ftp` redirect targets) are always refused. A blocked delivery is parked
+`failed` with `last_error` prefixed `blocked_ssrf:` and is not retried.
+
+The guard is on by default. `CADENCE_WEBHOOK_ALLOW_PRIVATE_IPS=true` disables
+the deny-list for operators who deliberately target a private or loopback
+address on a trusted network; every bypass is logged as a warning. The remaining
+trust boundary is unchanged: only a holder of `X-Admin-Key` can create or
+change a webhook URL (the `GET` views are unauthenticated but expose neither
+the raw URL nor the secret and cannot mutate anything), so the
+outbound-request surface stays at the same trust level as
+`CADENCE_ADVISORY_FEED_URLS`, an operator input.
 
 ### Advisory / CVE linkage is best-effort, not a vulnerability scan
 

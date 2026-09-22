@@ -8,7 +8,6 @@ import hmac
 import json
 import logging
 import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -19,6 +18,7 @@ from app.core.crypto import decrypt_token_secret
 from app.db.base import SessionLocal
 from app.models.models import Webhook, WebhookDelivery
 from app.webhooks import _f
+from app.webhooks.ssrf import SSRFBlocked, post_guarded
 
 log = logging.getLogger("cadence.webhooks")
 
@@ -45,14 +45,15 @@ def sign_body(secret: str, send_ts: str, body_bytes: bytes) -> str:
 
 
 def _post(url: str, body_bytes: bytes, headers: dict[str, str], timeout: float) -> int:
-    """POST and return the HTTP status. Raises urllib.error.HTTPError for
-    >= 400 and urllib.error.URLError / OSError for a transport failure. Follows
-    3xx redirects (the urllib default); a redirecting webhook URL is a
-    misconfiguration, documented in SECURITY.md."""
-    req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        resp.read(4096)
-        return int(resp.status)
+    """POST and return the HTTP status. Raises SSRFBlocked for a refused URL
+    (no retry, recorded as blocked_ssrf), urllib.error.HTTPError for >= 400
+    and urllib.error.URLError / OSError for a transport failure. Follows up
+    to 3 redirects, each revalidated against the SSRF deny-list and fetched
+    over a pinned connection (see app.webhooks.ssrf)."""
+    return post_guarded(
+        url, body_bytes, headers, timeout,
+        allow_private=settings.webhook_allow_private_ips,
+    )
 
 
 def _error_text(exc: BaseException) -> str:
@@ -61,6 +62,22 @@ def _error_text(exc: BaseException) -> str:
     if isinstance(exc, urllib.error.URLError):
         return f"{type(exc).__name__}: {exc.reason}"
     return f"{type(exc).__name__}: {exc}"
+
+
+def _record_blocked(delivery: WebhookDelivery, now: datetime, reason: str) -> None:
+    """Terminal SSRF refusal: no retry, the URL is deterministically refused."""
+    message = f"blocked_ssrf: {reason}"
+    delivery.last_error = message[:_ERROR_MAX_CHARS]
+    delivery.status = "failed"
+    delivery.completed_at = now
+    log.warning(
+        "webhook delivery blocked by SSRF guard",
+        extra=_f(
+            delivery_id=str(delivery.id),
+            webhook_id=str(delivery.webhook_id),
+            error=message[:200],
+        ),
+    )
 
 
 def _record_failure(delivery: WebhookDelivery, now: datetime, message: str) -> None:
@@ -120,6 +137,9 @@ def attempt_delivery(
 
     try:
         status = _post(url, body_bytes, headers, settings.webhook_timeout_seconds)
+    except SSRFBlocked as exc:
+        _record_blocked(delivery, now, str(exc))
+        return
     except Exception as exc:  # noqa: BLE001 -- any failure is a retryable delivery failure
         _record_failure(delivery, now, _error_text(exc))
         return
