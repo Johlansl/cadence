@@ -4,11 +4,17 @@ For each `running` campaign, in its own locked transaction:
 
   1. reconcile finished jobs into campaign_hosts state (a succeeded action is
      done only when health is healthy/degraded; unhealthy/unknown stops the
-     rollout; failed actions skip or halt per CAMPAIGN_DISPOSITIONS);
+     rollout; failed actions skip or halt per CAMPAIGN_DISPOSITIONS). A
+     succeeded upgrade the agent will reboot on stays running with its
+     pre-reboot boot snapshotted until the host proves its return (a
+     different boot plus fresh acceptable health); a reboot expected from
+     an agent that sent no proof halts immediately; an unproven await past
+     CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS halts;
   2. stop the campaign if a halt disposition fired, or if the skipped count
      has passed max_failures;
   3. otherwise create jobs for the active stage's not-yet-started hosts, up to
-     the global max_concurrency (counting pending + running campaign jobs);
+     the global max_concurrency (counting running campaign_hosts rows,
+     reboot awaits included);
   4. once the active stage is fully terminal AND its observation window has
      elapsed, the next tick's "active stage" is naturally the next one; when
      there is no next stage, the campaign is completed.
@@ -26,10 +32,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.campaigns.lifecycle import finalize_campaign_hosts
+from app.core.config import settings
 from app.db.base import SessionLocal
 from app.job_creation import create_job_for_host
 from app.models.models import Campaign, CampaignHost, Host, Job
@@ -118,49 +125,140 @@ def _active_stage(
     return None
 
 
+def _fresh_health(host: Host | None, ch: CampaignHost) -> str | None:
+    """The host's health verdict when it postdates the await entry, else None.
+
+    Freshness is measured against the row's updated_at (set when the await
+    started), so the pre-reboot projection can never satisfy it. Both
+    timestamps are server-side, so no clock comparison with the agent."""
+    if (
+        host is None
+        or host.health_checked_at is None
+        or host.health_checked_at <= ch.updated_at
+    ):
+        return None
+    return host.health_status
+
+
+def _return_proven(host: Host | None, ch: CampaignHost, fresh: str | None) -> bool:
+    """True once the host reported back from a different boot with fresh
+    acceptable health: the reboot happened and the host is back."""
+    return (
+        host is not None
+        and host.current_boot_id is not None
+        and host.current_boot_id != ch.awaited_boot
+        and fresh in ("healthy", "degraded")
+    )
+
+
+def _reboot_expected(job: Job, host: Host | None, result: dict) -> bool:
+    """True when the upgrade ran on auto with a pending reboot: the agent
+    rebooted (old agents decide the same way) but sent no proof fields. The
+    mode is the creation-time snapshot when present, else the live policy
+    (rows created before pinning, same fallback the claim path uses)."""
+    mode = (job.params or {}).get("reboot") or (host.reboot_policy if host else None)
+    return mode == "auto" and bool(result.get("reboot_required"))
+
+
 def _reconcile(
     db: Session,
     c: Campaign,
     ch_rows: list[CampaignHost],
     jobs: dict[uuid.UUID, Job],
-    hostnames: dict[uuid.UUID, str],
+    hosts: dict[uuid.UUID, Host],
     now: datetime,
 ) -> tuple[bool, list[int], str | None, str | None]:
     """Fold finished jobs into campaign_hosts state. Returns (halted,
     stages_that_became_fully_terminal_this_tick, halt_category, halt_host)."""
     completed_stages: list[int] = []
     for ch in ch_rows:
-        if ch.state not in _ACTIVE or ch.job_id is None:
+        if ch.state not in _ACTIVE:
             continue
-        job = jobs.get(ch.job_id)
-        if job is None or job.status not in ("succeeded", "failed"):
-            continue  # still in flight
+        host = hosts.get(ch.host_id)
+        hostname = host.hostname if host is not None else str(ch.host_id)
 
-        if job.status == "succeeded":
-            health = (job.result or {}).get("health_status")
-            if health not in ("healthy", "degraded"):
-                host = str(hostnames.get(ch.host_id, ch.host_id))
+        if ch.awaited_boot is not None:
+            # Awaiting proven return: the upgrade is done, only the host's
+            # own post-reboot observation can close the row.
+            fresh = _fresh_health(host, ch)
+            if _return_proven(host, ch, fresh):
+                ch.state = "done"
+                ch.updated_at = now
+            elif fresh is not None and fresh not in ("healthy", "degraded"):
                 category = (
-                    "health_unhealthy" if health == "unhealthy" else "health_unknown"
+                    "health_unhealthy" if fresh == "unhealthy" else "health_unknown"
                 )
                 _stop_campaign(
-                    db, c, reason=f"{category} on {host}", now=now
+                    db, c, reason=f"{category} on {hostname}", now=now
                 )
-                return True, completed_stages, category, host
-            ch.state = "done"
-        else:
-            disp = CAMPAIGN_DISPOSITIONS.get(job.failure_category, "halt")
-            if disp == "skip":
-                ch.state = "skipped"
-                ch.skip_reason = job.failure_category or "unknown"
+                return True, completed_stages, category, hostname
+            elif now - ch.updated_at > timedelta(
+                seconds=settings.campaign_return_timeout_seconds
+            ):
+                _stop_campaign(
+                    db, c, reason=f"return_timeout on {hostname}", now=now
+                )
+                return True, completed_stages, "return_timeout", hostname
             else:
-                host = str(hostnames.get(ch.host_id, ch.host_id))
-                category = job.failure_category or "unknown"
-                _stop_campaign(
-                    db, c, reason=f"{category} on {host}", now=now
-                )
-                return True, completed_stages, category, host
-        ch.updated_at = now
+                continue  # still waiting for the host to come back
+        elif ch.job_id is None:
+            if ch.state == "pending":
+                continue  # job not created yet
+            # Running without a job: the job row was deleted mid-flight (the
+            # FK NULLs job_id on delete). Explicit halt, never a silent hang.
+            _stop_campaign(db, c, reason=f"job_missing on {hostname}", now=now)
+            return True, completed_stages, "job_missing", hostname
+        else:
+            job = jobs.get(ch.job_id)
+            if job is None:
+                _stop_campaign(db, c, reason=f"job_missing on {hostname}", now=now)
+                return True, completed_stages, "job_missing", hostname
+            if job.status not in ("succeeded", "failed"):
+                continue  # still in flight
+
+            if job.status == "succeeded":
+                health = (job.result or {}).get("health_status")
+                if health not in ("healthy", "degraded"):
+                    category = (
+                        "health_unhealthy" if health == "unhealthy" else "health_unknown"
+                    )
+                    _stop_campaign(
+                        db, c, reason=f"{category} on {hostname}", now=now
+                    )
+                    return True, completed_stages, category, hostname
+                result = job.result or {}
+                will_reboot = result.get("will_reboot")
+                if will_reboot is True:
+                    pre_boot = result.get("boot_id")
+                    if not pre_boot:
+                        _stop_campaign(
+                            db, c, reason=f"boot_proof_missing on {hostname}", now=now
+                        )
+                        return True, completed_stages, "boot_proof_missing", hostname
+                    ch.awaited_boot = pre_boot
+                    ch.updated_at = now
+                    continue  # row stays running until proven return
+                if will_reboot is None and _reboot_expected(job, host, result):
+                    # Old agent on an auto host with a pending reboot: a reboot
+                    # was attempted but no proof can ever arrive. Halt now with
+                    # an actionable reason instead of waiting out a timeout.
+                    _stop_campaign(
+                        db, c, reason=f"boot_proof_missing on {hostname}", now=now
+                    )
+                    return True, completed_stages, "boot_proof_missing", hostname
+                ch.state = "done"
+            else:
+                disp = CAMPAIGN_DISPOSITIONS.get(job.failure_category, "halt")
+                if disp == "skip":
+                    ch.state = "skipped"
+                    ch.skip_reason = job.failure_category or "unknown"
+                else:
+                    category = job.failure_category or "unknown"
+                    _stop_campaign(
+                        db, c, reason=f"{category} on {hostname}", now=now
+                    )
+                    return True, completed_stages, category, hostname
+            ch.updated_at = now
 
         stage_rows = [r for r in ch_rows if r.stage_index == ch.stage_index]
         if all(r.state not in _ACTIVE for r in stage_rows):
@@ -178,13 +276,12 @@ def _fill_stage(
     now: datetime,
 ) -> int:
     """Create jobs for `stage`'s not-yet-started hosts up to the global
-    max_concurrency (pending + running campaign jobs). Returns how many were
-    created. A host that already has an active job is left for the next tick."""
-    in_flight = db.execute(
-        select(func.count())
-        .select_from(Job)
-        .where(Job.campaign_id == c.id, Job.status.in_(_ACTIVE))
-    ).scalar_one()
+    max_concurrency (running campaign_hosts rows, reboot awaits included).
+    Returns how many were created. A host that already has an active job is
+    left for the next tick."""
+    # Counted from the already-loaded rows, not a fresh query, so the state
+    # changes _reconcile just made in this transaction are visible.
+    in_flight = sum(1 for r in ch_rows if r.state == "running")
     slots = c.max_concurrency - in_flight
     if slots <= 0:
         return 0
@@ -220,10 +317,11 @@ def _step(
     ch_rows: list[CampaignHost],
     jobs: dict[uuid.UUID, Job],
     hostnames: dict[uuid.UUID, str],
+    hosts: dict[uuid.UUID, Host],
     now: datetime,
 ) -> Outcome:
     halted, completed_stages, halt_category, halt_host = _reconcile(
-        db, c, ch_rows, jobs, hostnames, now
+        db, c, ch_rows, jobs, hosts, now
     )
     if halted:
         return Outcome(
@@ -327,15 +425,18 @@ def _advance_one(db: Session, c: Campaign, now: datetime) -> Outcome:
         j.id: j
         for j in db.execute(select(Job).where(Job.id.in_(job_ids))).scalars()
     } if job_ids else {}
-    hostnames = dict(
-        db.execute(
-            select(Host.id, Host.hostname).where(
-                Host.id.in_([r.host_id for r in ch_rows])
-            )
-        ).all()
+    host_ids = [r.host_id for r in ch_rows]
+    hosts = (
+        {
+            h.id: h
+            for h in db.execute(select(Host).where(Host.id.in_(host_ids))).scalars()
+        }
+        if host_ids
+        else {}
     )
+    hostnames = {hid: h.hostname for hid, h in hosts.items()}
 
-    outcome = _step(db, c, ch_rows, jobs, hostnames, now)
+    outcome = _step(db, c, ch_rows, jobs, hostnames, hosts, now)
     _emit_events(db, c, ch_rows, outcome, now)
     return outcome
 

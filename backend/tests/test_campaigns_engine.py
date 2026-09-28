@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.campaigns import engine
 from app.campaigns.engine import advance_campaigns
+from app.core.config import settings
 from app.models.models import Campaign, CampaignHost, Host, Job, WebhookDelivery
 from tests.conftest import ADMIN_HEADERS, webhook_row
 
@@ -67,6 +68,9 @@ def _finish(
     category=None,
     health="healthy",
     at=NOW,
+    boot_id=None,
+    will_reboot=None,
+    reboot_required=None,
 ):
     ch = _ch(db_session, cid, host_id)
     job = db_session.get(Job, ch.job_id)
@@ -75,7 +79,36 @@ def _finish(
     if status == "failed":
         job.failure_category = category
     elif health is not None:
-        job.result = {"health_status": health}
+        result = {"health_status": health}
+        if boot_id is not None:
+            result["boot_id"] = boot_id
+        if will_reboot is not None:
+            result["will_reboot"] = will_reboot
+        if reboot_required is not None:
+            result["reboot_required"] = reboot_required
+        job.result = result
+    db_session.flush()
+
+
+def _set_policy(client, host_id, value):
+    r = client.patch(
+        f"/api/v1/admin/hosts/{host_id}",
+        headers=ADMIN_HEADERS,
+        json={"reboot_policy": value},
+    )
+    assert r.status_code == 200, r.text
+
+
+def _observe(db_session, host_id, *, boot=None, health=None, checked_at=None):
+    """Simulate a host contact: a new boot observation and/or a fresh health
+    projection, the way the report/result routes would record them."""
+    host = db_session.get(Host, host_id)
+    if boot is not None:
+        host.current_boot_id = boot
+    if health is not None:
+        host.health_status = health
+    if checked_at is not None:
+        host.health_checked_at = checked_at
     db_session.flush()
 
 
@@ -407,3 +440,231 @@ def test_one_campaigns_error_does_not_block_the_others(client, db_session, monke
     ).scalar_one()).state == "running"
     # the bad campaign rolled back untouched, still running, no leaked job
     assert _status(db_session, bad) == "running"
+
+
+# --- 6A reboot await ---------------------------------------------------------
+
+
+def _auto_running(client, db_session, names, stages, **kw):
+    """A running campaign whose hosts all reboot on auto (pinned at fill)."""
+    cid, hs = _running(client, db_session, names, stages, **kw)
+    for h in hs:
+        _set_policy(client, h.id, "auto")
+    return cid, hs
+
+
+def test_reboot_await_holds_row_running_until_proven(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a"], ["rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)  # fill
+    _finish(
+        db_session, cid, hs[0].id, at=NOW,
+        boot_id="boot-1", will_reboot=True, reboot_required=True,
+    )
+
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    row = _ch(db_session, cid, hs[0].id)
+    assert row.state == "running"
+    assert row.awaited_boot == "boot-1"
+    assert _status(db_session, cid) == "running"
+
+    _observe(
+        db_session, hs[0].id, boot="boot-2", health="healthy",
+        checked_at=NOW + timedelta(seconds=2),
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=3), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+    assert _status(db_session, cid) == "completed"
+
+
+def test_await_needs_both_boot_change_and_fresh_health(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a", "b"], [2], max_concurrency=2, max_failures=2
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    _finish(db_session, cid, hs[1].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)  # both await
+
+    _observe(db_session, hs[0].id, boot="boot-2")  # new boot, stale health
+    _observe(  # fresh health, same boot
+        db_session, hs[1].id, boot="boot-1", health="healthy",
+        checked_at=NOW + timedelta(seconds=2),
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=3), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "running"
+    assert _ch(db_session, cid, hs[1].id).state == "running"
+
+
+def test_fresh_unhealthy_after_reboot_stops_campaign(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a", "b"], [2], max_concurrency=2, max_failures=5
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)  # a awaits
+
+    _observe(
+        db_session, hs[0].id, boot="boot-2", health="unhealthy",
+        checked_at=NOW + timedelta(seconds=2),
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=3), db=db_session)
+    campaign = db_session.get(Campaign, cid)
+    assert campaign.status == "stopped"
+    assert campaign.halt_reason == "health_unhealthy on a"
+    assert _ch(db_session, cid, hs[1].id).state == "orphaned"
+
+
+def test_degraded_fresh_health_completes_await(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a"], ["rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    _observe(
+        db_session, hs[0].id, boot="boot-2", health="degraded",
+        checked_at=NOW + timedelta(seconds=2),
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=3), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+
+
+def test_explicit_no_reboot_completes_immediately(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a"], ["rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(
+        db_session, cid, hs[0].id, at=NOW,
+        boot_id="boot-1", will_reboot=False, reboot_required=True,
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    row = _ch(db_session, cid, hs[0].id)
+    assert row.state == "done"
+    assert row.awaited_boot is None
+
+
+def test_expected_reboot_without_proof_halts_immediately(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a", "b"], [2], max_concurrency=2, max_failures=5
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    # Old agent: reboot pending on auto, but no boot fields at all.
+    _finish(db_session, cid, hs[0].id, at=NOW, reboot_required=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    campaign = db_session.get(Campaign, cid)
+    assert campaign.status == "stopped"
+    assert campaign.halt_reason == "boot_proof_missing on a"
+    assert _ch(db_session, cid, hs[1].id).state == "orphaned"
+
+
+def test_unexpected_reboot_without_proof_completes(client, db_session):
+    cid, hs = _running(client, db_session, ["a"], ["rest"], observation_window_seconds=0)
+    advance_campaigns(now=NOW, db=db_session)
+    # Never policy: no reboot follows, so no proof is needed.
+    _finish(db_session, cid, hs[0].id, at=NOW, reboot_required=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+
+
+def test_reboot_decision_without_boot_id_halts(client, db_session):
+    cid, hs = _auto_running(client, db_session, ["a"], ["rest"])
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _status(db_session, cid) == "stopped"
+    assert db_session.get(Campaign, cid).halt_reason == "boot_proof_missing on a"
+
+
+def test_cancel_orphans_unproven_await(client, db_session):
+    cid, hs = _auto_running(client, db_session, ["a"], ["rest"])
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).awaited_boot == "boot-1"
+
+    r = client.post(f"/api/v1/admin/campaigns/{cid}/cancel", headers=ADMIN_HEADERS)
+    assert r.status_code == 200
+    assert _ch(db_session, cid, hs[0].id).state == "orphaned"
+    assert _status(db_session, cid) == "cancelled"
+
+
+def test_deleted_job_halts_instead_of_hanging(client, db_session):
+    cid, hs = _running(
+        client, db_session, ["a", "b"], [2], max_concurrency=2, max_failures=5
+    )
+    advance_campaigns(now=NOW, db=db_session)  # both running, jobs pending
+
+    r = client.delete(f"/api/v1/admin/hosts/{hs[0].id}/jobs", headers=ADMIN_HEADERS)
+    assert r.status_code == 204
+
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    campaign = db_session.get(Campaign, cid)
+    assert campaign.status == "stopped"
+    assert campaign.halt_reason == "job_missing on a"
+    assert _ch(db_session, cid, hs[1].id).state == "orphaned"
+
+
+def test_await_survives_job_deletion_and_completes_on_proof(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a"], ["rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).awaited_boot == "boot-1"
+
+    client.delete(f"/api/v1/admin/hosts/{hs[0].id}/jobs", headers=ADMIN_HEADERS)
+    advance_campaigns(now=NOW + timedelta(seconds=2), db=db_session)
+    # The reference survives on the campaign row: still waiting, no halt, no hang.
+    assert _ch(db_session, cid, hs[0].id).state == "running"
+
+    _observe(
+        db_session, hs[0].id, boot="boot-2", health="healthy",
+        checked_at=NOW + timedelta(seconds=3),
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=4), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+
+
+def test_await_past_timeout_halts_fail_safe(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a", "b"], [2], max_concurrency=2, max_failures=5
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    entered = NOW + timedelta(seconds=1)
+    advance_campaigns(now=entered, db=db_session)  # a awaits
+    assert _ch(db_session, cid, hs[0].id).awaited_boot == "boot-1"
+
+    span = timedelta(seconds=settings.campaign_return_timeout_seconds)
+    advance_campaigns(now=entered + span, db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "running"  # boundary waits
+    advance_campaigns(now=entered + span + timedelta(seconds=1), db=db_session)
+    campaign = db_session.get(Campaign, cid)
+    assert campaign.status == "stopped"
+    assert campaign.halt_reason == "return_timeout on a"
+    assert _ch(db_session, cid, hs[1].id).state == "orphaned"
+
+
+def test_await_holds_concurrency_slot(client, db_session):
+    cid, hs = _auto_running(
+        client, db_session, ["a", "b"], [2], max_concurrency=1, max_failures=1
+    )
+    advance_campaigns(now=NOW, db=db_session)  # a fills the only slot
+    _finish(db_session, cid, hs[0].id, at=NOW, boot_id="boot-1", will_reboot=True)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)  # a awaits
+
+    # No slot opens while a is unproven: b stays pending, not running.
+    assert _ch(db_session, cid, hs[0].id).state == "running"
+    assert _ch(db_session, cid, hs[1].id).state == "pending"
+
+    _observe(
+        db_session, hs[0].id, boot="boot-2", health="healthy",
+        checked_at=NOW + timedelta(seconds=2),
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=3), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+    assert _ch(db_session, cid, hs[1].id).state == "running"
