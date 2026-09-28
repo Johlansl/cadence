@@ -107,7 +107,11 @@ Any illegal transition is a `409`.
 For every `running` campaign, once per scheduler pass:
 
 1. **Reconcile.** Every host whose job finished:
-   - `succeeded` plus health `healthy` or `degraded` -> `done`;
+   - `succeeded` plus health `healthy` or `degraded`, and the agent did
+     not reboot on the job -> `done`;
+   - `succeeded` with `will_reboot=true` -> stays `running`, awaiting
+     proven return (see "Reboots" below); `done` only once the host is
+     back on a new boot with fresh acceptable health;
    - `succeeded` plus `unhealthy` -> stop the campaign immediately with
      `health_unhealthy`;
    - `succeeded` plus missing, `unknown` or unrecognized health -> stop the
@@ -124,11 +128,12 @@ For every `running` campaign, once per scheduler pass:
      stops the whole campaign immediately, on the first occurrence.
 2. **Stop check.** Halt disposition, or skip count past `max_failures` ->
    `status = 'stopped'`, `halt_reason` recorded. Any host still in flight is
-   marked `orphaned` (see `cancel` above).
+   marked `orphaned` (see `cancel` above); a host whose reboot was never
+   proven is orphaned too, never `done`.
 3. **Fill.** Create jobs for the current wave's not-yet-started hosts, up to
-   `max_concurrency` (counted over this campaign's `pending` + `running`
-   jobs). A host that already has an unrelated job pending or running is left
-   for the next tick, not failed.
+   `max_concurrency` (counted over this campaign's `running` rows, reboot
+   awaits included). A host that already has an unrelated job pending or
+   running is left for the next tick, not failed.
 4. **Gate.** A wave whose jobs have all finished still **waits the
    observation window** (measured from its last job's completion) before the
    next wave starts. When there is no next wave, the campaign is `completed`.
@@ -139,6 +144,66 @@ database, so it can be tuned without a migration.
 The health gate requires agent `0.12.0` or newer. An older agent's successful
 job has no `health_status`, so the campaign stops with `health_unknown` rather
 than advancing without evidence. Upgrade every target agent before activation.
+
+## Reboots
+
+An `apt_upgrade` that needs a reboot reboots when the host's `reboot_policy`
+is `auto` (a per-job `reboot` override wins; `never` and `prompt` never
+reboot from a campaign job). A rebooting host is not `done` when its job
+succeeds: the engine holds its row at `running` until the host **proves its
+return**, then the wave carries on. The lifecycle is:
+
+```
+upgrade succeeds, will_reboot=true
+  -> running, pre-reboot boot snapshotted (awaiting return)
+  -> host reboots, agent checks in from a new boot
+  -> new boot_id + fresh healthy/degraded health
+  -> done, wave progresses
+```
+
+**Proof is the kernel boot id.** Every agent contact (reports, polls, job
+results, the boot health-check claim) carries `boot_id`, and the server
+remembers the latest per host. A job result also carries `will_reboot`,
+the agent's own reboot decision: an explicit `false` means no reboot
+follows (the host completes immediately), `true` starts the wait above,
+and a missing key means an older agent (see fail-closed below). Freshness
+is server-side: the host's `health_checked_at` must postdate the moment
+the wait started, so a stale pre-reboot verdict can never satisfy it.
+
+**Two caps apply.** `max_concurrency` is per campaign and counts `running`
+rows, awaits included, so a rebooting host keeps its wave slot until it
+is proven back (or the campaign stops). The **global reboot budget**
+(`CADENCE_MAX_CONCURRENT_REBOOTS`, default `0` = disabled) caps
+Cadence-driven reboots awaiting proof across campaigns, schedules and
+manual jobs: creating a job that may reboot past the cap is refused
+(`409` for admin calls; the scheduler and the engine retry on the next
+tick).
+
+**Fail-closed.** A reboot the server cannot prove stops the campaign
+rather than guessing:
+
+- an `auto` upgrade that required a reboot but sent no proof fields
+  (older agent) halts immediately with `boot_proof_missing`;
+- a `will_reboot=true` result with no `boot_id` halts the same way;
+- an await still unproven after `CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS`
+  (default 1800) halts with `return_timeout`.
+
+**Holds are never released implicitly.** A host whose reboot is unproven
+keeps consuming the global budget past a return timeout, a stop, a pause
+or a cancel, and the retention sweep will not delete a job that still
+carries such a hold. Only two things release it: the host observed back
+on a new boot, or an explicit operator recovery
+(`DELETE /api/v1/admin/hosts/{id}/jobs`, which clears the host's job
+history). Plan for the recovery path before enabling the budget on a
+fleet with old-agent history: a legacy `auto` upgrade in the past holds
+a slot until cleared.
+
+**Rollout preconditions.** Before running a campaign over rebooting
+hosts: every target runs an agent that sends `boot_id` / `will_reboot`;
+`cadence-agent-health-check-boot.timer` is enabled so a fresh health
+verdict lands right after boot (fresh health is part of the proof); and
+the budget is set above `0` if you want the fleet-wide bound (at `0` the
+per-campaign await still applies, only the global cap is off).
 
 ## Read status
 
@@ -157,7 +222,9 @@ The detail response has:
   (the `failure_category` when skipped), and `job_id` once a job exists.
 
 Per-host `state` is `pending` -> `running` -> `done` | `skipped`, or
-`orphaned` if a stop / cancel caught its job mid-flight.
+`orphaned` if a stop / cancel caught its job mid-flight. There is no
+separate "awaiting" state: a host rebooting reads `running` until its
+return is proven.
 
 ## Webhooks
 
@@ -174,13 +241,15 @@ There is no `campaign.activated` event: you just made that call.
 
 ## Notes and limits
 
-- A campaign never reboots. Set the hosts' `reboot_policy`, or run a reboot
-  campaign-style rollout separately; sequenced reboots are not a campaign
-  feature.
+- A campaign reboots exactly like a hand-triggered upgrade: the hosts'
+  `reboot_policy` (or a per-job `reboot` override) decides, and every reboot
+  is awaited and proven as described in "Reboots" above.
 - `params.excluded_packages` / `params.known_held_packages` are injected into
   every campaign job exactly as for a hand-triggered `apt_upgrade`, so your
-  exclusion rules apply unchanged.
+  exclusion rules apply unchanged. `params.reboot` is also snapshotted at
+  creation, so a later policy change does not rewrite a job's meaning.
 - The retention sweep will not delete a finished job while its campaign is
-  still `draft` / `running` / `paused`.
+  still `draft` / `running` / `paused`, and never deletes a job still
+  holding an unproven reboot (see "Reboots" above).
 - A campaign job remains an ordinary `apt_upgrade`, but the health gate now
   requires agent `0.12.0` or newer on every target.

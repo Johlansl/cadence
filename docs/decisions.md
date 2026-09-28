@@ -522,10 +522,11 @@ Roadmap item 5. The full mechanism is in
   `app/campaigns/engine.py` means tuning it is a code change, not a migration.
   An unmapped or missing category is treated as `halt` (fail safe: stop and
   let the operator look).
-- **`max_concurrency` counts `pending` + `running` campaign jobs, not just
-  `running`.** Counting only `running` would let the engine create a job for
-  every host in a stage on the first tick (none are running yet), defeating
-  the cap.
+- **`max_concurrency` counts `running` campaign_hosts rows, reboot awaits
+  included.** A rebooting host keeps its wave slot for the whole wait
+  (there is no separate "awaiting" state: the row just stays `running`).
+  The count is taken from the rows loaded that tick, after reconcile, so
+  a host that just finished frees its slot in the same pass.
 - **A fully terminal stage still waits an observation window before the next
   one starts** (or before the campaign completes). The point of staging is to
   catch a bad upgrade on the canary before it hits everyone; advancing the
@@ -536,7 +537,33 @@ Roadmap item 5. The full mechanism is in
   and its result is still stored in `jobs`; the campaign marks the host
   `orphaned` and stops folding its outcome into the campaign counts, rather
   than pretending the job is done or leaving the row stuck at `running`
-  forever.
+  forever. A host whose reboot was never proven is orphaned too, never
+  `done` -- including a job that succeeded in the submit-to-reconcile
+  window the engine never saw.
+- **Reboot proof is the kernel boot id, and the agent declares its own
+  decision.** `boot_id` (from `/proc/sys/kernel/random/boot_id`) is
+  observed on every agent contact; a job result carries it plus
+  `will_reboot`, a tri-state: explicit `false` means no reboot follows,
+  `true` starts the await, absent means an older agent. Kernel version,
+  uptime and flag flips were rejected as heuristics; only the agent
+  knows whether its kill-switch and issue outcome led to a reboot, so
+  only the agent can declare `will_reboot`.
+- **An unproven reboot hold never expires on its own.** Timeout halts the
+  campaign's progression, cancel/stop orphan the row, but the budget
+  slot stays held; retention will not delete a hold-carrying job (it
+  shares the budget predicate, so the two cannot disagree). Release
+  needs an observed new boot or an explicit operator recovery (deleting
+  the host's job history). Never infer "host is back" from silence.
+- **The global budget is enforced at the one choke point, under an
+  advisory lock.** Every creator (admin, schedules, engine, boot claim)
+  goes through `create_job_for_host`, which checks the cap and inserts
+  under a transaction-scoped `pg_advisory_xact_lock`: no new state, no
+  expiry, restart-safe. `0` disables it (historic behavior).
+- **One scheduler runs the engine.** The tick loop that advances
+  campaigns is single-instance; multi-scheduler is not an officially
+  supported deployment. Separately, reboot-budget admission is atomic
+  across the concurrent producers (admin, schedules, engine, boot claim)
+  via a transaction-scoped Postgres advisory lock.
 
 ## V1 scope
 
@@ -566,6 +593,8 @@ mTLS transport auth (short-lived codes, client certificates, dedicated
 `:8443` listener); operator sign-in via OIDC (roadmap item 10, complements
 the shared admin key, see "Authentication" above); cached CVSS scores per
 CVE from the NVD (roadmap item 9); coarse `failure_category` /
-`failure_summary` on failed jobs. The `apt_upgrade`
-rollout-batching line above is now largely covered by campaigns; reboot
-sequencing still is not.
+`failure_summary` on failed jobs; sequenced multi-host reboots (6A: the
+engine awaits proven return per host, and a global budget caps concurrent
+unproven reboots, see "Campaigns" above). The `apt_upgrade`
+rollout-batching line above is now largely covered by campaigns, and so is
+reboot sequencing.

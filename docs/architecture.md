@@ -280,7 +280,18 @@ isolated and a mid-pass crash loses no committed work. Each pass, for one
 campaign:
 
 - **reconcile** finished jobs into `campaign_hosts.state`: `succeeded` ->
-  `done`; `failed` -> a *disposition* from a code table
+  `done`, unless the agent rebooted on the job: `will_reboot=true` keeps
+  the row `running` with the pre-reboot `boot_id` snapshotted into
+  `awaited_boot`, and the row completes only once the host is observed on
+  a different boot (`hosts.current_boot_id`, updated by every agent
+  contact) with fresh acceptable health (`health_checked_at` newer than
+  the await entry, `healthy` / `degraded`). A reboot expected from an
+  agent that sent no proof fields (old agent on `auto` with
+  `reboot_required`) halts immediately with `boot_proof_missing`, as does
+  `will_reboot=true` without a `boot_id`; an await unproven past
+  `CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS` halts with `return_timeout`;
+  a row whose job vanished halts with `job_missing`. `failed` -> a
+  *disposition* from a code table
   (`app/campaigns/engine.py` `CAMPAIGN_DISPOSITIONS`, not the schema, so it
   changes without a migration): `apt_locked` / `dpkg_error` / `disk_full` /
   `timeout` / `agent_lost` / `agent_refused` -> `skip` (drop the host, count
@@ -289,14 +300,19 @@ campaign:
 - **stop** the campaign (`status = 'stopped'`, `halt_reason` recorded) on a
   halt, or once the skip count passes `max_failures`; a one-shot
   `finalize_campaign_hosts` then terminal-izes any still-in-flight host
-  (`done` / `skipped` from its real job outcome, else `orphaned` -- the job
-  keeps running on the agent, the campaign just stops folding it in);
+  (a host whose reboot is unproven -- awaited, or succeeded in the
+  submit-to-reconcile window the engine never saw -- becomes `orphaned`,
+  never `done`; other terminal jobs fold to their real outcome, else
+  `orphaned` -- the job keeps running on the agent, the campaign just
+  stops folding it in);
 - **fill** the active stage's not-yet-started hosts with new jobs, up to a
-  global `max_concurrency` (counted over the campaign's `pending` + `running`
-  jobs), via the same `create_job_for_host` the admin route and the schedule
-  runner use, so `excluded_packages` / `known_held_packages` are injected
-  identically. A host that already has an active job is left for the next
-  tick, not failed;
+  global `max_concurrency` (counted over the campaign's `running` rows,
+  reboot awaits included, from the rows loaded that tick, so a host that
+  just finished frees its slot in the same pass), via the same
+  `create_job_for_host` the admin route and the schedule runner use, so
+  `excluded_packages` / `known_held_packages` are injected identically
+  (plus the `params.reboot` snapshot taken at creation). A host that
+  already has an active job is left for the next tick, not failed;
 - **gate** stage advance: a stage that is fully terminal still holds the
   engine until an observation window (`observation_window_seconds`, default
   `CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS` = 600) has elapsed since its
@@ -309,7 +325,26 @@ events through the same outbox as everything else: `campaign.stage_completed`
 (each wave as its last host finishes), `campaign.completed`, and
 `campaign.stopped` (with the halt reason, and the failure category and host
 when a disposition fired). The retention sweep keeps a terminal job while its
-campaign is still `draft` / `running` / `paused`.
+campaign is still `draft` / `running` / `paused`, and never deletes a job
+still holding an unproven reboot (the same predicate the budget counts, so
+the two cannot disagree).
+
+**The global reboot budget** bounds Cadence-driven reboots awaiting proof
+across campaigns, schedules and manual jobs. `create_job_for_host` -- the
+one choke point every creator uses -- refuses a reboot-capable job past
+`CADENCE_MAX_CONCURRENT_REBOOTS` (`0` = disabled, historic behavior);
+check and insert run under a transaction-scoped Postgres advisory lock so
+concurrent creators cannot both slip under the cap. The hold is derived,
+not stored: active reboot-capable jobs, then terminal jobs whose reboot
+is unproven (pre-reboot boot still current), then campaign awaits (whose
+snapshot survives job deletion). It never expires on its own -- timeout,
+stop, pause, cancel and retention all keep it -- and releases only on an
+observed new boot or an explicit operator recovery (deleting the job
+history). Running the engine is a single-scheduler deployment
+(multi-scheduler is not officially supported); the advisory lock exists
+to serialize the concurrent producers within that deployment (admin
+requests, scheduler, engine, boot claims), not to bless several
+schedulers.
 
 The operator-facing guide is [docs/campaigns.md](campaigns.md).
 
