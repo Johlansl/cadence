@@ -294,6 +294,55 @@ def test_cancel_finalizes_in_flight_and_unstarted_hosts(client, db_session):
     assert db_session.get(Job, running.id).status == "running"
 
 
+def test_cancel_never_marks_unproven_reboot_done(client, db_session):
+    # Submit -> reconcile window: both jobs succeeded with a reboot the
+    # engine never saw (no await marker yet). Cancel must orphan them,
+    # never label them done without proof.
+    cid = _draft(client, db_session, n=2)
+    _act(client, cid, "activate")
+
+    ch_rows = (
+        db_session.execute(
+            select(CampaignHost).where(CampaignHost.campaign_id == uuid.UUID(cid))
+        )
+        .scalars()
+        .all()
+    )
+    ch_rows.sort(key=lambda c: c.stage_index)
+
+    new_agent = Job(
+        host_id=ch_rows[0].host_id,
+        job_type="apt_upgrade",
+        status="succeeded",
+        params={"reboot": "auto"},
+        result={"reboot_required": True, "will_reboot": True, "boot_id": "b0"},
+    )
+    old_agent = Job(
+        host_id=ch_rows[1].host_id,
+        job_type="apt_upgrade",
+        status="succeeded",
+        params={"reboot": "auto"},
+        result={"reboot_required": True},  # no proof fields at all
+    )
+    db_session.add_all([new_agent, old_agent])
+    db_session.flush()
+    for ch, job in zip([ch_rows[0], ch_rows[1]], [new_agent, old_agent], strict=True):
+        ch.job_id = job.id
+        ch.state = "running"
+    db_session.flush()
+
+    assert _act(client, cid, "cancel").status_code == 200
+
+    states = {
+        c.host_id: c.state
+        for c in db_session.execute(
+            select(CampaignHost).where(CampaignHost.campaign_id == uuid.UUID(cid))
+        ).scalars()
+    }
+    assert states[ch_rows[0].host_id] == "orphaned"
+    assert states[ch_rows[1].host_id] == "orphaned"
+
+
 # --- reads -------------------------------------------------------------------
 
 

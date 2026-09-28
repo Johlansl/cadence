@@ -30,7 +30,7 @@ from app.core.logging import configure_logging
 from app.core.schedule_timing import next_run_at
 from app.core.staleness import SILENT_AFTER
 from app.db.base import SessionLocal
-from app.job_creation import create_job_for_host
+from app.job_creation import create_job_for_host, unproven_reboot_hold_clause
 from app.models.models import (
     AgentToken,
     AuditLog,
@@ -280,6 +280,11 @@ def retention_sweep(
                 Job.completed_at.is_not(None),
                 Job.completed_at < cutoff,
                 or_(Job.campaign_id.is_(None), Job.campaign_id.not_in(live_campaign)),
+                # Never purge a job still holding an unresolved reboot hold:
+                # deleting it would silently free budget for a reboot nobody
+                # proved. Only an observed new boot (or an explicit operator
+                # recovery) releases the hold.
+                ~unproven_reboot_hold_clause(),
             )
         ).rowcount
     if audit_days > 0:

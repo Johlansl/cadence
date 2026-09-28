@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models.models import AgentToken, AuditLog, Job, Report
+from app.models.models import AgentToken, AuditLog, Host, Job, Report
 from app.scheduler import (
     RETENTION_EVERY,
     _mark_retention_done,
@@ -138,6 +138,47 @@ def test_sweep_keeps_old_jobs_while_their_campaign_is_live(client, db_session):
         ).scalars()
     )
     assert remaining == {j_live.id}
+
+
+def test_sweep_keeps_job_with_unproven_reboot_hold(client, db_session, monkeypatch):
+    from app.core.config import settings
+    from tests.conftest import ADMIN_HEADERS
+
+    monkeypatch.setattr(settings, "max_concurrent_reboots", 1)
+    host_id, _ = create_host(client)
+    other_id, _ = create_host(client, hostname="vm-other")
+    for hid in (host_id, other_id):
+        db_session.get(Host, hid).reboot_policy = "auto"
+    db_session.add(
+        Job(
+            host_id=host_id,
+            job_type="apt_upgrade",
+            status="succeeded",
+            completed_at=NOW - timedelta(days=200),
+            params={"reboot": "auto"},
+            result={
+                "health_status": "healthy",
+                "boot_id": "boot-1",
+                "will_reboot": True,
+            },
+        )
+    )
+    db_session.flush()
+
+    _, jobs, _, _ = retention_sweep(
+        db_session, NOW, reports_days=0, jobs_days=90, audit_days=0, tokens_days=0
+    )
+    assert jobs == 0  # old enough to purge, but the hold is unproven
+    assert (
+        db_session.execute(select(Job).where(Job.host_id == host_id)).scalar_one()
+        is not None
+    )
+
+    # ...and the surviving row still refuses a second reboot elsewhere.
+    r = client.post(
+        f"/api/v1/admin/hosts/{other_id}/jobs", headers=ADMIN_HEADERS, json={}
+    )
+    assert r.status_code == 409
 
 
 def test_sweep_disabled_with_zero(client, db_session):

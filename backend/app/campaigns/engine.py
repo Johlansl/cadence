@@ -35,7 +35,7 @@ from typing import NamedTuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.campaigns.lifecycle import finalize_campaign_hosts
+from app.campaigns.lifecycle import finalize_campaign_hosts, reboot_expected
 from app.core.config import settings
 from app.db.base import SessionLocal
 from app.job_creation import create_job_for_host
@@ -151,15 +151,6 @@ def _return_proven(host: Host | None, ch: CampaignHost, fresh: str | None) -> bo
     )
 
 
-def _reboot_expected(job: Job, host: Host | None, result: dict) -> bool:
-    """True when the upgrade ran on auto with a pending reboot: the agent
-    rebooted (old agents decide the same way) but sent no proof fields. The
-    mode is the creation-time snapshot when present, else the live policy
-    (rows created before pinning, same fallback the claim path uses)."""
-    mode = (job.params or {}).get("reboot") or (host.reboot_policy if host else None)
-    return mode == "auto" and bool(result.get("reboot_required"))
-
-
 def _reconcile(
     db: Session,
     c: Campaign,
@@ -238,7 +229,7 @@ def _reconcile(
                     ch.awaited_boot = pre_boot
                     ch.updated_at = now
                     continue  # row stays running until proven return
-                if will_reboot is None and _reboot_expected(job, host, result):
+                if will_reboot is None and reboot_expected(job, host, result):
                     # Old agent on an auto host with a pending reboot: a reboot
                     # was attempted but no proof can ever arrive. Halt now with
                     # an actionable reason instead of waiting out a timeout.

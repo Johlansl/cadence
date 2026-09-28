@@ -24,7 +24,16 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.models import CampaignHost, Job
+from app.models.models import CampaignHost, Host, Job
+
+
+def reboot_expected(job: Job, host: Host | None, result: dict) -> bool:
+    """True when the upgrade ran on auto with a pending reboot: the agent
+    rebooted (old agents decide the same way) but sent no proof fields. The
+    mode is the creation-time snapshot when present, else the live policy
+    (rows created before pinning, same fallback the claim path uses)."""
+    mode = (job.params or {}).get("reboot") or (host.reboot_policy if host else None)
+    return mode == "auto" and bool(result.get("reboot_required"))
 
 
 def finalize_campaign_hosts(
@@ -51,7 +60,16 @@ def finalize_campaign_hosts(
             continue
         job = db.get(Job, ch.job_id) if ch.job_id is not None else None
         if job is not None and job.status == "succeeded":
-            ch.state = "done"
+            result = job.result or {}
+            will_reboot = result.get("will_reboot")
+            unproven = will_reboot is True or (
+                will_reboot is None
+                and reboot_expected(job, db.get(Host, ch.host_id), result)
+            )
+            # The submit -> reconcile window: the job succeeded with a reboot
+            # the engine never saw, so there is no await marker yet. Same rule
+            # as an awaited row: the return is unproven, orphan, never done.
+            ch.state = "orphaned" if unproven else "done"
         elif job is not None and job.status == "failed":
             ch.state = "skipped"
             ch.skip_reason = job.failure_category or "unknown"
