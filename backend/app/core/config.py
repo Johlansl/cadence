@@ -217,6 +217,14 @@ class Settings:
             "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS", 7200
         )
 
+        # Global reboot budget (6A): at most this many Cadence-driven reboots
+        # may be unproven at once, across campaigns, schedules and manual
+        # jobs. 0 = disabled (today's behavior: no bound). Read by the lot 4
+        # admission check; inert until then.
+        self.max_concurrent_reboots: int = _non_negative_int(
+            "CADENCE_MAX_CONCURRENT_REBOOTS", 0
+        )
+
         # Server-pinned thresholds handed to every apt_upgrade agent. Keeping
         # these values in job.params makes each run reproducible in the audit
         # trail. Agents retain the same defaults for compatibility with jobs
@@ -402,6 +410,21 @@ class Settings:
         # create request. 0 = advance as soon as the stage's jobs finish.
         self.campaign_observation_window_seconds: int = _non_negative_int(
             "CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS", 600
+        )
+
+        # How long a campaign waits for a rebooted host to prove its return
+        # before halting fail-safe (6A). Derived from existing timings: the
+        # nominal return path stays well under ~10 minutes (the reboot itself
+        # takes minutes, the boot health check fires at 45s and runs up to
+        # 5 minutes, plus ~1-minute poll/scheduler ticks), and the system
+        # already defines 15 minutes of silence as "offline" (SILENT_AFTER /
+        # CADENCE_WEBHOOK_OFFLINE_AFTER_SECONDS). The default is twice that
+        # silence threshold: one full extra window for slow boots (fsck,
+        # cloud-init) before failing, while staying far below the 2-hour
+        # running-job reaper scale. Strictly positive: an unbounded wait
+        # would hang the rollout. Read by the lot 4 engine; inert until then.
+        self.campaign_return_timeout_seconds: int = _positive_int(
+            "CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS", 1800
         )
 
 

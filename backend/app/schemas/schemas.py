@@ -294,6 +294,9 @@ class ReportIn(BaseModel):
     os_codename: str | None = None
     package_manager: str | None = "apt"
     reboot_required: bool = False
+    # This boot's kernel identifier (agent 6A+). None = older agent (or an
+    # unreadable boot id): the stored observation is left untouched.
+    boot_id: str | None = None
     packages: list[ReportPackage] = Field(default_factory=list)
     # A report sent after completing an apt job must not claim another job: the
     # one-shot agent is about to exit and will not execute the returned handoff.
@@ -320,6 +323,17 @@ class JobHandoff(BaseModel):
 
 class NextJob(BaseModel):
     job: JobHandoff | None = None
+
+
+class AgentContactIn(BaseModel):
+    """Optional body of the job-claim polls (next-job, health-check-job).
+
+    Old agents POST "{}" (or nothing at all); capable agents add their boot so
+    the server can attribute the contact. Every field stays optional so all
+    three shapes validate.
+    """
+
+    boot_id: str | None = None
 
 
 class ReportSummary(BaseModel):
@@ -623,6 +637,13 @@ class JobResultIn(BaseModel):
     pre_checks: HealthCheckPhaseIn | None = None
     post_checks: HealthCheckPhaseIn | None = None
     health_status: HostHealthStatus | None = None
+    # Sent by 6A-capable agents on every job result: the boot the job ran on.
+    # None = older agent (or an unreadable boot id); stored only when present.
+    boot_id: str | None = None
+    # Sent by 6A-capable agents for an apt_upgrade (and a dedicated reboot
+    # job): the agent's own reboot decision. None = not applicable (any other
+    # job type, or an older agent); an explicit false means no reboot follows.
+    will_reboot: bool | None = None
 
     @model_validator(mode="after")
     def _consistent_health_status(self) -> JobResultIn:

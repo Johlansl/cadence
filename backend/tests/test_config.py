@@ -97,3 +97,20 @@ def test_api_docs_disabled_by_default(monkeypatch):
     assert Settings().api_docs_enabled is False
     monkeypatch.setenv("CADENCE_API_DOCS_ENABLED", "true")
     assert Settings().api_docs_enabled is True
+
+
+def test_reboot_budget_defaults_disabled(monkeypatch):
+    _valid_env(monkeypatch)
+    monkeypatch.delenv("CADENCE_MAX_CONCURRENT_REBOOTS", raising=False)
+    assert Settings().max_concurrent_reboots == 0
+    monkeypatch.setenv("CADENCE_MAX_CONCURRENT_REBOOTS", "1")
+    assert Settings().max_concurrent_reboots == 1
+
+
+def test_return_timeout_defaults_and_rejects_zero(monkeypatch):
+    _valid_env(monkeypatch)
+    monkeypatch.delenv("CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS", raising=False)
+    assert Settings().campaign_return_timeout_seconds == 1800
+    monkeypatch.setenv("CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS", "0")
+    with pytest.raises(RuntimeError):
+        Settings()

@@ -124,6 +124,8 @@ def create_report(
     was_reboot_required = host.reboot_required
     host.reboot_required = report_in.reboot_required
     host.last_seen_at = now
+    if report_in.boot_id:
+        host.current_boot_id = report_in.boot_id
     host.updated_at = now
 
     # 2. Resolve / create the referenced packages.

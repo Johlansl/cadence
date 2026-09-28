@@ -59,6 +59,10 @@ class Host(Base):
     reboot_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # Boot identifier most recently observed from the agent (migration 0024).
+    # NULL until a capable agent makes contact; never blanked afterwards, only
+    # replaced by a newer observation.
+    current_boot_id: Mapped[str | None] = mapped_column(Text)
     # Current projection from the latest apt_upgrade result that carried
     # post-check information (migration 0018). Full evidence stays in the job.
     health_status: Mapped[str] = mapped_column(
@@ -566,6 +570,10 @@ class CampaignHost(Base):
     job_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("jobs.id", ondelete="SET NULL")
     )
+    # Pre-reboot boot reference, snapshotted when the engine enters the
+    # reboot-await state (migration 0025). Non-NULL marks a row as awaiting
+    # proven return; kept on this row so deleting job history cannot strand it.
+    awaited_boot: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

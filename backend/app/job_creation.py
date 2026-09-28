@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.exclusions import known_held_for_host, resolve_for_job
-from app.models.models import Job
+from app.models.models import Host, Job
 
 ACTIVE_JOB_INDEX = "ux_jobs_one_active_per_host"
 
@@ -59,7 +59,9 @@ def create_job_for_host(
 
     For an `apt_upgrade` or `apt_dry_run` job the server-resolved
     `params.excluded_packages` is injected. `apt_upgrade` additionally gets
-    `params.known_held_packages`. Both `apt_upgrade` and `health_check` get
+    `params.known_held_packages` and, unless the caller passed an explicit
+    `reboot` override, a snapshot of the host's current `reboot_policy`.
+    Both `apt_upgrade` and `health_check` get
     the server's health-check thresholds in `params.health_checks`, since
     `health_check` reruns the same disk-space checks under the same policy.
     All of these always overwrite whatever the caller passed under those
@@ -77,6 +79,17 @@ def create_job_for_host(
         return None
 
     params = dict(params or {})
+    if job_type == "apt_upgrade" and "reboot" not in params:
+        # Snapshot the host's current policy so the reboot decision, the claim
+        # path and the future reboot budget all read the same value. An
+        # explicit caller override keeps precedence. A later policy change no
+        # longer affects this job; rows created before this pinning still fall
+        # back to the live policy at claim time.
+        policy = db.execute(
+            select(Host.reboot_policy).where(Host.id == host_id)
+        ).scalar_one_or_none()
+        if policy is not None:
+            params["reboot"] = policy
     if job_type in ("apt_upgrade", "apt_dry_run"):
         params["excluded_packages"] = resolve_for_job(db, host_id)
     if job_type == "apt_upgrade":

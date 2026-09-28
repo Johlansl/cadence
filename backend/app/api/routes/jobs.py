@@ -19,7 +19,13 @@ from app.api.deps import get_current_host, get_db
 from app.api.pagination import before_keyset
 from app.job_creation import create_job_for_host
 from app.models.models import Host, Job
-from app.schemas.schemas import JobHandoff, JobOut, JobResultIn, NextJob
+from app.schemas.schemas import (
+    AgentContactIn,
+    JobHandoff,
+    JobOut,
+    JobResultIn,
+    NextJob,
+)
 from app.webhooks.events import on_job_result
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
@@ -53,11 +59,15 @@ def claim_pending_job(db: Session, host: Host, now) -> Job | None:
 
 @router.post("/agent/next-job", response_model=NextJob)
 def claim_next_job(
-    host: Host = Depends(get_current_host), db: Session = Depends(get_db)
+    contact: AgentContactIn | None = None,
+    host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
 ) -> NextJob:
     now = datetime.now(timezone.utc)
     job = claim_pending_job(db, host, now)
     host.last_seen_at = now  # a poll is also a liveness signal
+    if contact is not None and contact.boot_id:
+        host.current_boot_id = contact.boot_id
     handoff = (
         JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
         if job is not None
@@ -69,7 +79,9 @@ def claim_next_job(
 
 @router.post("/agent/health-check-job", response_model=NextJob)
 def claim_health_check_job(
-    host: Host = Depends(get_current_host), db: Session = Depends(get_db)
+    contact: AgentContactIn | None = None,
+    host: Host = Depends(get_current_host),
+    db: Session = Depends(get_db),
 ) -> NextJob:
     """Atomically create and hand back a health_check job for the calling
     host: the boot-triggered health check (agent -health-check-boot) asks
@@ -88,6 +100,8 @@ def claim_health_check_job(
         job.status = "running"
         job.started_at = now
     host.last_seen_at = now  # this call is also a liveness signal
+    if contact is not None and contact.boot_id:
+        host.current_boot_id = contact.boot_id
     handoff = (
         JobHandoff(id=job.id, job_type=job.job_type, params=job.params)
         if job is not None
@@ -199,6 +213,13 @@ def submit_job_result(
     # a None is distinguishable from a dry-run that produced an empty preview.
     if payload.dry_run is not None:
         result["dry_run"] = payload.dry_run.model_dump()
+    # boot_id / will_reboot (6A): stored only when the agent sent a value, so
+    # an absent key stays distinguishable from an explicit one -- notably an
+    # explicit will_reboot=false, which means no reboot follows.
+    if payload.boot_id:
+        result["boot_id"] = payload.boot_id
+    if payload.will_reboot is not None:
+        result["will_reboot"] = payload.will_reboot
     if payload.pre_checks is not None:
         result["pre_checks"] = payload.pre_checks.model_dump(
             exclude_none=True, exclude_unset=True
@@ -260,6 +281,11 @@ def submit_job_result(
         host.health_status = payload.health_status
         host.health_checked_at = job.completed_at
         host.updated_at = job.completed_at
+
+    # Record the boot the job ran on. Older agents omit it; the previous
+    # observation then remains valid.
+    if payload.boot_id:
+        host.current_boot_id = payload.boot_id
 
     # A completed reboot job clears the host's reboot-required flag right away
     # (the /run/reboot-required file is gone after the reboot). If the reboot

@@ -48,6 +48,7 @@ def test_apt_upgrade_injects_both_held_lists_and_flushes_an_id(db_session):
     assert job.job_type == "apt_upgrade"
     assert job.status == "pending"
     assert job.params == {
+        "reboot": "never",  # host policy snapshotted at creation (6A lot 2)
         "excluded_packages": [],
         "known_held_packages": [],
         "health_checks": _health_checks(),
