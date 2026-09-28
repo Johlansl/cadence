@@ -353,6 +353,72 @@ func TestSubmitJobResultHeldPackagesRoundTrips(t *testing.T) {
 	}
 }
 
+func TestPollBody(t *testing.T) {
+	if got := string(pollBody("")); got != "{}" {
+		t.Errorf("pollBody(\"\") = %q, want %q", got, "{}")
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal(pollBody("boot-1"), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["boot_id"] != "boot-1" {
+		t.Errorf("pollBody(\"boot-1\") = %v", parsed)
+	}
+}
+
+func TestSubmitJobResultCarriesBootFields(t *testing.T) {
+	yes, no := true, false
+	tests := []struct {
+		name     string
+		result   JobResult
+		wantKeys []string
+		omitKeys []string
+	}{
+		{
+			"boot and reboot decision",
+			JobResult{Status: "succeeded", BootID: "boot-1", WillReboot: &yes},
+			[]string{`"boot_id":"boot-1"`, `"will_reboot":true`},
+			nil,
+		},
+		{
+			"explicit false stays",
+			JobResult{Status: "succeeded", WillReboot: &no},
+			[]string{`"will_reboot":false`},
+			[]string{`"boot_id"`},
+		},
+		{
+			"unset stays omitted",
+			JobResult{Status: "succeeded"},
+			nil,
+			[]string{`"boot_id"`, `"will_reboot"`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotRaw string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				gotRaw = string(raw)
+				_, _ = io.WriteString(w, `{}`)
+			}))
+			defer srv.Close()
+			if err := New(srv.URL, "tok", 5*time.Second).SubmitJobResult(context.Background(), "j", tc.result); err != nil {
+				t.Fatal(err)
+			}
+			for _, k := range tc.wantKeys {
+				if !strings.Contains(gotRaw, k) {
+					t.Errorf("expected %s in %s", k, gotRaw)
+				}
+			}
+			for _, k := range tc.omitKeys {
+				if strings.Contains(gotRaw, k) {
+					t.Errorf("expected no %s in %s", k, gotRaw)
+				}
+			}
+		})
+	}
+}
+
 func TestDoRetriesOn5xxThenSucceeds(t *testing.T) {
 	old := retryWaits
 	retryWaits = []time.Duration{0, 0, 0}

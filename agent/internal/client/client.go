@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"time"
 
+	"cadence/agent/internal/bootid"
 	"cadence/agent/internal/healthcheck"
 	"cadence/agent/internal/report"
 )
@@ -111,7 +112,7 @@ func (c *Client) sendReport(ctx context.Context, r report.Report) (*report.JobHa
 // ClaimNextJob asks the server for a pending job without sending a package
 // report (the fast poll path). Returns nil when nothing is pending.
 func (c *Client) ClaimNextJob(ctx context.Context) (*report.JobHandoff, error) {
-	resp, err := c.do(ctx, "/api/v1/agent/next-job", []byte("{}"))
+	resp, err := c.do(ctx, "/api/v1/agent/next-job", pollBody(bootid.Read()))
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +136,7 @@ func (c *Client) ClaimNextJob(ctx context.Context) (*report.JobHandoff, error) {
 // host already has another job pending or running -- the regular
 // cadence-agent-poll.timer picks that up on its own schedule.
 func (c *Client) ClaimHealthCheckJob(ctx context.Context) (*report.JobHandoff, error) {
-	resp, err := c.do(ctx, "/api/v1/agent/health-check-job", []byte("{}"))
+	resp, err := c.do(ctx, "/api/v1/agent/health-check-job", pollBody(bootid.Read()))
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +224,32 @@ type JobResult struct {
 	PreChecks    *healthcheck.Phase       `json:"pre_checks"`
 	PostChecks   *healthcheck.Phase       `json:"post_checks"`
 	HealthStatus healthcheck.HealthStatus `json:"health_status,omitempty"`
+
+	// BootID is the boot the job ran on (see internal/bootid), omitted when
+	// unknown so the result stays byte-identical to older agents.
+	BootID string `json:"boot_id,omitempty"`
+
+	// WillReboot records the agent's own reboot decision for this job: set
+	// for an apt_upgrade (and a dedicated reboot job) from the same check
+	// that gates the reboot itself, nil (omitted) where the question does
+	// not apply. A non-nil false is meaningful: no reboot will follow.
+	WillReboot *bool `json:"will_reboot,omitempty"`
+}
+
+// pollBody is the body of the job-claim polls: just this boot's identifier so
+// the server can attribute the contact to a boot. Empty (byte-identical to the
+// historic "{}") when the boot cannot be read.
+func pollBody(bootID string) []byte {
+	if bootID == "" {
+		return []byte("{}")
+	}
+	body, err := json.Marshal(struct {
+		BootID string `json:"boot_id"`
+	}{BootID: bootID})
+	if err != nil {
+		return []byte("{}")
+	}
+	return body
 }
 
 // SubmitJobResult reports the outcome of a job back to the server.

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"cadence/agent/internal/bootid"
 	"cadence/agent/internal/logging"
 	"cadence/agent/internal/procenv"
 	"cadence/agent/internal/report"
@@ -47,6 +48,7 @@ func Collect(ctx context.Context, agentVersion string, runAptUpdate bool) (repor
 		PackageManager: "apt",
 		RebootRequired: rebootRequired(),
 		Packages:       mergeUpdates(installed, updates),
+		BootID:         bootid.Read(),
 	}, nil
 }
 

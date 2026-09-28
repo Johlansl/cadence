@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"cadence/agent/internal/apterr"
+	"cadence/agent/internal/bootid"
 	"cadence/agent/internal/client"
 	"cadence/agent/internal/collector"
 	"cadence/agent/internal/config"
@@ -212,6 +213,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 	logging.Info("job received", "job_id", job.ID, "job_type", job.JobType)
 
 	submit := func(result client.JobResult) error {
+		result.BootID = bootid.Read()
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
 		defer cancel()
 		return c.SubmitJobResult(ctx, job.ID, result)
@@ -233,10 +235,12 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 			return refused("reboot is disabled on this host (CADENCE_ENABLE_REBOOT=false)")
 		}
 		logging.Info("dedicated reboot job -> systemctl --no-block reboot", "job_id", job.ID)
+		willReboot := true
 		if err := submit(client.JobResult{
 			Status: "succeeded", ExitCode: 0,
 			Log:            "[cadence] reboot requested via dedicated job -> systemctl --no-block reboot\n",
 			RebootRequired: true,
+			WillReboot:     &willReboot,
 		}); err != nil {
 			return fmt.Errorf("submitting job result: %w", err)
 		}
@@ -345,6 +349,7 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		FailureCategory: res.FailureCategory, FailureSummary: res.FailureSummary,
 		HeldConflicts: res.HeldConflicts, HeldPackages: res.HeldPackages,
 		PreChecks: res.PreChecks, PostChecks: res.PostChecks, HealthStatus: res.HealthStatus,
+		WillReboot: &willReboot,
 	}); err != nil {
 		return fmt.Errorf("submitting job result: %w", err)
 	}

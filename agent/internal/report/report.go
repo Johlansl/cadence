@@ -32,6 +32,9 @@ type Report struct {
 	PackageManager string    `json:"package_manager"`
 	RebootRequired bool      `json:"reboot_required"`
 	Packages       []Package `json:"packages"`
+	// BootID is this boot's kernel identifier (see internal/bootid), omitted
+	// when unknown. The server uses it to tell a rebooted host apart.
+	BootID string `json:"boot_id,omitempty"`
 	// ClaimJob is normally omitted, which lets the server preserve its default
 	// of handing back one pending job. A post-job inventory report sets it to
 	// false so it cannot claim a second job that this one-shot run will not
