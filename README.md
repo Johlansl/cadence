@@ -338,6 +338,8 @@ All configuration is environment variables. Server variables live in `.env`
 | `CADENCE_WEBHOOK_DELIVERIES_RETENTION_DAYS` | `30` | daily prune of terminal `webhook_deliveries` rows; `0` = keep forever |
 | `CADENCE_WEBHOOK_LOG_MAX_BYTES` | `4096` | cap on the job log embedded in `job.*` payloads (head + tail kept); `0` = full log |
 | `CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS` | `600` | default quiet time between a campaign's stages (per-campaign overridable); `0` = advance as soon as a stage's jobs finish. See [docs/campaigns.md](docs/campaigns.md) |
+| `CADENCE_MAX_CONCURRENT_REBOOTS` | `0` | fleet-wide cap on Cadence-driven reboots awaiting proof, across campaigns, schedules and manual jobs; `0` = off. See [docs/campaigns.md](docs/campaigns.md#reboots) |
+| `CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS` | `1800` | how long a campaign waits for a rebooted host to prove its return before halting; strictly positive. See [docs/campaigns.md](docs/campaigns.md#reboots) |
 | `CADENCE_LOG_LEVEL` | `INFO` | backend + scheduler log level (output is logfmt) |
 | `CADENCE_DB_WAIT_SECONDS` | `60` | how long the entrypoint waits for Postgres before giving up |
 | `CADENCE_SCHEDULER_HEARTBEAT_TIMEOUT` | `180` | scheduler healthcheck: max age of the loop's heartbeat |
@@ -438,7 +440,10 @@ job must also report `healthy` or `degraded`), fills the active wave up to
 `max_concurrency`, holds each terminal wave for its observation window, and
 stops on a halt condition or once the skip count passes `max_failures`.
 `pause` / `resume` / `cancel` are the manual controls; the `#campaigns`
-dashboard section has the create form and a per-stage / per-host view. Full
+dashboard section has the create form and a per-stage / per-host view. A
+host that reboots on `auto` stays `running` until it proves its return
+(new boot plus fresh acceptable health), and a global budget can cap
+concurrent unproven reboots fleet-wide. Full
 detail: [docs/campaigns.md](docs/campaigns.md).
 
 Every target host must be on agent `0.12.0` or newer before you `activate` a
