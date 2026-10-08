@@ -1,13 +1,12 @@
-// Package upgrade holds the pure local decision logic for an agent_upgrade
-// job (6B): is the payload strictly valid, how does the target compare to
-// the running version, where would the artifacts come from, and is this
-// process eligible to self-upgrade.
+// Package upgrade implements the agent_upgrade job (6B): pure local decision
+// logic in this file (is the payload strictly valid, how does the target
+// compare to the running version, where would the artifacts come from, is
+// this process eligible to self-upgrade) plus the verified installer
+// (install.go) that downloads, verifies and atomically replaces the running
+// binary, and the embedded root of trust (trust.go).
 //
-// This package is dormant decision support for PR6. It performs no I/O
-// beyond resolving the current executable path, and it mutates nothing:
-// no download, no signature check, no file replacement, no subprocess.
-// The real dispatcher (cmd/agent runJob) still refuses agent_upgrade as an
-// unsupported job type; nothing here is wired into it yet.
+// cmd/agent runJob dispatches agent_upgrade jobs here; see Installer.Run for
+// the download, verification and install sequence.
 package upgrade
 
 import (
