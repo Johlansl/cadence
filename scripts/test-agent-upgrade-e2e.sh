@@ -66,11 +66,13 @@ die() { # die MSG -- log, persist diagnostics outside $T (trap deletes it), exit
 			} >"$D/$h.txt" 2>&1 || true
 		fi
 	done
-	[ -n "${PG_PASSWORD:-}" ] && PGPASSWORD=$PG_PASSWORD docker exec e2e-db-1 psql \
-		-U "${PG_USER:-e2e}" -d "${PG_DB:-e2e}" -c \
-		'SELECT id,hostname,agent_version,last_seen_at FROM hosts' \
-		-c 'SELECT id,job_type,status FROM jobs' \
-		-c 'SELECT id,name,status,job_type,halt_reason FROM campaigns' >"$D/db.txt" 2>&1 || true
+	if [ -n "${PG_PASSWORD:-}" ]; then
+		PGPASSWORD=$PG_PASSWORD docker exec e2e-db-1 psql \
+			-U "${PG_USER:-e2e}" -d "${PG_DB:-e2e}" -c \
+			'SELECT id,hostname,agent_version,last_seen_at FROM hosts' \
+			-c 'SELECT id,job_type,status FROM jobs' \
+			-c 'SELECT id,name,status,job_type,halt_reason FROM campaigns' >"$D/db.txt" 2>&1 || true
+	fi
 	cp "$T"/*.log "$D/" 2>/dev/null || true
 	log "diagnostics persisted in $D"
 	log 'PRIMITIVE NON VALIDEE'
@@ -96,7 +98,9 @@ COMPOSE="docker compose -p e2e -f $repo/docker-compose.yml -f $repo/docker-compo
 # --- phase 0: preflight -------------------------------------------------------
 log 'phase 0/11: preflight'
 need docker; need git; need minisign; need python3; need curl; need openssl
-[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = "x86_64" ] || die 'need linux/amd64'
+if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != "x86_64" ]; then
+	die 'need linux/amd64'
+fi
 docker info >/dev/null 2>&1 || die 'docker unreachable'
 for p in 5433 8001 8081 8082 4443 8444; do
 	if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('127.0.0.1',$p)) == 0 else 1)"; then
@@ -419,7 +423,9 @@ T_OK=$(date +%s)
 sleep 30 # let the dispatcher settle, then count terminal events
 n_ok=$(psql_e2e "SELECT count(*) FROM webhook_deliveries WHERE event_type = 'job.succeeded' AND payload->'data'->>'job_id' = '$J1'")
 n_bad=$(psql_e2e "SELECT count(*) FROM webhook_deliveries WHERE event_type = 'job.failed' AND payload->'data'->>'job_id' = '$J1'")
-[ "$n_ok" = 1 ] && [ "$n_bad" = 0 ] || die "deliveries for $J1: ok=$n_ok failed=$n_bad"
+if [ "$n_ok" != 1 ] || [ "$n_bad" != 0 ]; then
+	die "deliveries for $J1: ok=$n_ok failed=$n_bad"
+fi
 pass "job succeeded by PR4 proof after $((T_OK - T_RENAME))s; result proven-only; exactly one succeeded event"
 pass 'N submitted no succeeded (result is the server-made proven blob)'
 
@@ -463,7 +469,9 @@ pass 'credentials/config identical (hashes + modes)'
 # No secret may leak into backend logs or the host journal.
 TOKEN=$(hexec e2e-host-a sh -c 'grep ^CADENCE_TOKEN= /etc/cadence/agent.env | cut -d= -f2-')
 KEYLINE=$(hexec e2e-host-a sh -c 'grep -v "^---" /etc/cadence/client-*.key | head -1 | cut -c1-40')
-[ -n "$TOKEN" ] && [ -n "$KEYLINE" ] || die 'cannot read test credentials for leak check'
+if [ -z "$TOKEN" ] || [ -z "$KEYLINE" ]; then
+	die 'cannot read test credentials for leak check'
+fi
 # shellcheck disable=SC2086 # word-splitting $COMPOSE is intended
 $COMPOSE logs --no-log-prefix backend scheduler >"$T/server-logs.txt" 2>&1
 hexec e2e-host-a journalctl --no-pager >"$T/host-journal.txt"
