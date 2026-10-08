@@ -26,6 +26,7 @@ from app.schemas.schemas import (
     JobResultIn,
     NextJob,
 )
+from app.upgrade_proof import complete_agent_upgrade_if_proven
 from app.webhooks.events import on_job_result
 
 router = APIRouter(prefix="/api/v1", tags=["jobs"])
@@ -64,6 +65,13 @@ def claim_next_job(
     db: Session = Depends(get_db),
 ) -> NextJob:
     now = datetime.now(timezone.utc)
+    version = contact.agent_version if contact is not None else None
+    if version:
+        host.agent_version = version
+    # Proof before claim: a new agent coming back while its agent_upgrade is
+    # still running must complete it first, freeing the one-active-job guard
+    # before the server hands it another job.
+    complete_agent_upgrade_if_proven(db, host, version, now)
     job = claim_pending_job(db, host, now)
     host.last_seen_at = now  # a poll is also a liveness signal
     if contact is not None and contact.boot_id:
@@ -93,6 +101,12 @@ def claim_health_check_job(
     shape as an empty /agent/next-job poll); the regular
     cadence-agent-poll.timer picks up whatever that job actually is."""
     now = datetime.now(timezone.utc)
+    version = contact.agent_version if contact is not None else None
+    if version:
+        host.agent_version = version
+    # Same proof-before-admission order as the next-job poll: a proven upgrade
+    # frees the one-active-job guard before the health_check is created.
+    complete_agent_upgrade_if_proven(db, host, version, now)
     job = create_job_for_host(
         db, host_id=host.id, job_type="health_check", requested_by="boot"
     )

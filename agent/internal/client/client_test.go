@@ -354,15 +354,77 @@ func TestSubmitJobResultHeldPackagesRoundTrips(t *testing.T) {
 }
 
 func TestPollBody(t *testing.T) {
-	if got := string(pollBody("")); got != "{}" {
-		t.Errorf("pollBody(\"\") = %q, want %q", got, "{}")
+	if got := string(pollBody("", "")); got != "{}" {
+		t.Errorf("pollBody(\"\", \"\") = %q, want %q", got, "{}")
 	}
 	var parsed map[string]string
-	if err := json.Unmarshal(pollBody("boot-1"), &parsed); err != nil {
+	if err := json.Unmarshal(pollBody("boot-1", ""), &parsed); err != nil {
 		t.Fatal(err)
 	}
 	if parsed["boot_id"] != "boot-1" {
-		t.Errorf("pollBody(\"boot-1\") = %v", parsed)
+		t.Errorf("pollBody(\"boot-1\", \"\") = %v", parsed)
+	}
+	if _, ok := parsed["agent_version"]; ok {
+		t.Errorf("pollBody(\"boot-1\", \"\") must omit agent_version, got %v", parsed)
+	}
+	parsed = nil
+	if err := json.Unmarshal(pollBody("boot-1", "0.15.0"), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["boot_id"] != "boot-1" || parsed["agent_version"] != "0.15.0" {
+		t.Errorf("pollBody(\"boot-1\", \"0.15.0\") = %v", parsed)
+	}
+	parsed = nil
+	if err := json.Unmarshal(pollBody("", "0.15.0"), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["agent_version"] != "0.15.0" {
+		t.Errorf("pollBody(\"\", \"0.15.0\") = %v", parsed)
+	}
+	if _, ok := parsed["boot_id"]; ok {
+		t.Errorf("pollBody(\"\", \"0.15.0\") must omit boot_id, got %v", parsed)
+	}
+}
+
+func TestClaimNextJobSendsEmbeddedVersion(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &gotBody); err != nil {
+			t.Errorf("poll body is not JSON: %q", raw)
+		}
+		_, _ = io.WriteString(w, `{"job":null}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", 5*time.Second)
+	c.SetVersion("0.15.0")
+	if _, err := c.ClaimNextJob(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["agent_version"] != "0.15.0" {
+		t.Errorf("poll body = %v, want agent_version 0.15.0", gotBody)
+	}
+}
+
+func TestClaimNextJobOmitsVersionWhenUnset(t *testing.T) {
+	var gotRaw string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		gotRaw = string(raw)
+		_, _ = io.WriteString(w, `{"job":null}`)
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL, "tok", 5*time.Second).ClaimNextJob(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(gotRaw), &parsed); err != nil {
+		t.Fatalf("poll body is not JSON: %q", gotRaw)
+	}
+	if _, ok := parsed["agent_version"]; ok {
+		t.Errorf("poll body without SetVersion must omit agent_version, got %q", gotRaw)
 	}
 }
 

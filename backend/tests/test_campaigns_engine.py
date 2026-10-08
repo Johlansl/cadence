@@ -10,11 +10,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from app.campaigns import engine
 from app.campaigns.engine import advance_campaigns
 from app.core.config import settings
+from app.job_creation import _consumes_reboot_budget, _reboot_budget_in_use
 from app.models.models import Campaign, CampaignHost, Host, Job, WebhookDelivery
 from tests.conftest import ADMIN_HEADERS, webhook_row
 
@@ -71,6 +73,7 @@ def _finish(
     boot_id=None,
     will_reboot=None,
     reboot_required=None,
+    proven=False,
 ):
     ch = _ch(db_session, cid, host_id)
     job = db_session.get(Job, ch.job_id)
@@ -78,6 +81,8 @@ def _finish(
     job.completed_at = at
     if status == "failed":
         job.failure_category = category
+    elif proven:
+        job.result = {"proven": True}
     elif health is not None:
         result = {"health_status": health}
         if boot_id is not None:
@@ -668,3 +673,309 @@ def test_await_holds_concurrency_slot(client, db_session):
     advance_campaigns(now=NOW + timedelta(seconds=3), db=db_session)
     assert _ch(db_session, cid, hs[0].id).state == "done"
     assert _ch(db_session, cid, hs[1].id).state == "running"
+
+
+# --- C2: agent_upgrade execution -----------------------------------------------
+
+
+def _running_agent(client, db_session, names, stages, **kw):
+    hs = _hosts(db_session, *names)
+    body = {
+        "name": kw.get("name", "agent-eng"),
+        "job_type": "agent_upgrade",
+        "job_params": {"target_version": kw.get("target", "0.15.0")},
+        "host_ids": [str(h.id) for h in hs],
+        "stages": stages,
+        "max_concurrency": kw.get("max_concurrency", 1),
+        "max_failures": kw.get("max_failures", 0),
+    }
+    if "observation_window_seconds" in kw:
+        body["observation_window_seconds"] = kw["observation_window_seconds"]
+    r = client.post("/api/v1/admin/campaigns", headers=ADMIN_HEADERS, json=body)
+    assert r.status_code == 201, r.text
+    cid = uuid.UUID(r.json()["id"])
+    assert (
+        client.post(
+            f"/api/v1/admin/campaigns/{cid}/activate", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    return cid, hs
+
+
+def _job(db_session, cid, host_id) -> Job:
+    return db_session.get(Job, _ch(db_session, cid, host_id).job_id)
+
+
+def test_agent_fill_creates_typed_jobs_with_the_frozen_target(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [2], max_concurrency=2
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    for h in hs:
+        job = _job(db_session, cid, h.id)
+        assert job.job_type == "agent_upgrade"
+        assert job.params == {"target_version": "0.15.0"}
+        assert job.campaign_id == cid
+
+
+def test_agent_proven_success_is_done_with_no_health_or_reboot(
+    client, db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        engine, "reboot_expected",
+        lambda *a: (_ for _ in ()).throw(AssertionError("must not be consulted")),
+    )
+    cid, (a,) = _running_agent(
+        client, db_session, ["a"], ["rest"], observation_window_seconds=0
+    )
+    _set_policy(client, a.id, "auto")  # even an auto host takes no reboot path
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, a.id, proven=True, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    ch = _ch(db_session, cid, a.id)
+    assert ch.state == "done" and ch.awaited_boot is None
+    assert _status(db_session, cid) == "completed"
+
+
+def test_agent_success_ignores_health_fields_that_would_halt_apt(
+    client, db_session
+):
+    """Order guard: the agent branch sits before the apt health gate. A
+    result that would halt an apt campaign must still complete here."""
+    cid, (a,) = _running_agent(
+        client, db_session, ["a"], ["rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    job = _job(db_session, cid, a.id)
+    job.status = "succeeded"
+    job.completed_at = NOW
+    job.result = {"proven": True, "health_status": "unhealthy"}
+    db_session.flush()
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, a.id).state == "done"
+    assert _status(db_session, cid) == "completed"
+
+
+@pytest.mark.parametrize("category", ["agent_refused", "upgrade_install_failed"])
+def test_agent_canary_local_skip_stops_with_zero_failures(
+    client, db_session, category
+):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [1, "rest"], max_failures=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, status="failed", category=category, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _status(db_session, cid) == "stopped"
+    assert _ch(db_session, cid, hs[0].id).state == "skipped"
+    # The stop finalizes the unstarted sibling as orphaned: stage 2 never runs.
+    assert _ch(db_session, cid, hs[1].id).state == "orphaned"
+    assert _ch(db_session, cid, hs[1].id).job_id is None
+
+
+def test_agent_fleet_tolerates_one_local_skip(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [1, "rest"],
+        max_failures=1, observation_window_seconds=0,
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(
+        db_session, cid, hs[0].id, status="failed",
+        category="upgrade_install_failed", at=NOW,
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _status(db_session, cid) == "running"
+    assert _ch(db_session, cid, hs[0].id).state == "skipped"
+    assert _ch(db_session, cid, hs[1].id).state == "running"  # stage advanced
+
+
+@pytest.mark.parametrize(
+    "category",
+    ["upgrade_verification_failed", "upgrade_proof_timeout", "upgrade_download_failed"],
+)
+def test_agent_systemic_failure_halts_despite_max_failures(
+    client, db_session, category
+):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [1, "rest"], max_failures=100
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, status="failed", category=category, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    c = db_session.get(Campaign, cid)
+    assert c.status == "stopped" and category in (c.halt_reason or "")
+    assert _ch(db_session, cid, hs[1].id).job_id is None  # never exposed
+
+
+def test_agent_concurrency_slot_held_until_proof(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [2],
+        max_concurrency=1, observation_window_seconds=0,
+    )
+    advance_campaigns(now=NOW, db=db_session)  # a fills the only slot
+    assert _ch(db_session, cid, hs[0].id).state == "running"
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[1].id).state == "pending"  # still no proof
+    _finish(db_session, cid, hs[0].id, proven=True, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=2), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+    assert _ch(db_session, cid, hs[1].id).state == "running"  # slot freed
+
+
+def test_agent_reboot_budget_never_consumed(client, db_session):
+    assert _consumes_reboot_budget("agent_upgrade", {"target_version": "0.15.0"}) is False
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [2],
+        max_concurrency=2, observation_window_seconds=0,
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, proven=True, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _reboot_budget_in_use(db_session) == 0
+    assert _ch(db_session, cid, hs[0].id).awaited_boot is None
+    assert _ch(db_session, cid, hs[1].id).awaited_boot is None
+
+
+def test_agent_host_busy_stays_pending_and_retries(client, db_session):
+    cid, (a,) = _running_agent(client, db_session, ["a"], ["rest"])
+    db_session.add(Job(host_id=a.id, job_type="health_check", status="pending"))
+    db_session.flush()
+    advance_campaigns(now=NOW, db=db_session)
+    ch = _ch(db_session, cid, a.id)
+    assert ch.state == "pending" and ch.job_id is None
+    assert _status(db_session, cid) == "running"
+    other = db_session.execute(
+        select(Job).where(Job.host_id == a.id, Job.campaign_id.is_(None))
+    ).scalar_one()
+    other.status = "succeeded"
+    other.completed_at = NOW
+    db_session.flush()
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    job = _job(db_session, cid, a.id)
+    assert job.job_type == "agent_upgrade"
+    assert _ch(db_session, cid, a.id).state == "running"
+
+
+def test_agent_unclaimed_job_never_progresses_and_cancels_cleanly(
+    client, db_session
+):
+    cid, (a,) = _running_agent(client, db_session, ["a"], ["rest"])
+    advance_campaigns(now=NOW, db=db_session)
+    assert _job(db_session, cid, a.id).status == "pending"  # never claimed
+    advance_campaigns(now=NOW + timedelta(hours=1), db=db_session)
+    assert _ch(db_session, cid, a.id).state == "running"  # not done, not skipped
+    assert _status(db_session, cid) == "running"
+    assert (
+        client.post(
+            f"/api/v1/admin/campaigns/{cid}/cancel", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    assert _ch(db_session, cid, a.id).state == "orphaned"
+
+
+def test_agent_pause_holds_everything_resume_reconciles(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [1, "rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    assert (
+        client.post(
+            f"/api/v1/admin/campaigns/{cid}/pause", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    _finish(db_session, cid, hs[0].id, proven=True, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "running"  # untouched paused
+    assert _ch(db_session, cid, hs[1].id).state == "pending"
+    assert (
+        client.post(
+            f"/api/v1/admin/campaigns/{cid}/resume", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    advance_campaigns(now=NOW + timedelta(seconds=2), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+    assert _ch(db_session, cid, hs[1].id).state == "running"
+
+
+@pytest.mark.parametrize("late_status", ["succeeded", "failed"])
+def test_agent_cancel_late_result_resurrects_nothing(
+    client, db_session, late_status
+):
+    cid, (a,) = _running_agent(client, db_session, ["a"], ["rest"])
+    advance_campaigns(now=NOW, db=db_session)
+    assert (
+        client.post(
+            f"/api/v1/admin/campaigns/{cid}/cancel", headers=ADMIN_HEADERS
+        ).status_code
+        == 200
+    )
+    assert _ch(db_session, cid, a.id).state == "orphaned"
+    if late_status == "succeeded":
+        _finish(db_session, cid, a.id, proven=True, at=NOW)
+    else:
+        _finish(
+            db_session, cid, a.id, status="failed",
+            category="upgrade_proof_timeout", at=NOW,
+        )
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _status(db_session, cid) == "cancelled"
+    assert _ch(db_session, cid, a.id).state == "orphaned"
+
+
+def test_agent_restart_resumes_from_postgres_only(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [1, "rest"], observation_window_seconds=0
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    a_id, b_id = hs[0].id, hs[1].id
+    _finish(db_session, cid, a_id, proven=True, at=NOW)
+    db_session.expunge_all()  # whatever the process knew is gone
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, a_id).state == "done"
+    assert _ch(db_session, cid, b_id).state == "running"
+
+
+def test_agent_observation_gate_holds_stage_two(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b"], [1, "rest"], observation_window_seconds=60
+    )
+    advance_campaigns(now=NOW, db=db_session)
+    _finish(db_session, cid, hs[0].id, proven=True, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "done"
+    assert _ch(db_session, cid, hs[1].id).state == "pending"  # window open
+    advance_campaigns(now=NOW + timedelta(seconds=61), db=db_session)
+    assert _ch(db_session, cid, hs[1].id).state == "running"  # window elapsed
+
+
+def test_agent_stages_roll_canary_then_rest(client, db_session):
+    cid, hs = _running_agent(
+        client, db_session, ["a", "b", "c"], [1, "rest"], observation_window_seconds=0
+    )
+    assert _ch(db_session, cid, hs[0].id).stage_index == 0
+    assert _ch(db_session, cid, hs[1].id).stage_index == 1
+    advance_campaigns(now=NOW, db=db_session)
+    assert _ch(db_session, cid, hs[0].id).state == "running"
+    assert _ch(db_session, cid, hs[1].id).job_id is None
+    assert _ch(db_session, cid, hs[2].id).job_id is None
+    _finish(db_session, cid, hs[0].id, proven=True, at=NOW)
+    advance_campaigns(now=NOW + timedelta(seconds=1), db=db_session)
+    assert _ch(db_session, cid, hs[1].id).state == "running"
+    assert _ch(db_session, cid, hs[2].id).state == "pending"  # concurrency 1
+
+
+def test_agent_corrupt_job_params_halts_without_creating(client, db_session):
+    cid, (a,) = _running_agent(client, db_session, ["a"], ["rest"])
+    db_session.get(Campaign, cid).job_params = {"url": "https://evil.invalid/x"}
+    db_session.flush()
+    advance_campaigns(now=NOW, db=db_session)
+    c = db_session.get(Campaign, cid)
+    assert c.status == "stopped" and "invalid job_params" in (c.halt_reason or "")
+    assert _ch(db_session, cid, a.id).job_id is None
+    assert (
+        db_session.execute(select(Job).where(Job.campaign_id == cid)).first() is None
+    )

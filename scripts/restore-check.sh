@@ -16,8 +16,10 @@
 #   3. GET /api/v1/hosts on a backend bound to the restored DB returns the
 #      same hostnames as the live database
 #   4. both restored PKIs validate, and Caddy serves TLS from the server PKI
-#   5. minisign.key.enc, if present, is a password-protected key (a plaintext
-#      signing key in the backup is a finding, not a pass)
+#   5. no agent signing-key material in the backup (the release key lives on
+#      the key-holder machine, never on the server). Presence is a policy
+#      warning, not a restore blocker: pre-PR2 backups legitimately carry
+#      minisign.key.enc, and the restore itself is unaffected.
 
 set -eu
 
@@ -197,20 +199,13 @@ else
 	cat /tmp/rt_openssl.log /tmp/rt_client_pki.log; fail=1
 fi
 
-# --- check 5: signing-key backup present and encrypted --------------
+# --- check 5: no signing-key material in the backup ------------------
 if [ ! -f "$src/minisign.key.enc" ]; then
-	echo "  [skip] 5/5  no minisign.key.enc in this backup"
-elif ! command -v minisign >/dev/null 2>&1; then
-	echo "  [skip] 5/5  minisign not installed, cannot check the signing-key backup"
+	echo "  [ok] 5/5  no signing-key material in this backup (expected)"
 else
-	cp "$src/minisign.key.enc" /tmp/rt_key.enc
-	# Removing the password with an empty one succeeds only on a plaintext key.
-	if printf '\n' | minisign -C -W -s /tmp/rt_key.enc 2>&1 | grep -q 'Password removed'; then
-		echo "  [FAIL] 5/5  minisign.key.enc is NOT encrypted (plaintext signing key in backup)"; fail=1
-	else
-		echo "  [ok] 5/5  minisign.key.enc is present and password-protected"
-	fi
-	rm -f /tmp/rt_key.enc
+	echo "  [warn] 5/5  minisign.key.enc present: pre-PR2 backup, or backup.sh"
+	echo "         misconfiguration -- server backups must not carry key material."
+	echo "         The restore itself is unaffected; no fail is recorded."
 fi
 
 echo

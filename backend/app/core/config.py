@@ -10,6 +10,13 @@ from cryptography.fernet import Fernet
 
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
+# Floor for a non-zero CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS (6B coherence
+# fix): the agent's local pre-commit deadline (300s, a binary constant) plus
+# a 120s safety margin for claim latency, scheduling jitter, and result
+# handling. Below this, the server could fail the job while the agent is
+# still verifying, and a rename could follow a terminal failed.
+_MIN_UPGRADE_PROOF_TIMEOUT_SECONDS = 420
+
 
 def _build_database_url() -> str:
     explicit = os.environ.get("CADENCE_DATABASE_URL")
@@ -216,6 +223,48 @@ class Settings:
         self.job_running_timeout_seconds: int = _non_negative_int(
             "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS", 7200
         )
+
+        # An agent_upgrade left 'running' longer than this without an
+        # agent_version proof is failed by the scheduler's upgrade sweeper
+        # (6B). 0 = disabled (the generic reaper stays the backstop).
+        # Default 10 min. Must not exceed the generic running timeout while
+        # both are enabled: the generic reaper would otherwise reap the
+        # upgrade first, under the wrong category.
+        self.upgrade_proof_timeout_seconds: int = _non_negative_int(
+            "CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS", 600
+        )
+        # Distributed floor (6B coherence fix): the agent aborts its local
+        # pre-commit attempt after 300s unconditionally, so the earliest
+        # server authority allowed to terminalize an agent_upgrade must
+        # stay past 300s + margin. That authority is the proof timeout
+        # when enabled, else the generic running timeout:
+        #
+        #   effective = proof_timeout if proof_timeout > 0
+        #              else generic_running_timeout
+        #
+        # and a dangerous configuration refuses to start rather than
+        # risking a rename after a terminal failed. effective == 0 (both
+        # disabled) stays legal: nothing server-side can terminalize, and
+        # the agent still self-aborts and submits failed at 300s.
+        proof = self.upgrade_proof_timeout_seconds
+        generic = self.job_running_timeout_seconds
+        effective = proof if proof > 0 else generic
+        if 0 < effective < _MIN_UPGRADE_PROOF_TIMEOUT_SECONDS:
+            which = (
+                "CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS"
+                if proof > 0
+                else "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS"
+            )
+            raise RuntimeError(
+                f"{which} leaves agent_upgrade terminalizable before the "
+                "agent's local deadline plus margin: must be 0 or at least "
+                f"{_MIN_UPGRADE_PROOF_TIMEOUT_SECONDS}"
+            )
+        if proof > 0 and generic > 0 and proof > generic:
+            raise RuntimeError(
+                "CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS must not exceed "
+                "CADENCE_JOB_RUNNING_TIMEOUT_SECONDS"
+            )
 
         # Global reboot budget (6A): at most this many Cadence-driven reboots
         # may be unproven at once, across campaigns, schedules and manual

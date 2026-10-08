@@ -1,6 +1,10 @@
 #!/bin/sh
 # Restore the agent signing key from a passphrase-protected backup made by
-# scripts/backup-signing-key.sh (and carried in scripts/backup.sh output).
+# scripts/backup-signing-key.sh.
+#
+# Run on the KEY-HOLDER machine (operator laptop/vault) -- never on the
+# Cadence server. The restored passwordless key must never be copied onto
+# the server; the server only ever verifies with agent/minisign.pub.
 #
 # Prompts for the passphrase, writes the passwordless live key back to
 # ~/.cadence/minisign.key, and verifies it by re-signing a scratch file and
@@ -88,4 +92,4 @@ fi
 mv "$tmp" "$target"
 chmod 0600 "$target"
 echo "restore-signing-key.sh: wrote $target (passwordless); verified against agent/minisign.pub."
-echo "  scripts/publish-agent.sh / scripts/deploy.sh work again."
+echo "  Build/sign the next agent release with it (see build-agent-release.sh header)."

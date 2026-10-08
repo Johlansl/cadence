@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"time"
 
 	"cadence/agent/internal/apterr"
@@ -34,6 +36,7 @@ import (
 	"cadence/agent/internal/reboot"
 	"cadence/agent/internal/renewal"
 	"cadence/agent/internal/report"
+	"cadence/agent/internal/upgrade"
 )
 
 // agentVersion is the fallback version for dev / untagged builds. Release
@@ -155,6 +158,7 @@ func run(pollOnly, healthCheckBoot bool) error {
 			return err
 		}
 	}
+	c.SetVersion(agentVersion)
 
 	if healthCheckBoot {
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPTimeout)
@@ -314,6 +318,11 @@ func runJob(cfg config.Config, c *client.Client, job *report.JobHandoff) error {
 		logging.Warn("upgrades disabled on this host, reporting job as failed", "job_id", job.ID)
 		return refused("upgrades are disabled on this host (CADENCE_ENABLE_UPGRADES=false)")
 	}
+	// Self-upgrade (6B): below the kill-switch gate (a disabled host refuses
+	// before any decision), above the apt_upgrade-only tail.
+	if job.JobType == "agent_upgrade" {
+		return runAgentUpgradeJob(cfg, job, submit, refused)
+	}
 	if job.JobType != "apt_upgrade" {
 		return refused("unsupported job type: " + job.JobType)
 	}
@@ -395,6 +404,106 @@ func rebootDecision(status string, rebootRequired, enableReboot bool, mode strin
 	default:
 		return true, "\n[cadence] reboot required and reboot mode is \"auto\" -> rebooting via systemctl --no-block reboot\n"
 	}
+}
+
+// runAgentUpgradeFunc is the PR6 install primitive. A package variable so
+// in-package tests can observe dispatch order without network or
+// filesystem effects; production always calls the real primitive below.
+// executableEligibleFunc is the same seam for the canonical-path gate: the
+// test binary never runs from /usr/bin, so reaching the primitive needs a
+// stand-in.
+var executableEligibleFunc = upgrade.CurrentExecutableEligible
+var runAgentUpgradeFunc = func(
+	ctx context.Context, cfg config.Config, target upgrade.Version, urls upgrade.Artifacts,
+) (bool, error) {
+	dl, err := upgrade.DownloadClient(cfg.ServerCAFile)
+	if err != nil {
+		return false, &upgrade.Error{Category: upgrade.CategoryDownloadFailed, Err: err}
+	}
+	in := upgrade.Installer{
+		Client: dl,
+		Dir:    upgrade.InstallDir,
+		Name:   upgrade.InstallName,
+	}
+	return in.Run(ctx, urls, target, runtime.GOOS, runtime.GOARCH)
+}
+
+// runAgentUpgradeJob executes an agent_upgrade job: pure local gates first
+// (params, version policy, canonical path, URL derivation), then at most
+// one verified install. Pre-commit failures submit failed with a bounded
+// category; a completed install submits NOTHING (no succeeded, and no
+// failed either): the server-side proof (PR4) judges the job when the new
+// agent checks back in.
+func runAgentUpgradeJob(
+	cfg config.Config,
+	job *report.JobHandoff,
+	submit func(client.JobResult) error,
+	refused func(string) error,
+) error {
+	params, err := upgrade.DecodeParams(job.Params)
+	if err != nil {
+		return refused("agent_upgrade params rejected: " + err.Error())
+	}
+	target, err := upgrade.ParseTarget(params.TargetVersion)
+	if err != nil { // unreachable: DecodeParams already validated it
+		return refused("agent_upgrade target rejected: " + err.Error())
+	}
+	outcome := upgrade.Compare(agentVersion, params.TargetVersion)
+	switch upgrade.Decide(outcome) {
+	case upgrade.RefusedDowngrade:
+		return refused("agent_upgrade target " + params.TargetVersion +
+			" is older than running " + agentVersion + ": remote downgrade is refused")
+	case upgrade.RefusedInvalid:
+		return refused("agent_upgrade version comparison is invalid " +
+			"(running " + agentVersion + ", target " + params.TargetVersion + ")")
+	case upgrade.AlreadyAtTarget:
+		// No-op: nothing to download or replace. No result is
+		// submitted; the running agent already reports this version,
+		// so the next versioned contact proves the job server-side.
+		logging.Info("agent already at target, nothing to install",
+			"job_id", job.ID, "version", params.TargetVersion)
+		return nil
+	case upgrade.Eligible:
+		// Proceed below.
+	default:
+		return refused("agent_upgrade refused by local policy")
+	}
+	if !executableEligibleFunc() {
+		return refused("agent_upgrade refused: not running from " + upgrade.CanonicalPath)
+	}
+	urls, err := upgrade.ArtifactURLs(cfg.ServerURL, target, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return refused("agent_upgrade refused: " + err.Error())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+	defer cancel()
+	installed, err := runAgentUpgradeFunc(ctx, cfg, target, urls)
+	if installed {
+		// Commit done. Exit quietly for the successor: submitting
+		// anything here (even a failure for a cosmetic post-step)
+		// would corrupt PR4's verdict.
+		logging.Info("agent binary replaced, exiting for the successor to prove",
+			"job_id", job.ID, "target", params.TargetVersion)
+		return nil
+	}
+	category := upgrade.CategoryInstallFailed
+	summary := "agent_upgrade failed before install"
+	if err != nil {
+		summary = "agent_upgrade failed: " + err.Error()
+		var uerr *upgrade.Error
+		if errors.As(err, &uerr) && uerr.Category != "" {
+			category = uerr.Category
+		}
+	}
+	if len(summary) > 500 {
+		summary = summary[:500]
+	}
+	logging.Warn("agent upgrade failed before install",
+		"job_id", job.ID, "category", category)
+	return submit(client.JobResult{
+		Status: "failed", ExitCode: 0, Log: summary + "\n",
+		FailureCategory: category, FailureSummary: summary,
+	})
 }
 
 // reportAfterJob collects and sends one report. Failures are logged, not

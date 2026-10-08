@@ -93,7 +93,7 @@ jobs:
         with:
           go-version: "1.27"
           cache: true
-          cache-dependency-path: agent/go.mod # stdlib-only, empty go.sum
+          cache-dependency-path: agent/go.sum # pinned minisign module (6B)
       - name: golangci-lint
         run: >-
           docker run --rm -v "$PWD/agent":/w -w /w
@@ -101,8 +101,11 @@ jobs:
           golangci-lint run ./...
       - working-directory: agent
         run: |
+          test -z "$(gofmt -l .)"
+          go mod verify
           go vet ./...
           go test ./...
+          go test -race ./internal/upgrade/ ./cmd/agent/
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/cadence-agent ./cmd/agent
           ./bin/cadence-agent -version
           (cd bin && sha256sum cadence-agent > cadence-agent.sha256)
@@ -121,6 +124,58 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: shellcheck --version && shellcheck scripts/*.sh caddy/*.sh packaging/*.sh
+      - run: sh scripts/check-agent-paths.sh
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign git
+      - run: sh scripts/test-publish-agent.sh
+      - run: DOCKER_TESTS=1 sh scripts/test-publish-agent.sh
+      - run: sh scripts/test-agent-readiness.sh
+      - name: agent .deb carries the canonical binary path
+        # Platform-specific proof: GitHub runners have docker and free
+        # minutes, while the GitLab `scripts` job (metered minutes, no
+        # docker image) cannot build here. Both CIs run the static
+        # check-agent-paths.sh above; this step additionally builds a real
+        # .deb exactly like release.yml (throwaway semver, amd64 only) and
+        # inspects it. It must fail if the packaged binary path regresses.
+        run: |
+          set -eu
+          docker run --rm -v "$PWD/agent":/s -w /s golang:1.27 \
+            sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/cadence-agent ./cmd/agent'
+          mkdir -p dist/stage dist/units
+          for u in cadence-agent.service cadence-agent.timer \
+                   cadence-agent-poll.service cadence-agent-poll.timer \
+                   cadence-agent-health-check-boot.service \
+                   cadence-agent-health-check-boot.timer; do
+            sed -e 's#/usr/local/share/doc#/usr/share/doc#g' \
+                "agent/systemd/$u" > "dist/units/$u"
+          done
+          cp agent/bin/cadence-agent dist/stage/cadence-agent
+          docker run --rm -e ARCH="amd64" -e VER="0.0.0-ci.1" -v "$PWD":/w -w /w \
+            ghcr.io/goreleaser/nfpm:v2.47.0@sha256:a662cb167d7b6d3a83920c83d76b12d02b8ac5dd2c13e5c62c15270b23f6df0c \
+            package -p deb -f packaging/nfpm.yaml \
+            -t "dist/cadence-agent_0.0.0-ci.1-1_amd64.deb"
+          deb="dist/cadence-agent_0.0.0-ci.1-1_amd64.deb"
+          dpkg-deb --contents "$deb"
+          dpkg-deb --contents "$deb" 2>/dev/null | grep -q '\./usr/bin/cadence-agent$' \
+            || { echo "FAIL: $deb lacks /usr/bin/cadence-agent"; exit 1; }
+          if dpkg-deb --contents "$deb" 2>/dev/null | grep -q 'usr/local/bin'; then
+            echo "FAIL: $deb installs under /usr/local/bin"; exit 1
+          fi
+          [ "$(dpkg-deb --contents "$deb" 2>/dev/null | grep -c '\./usr/lib/systemd/system/cadence-agent[^ ]*\.service$')" = "3" ] \
+            || { echo "FAIL: $deb lacks the 3 packaged services"; exit 1; }
+          [ "$(dpkg-deb --contents "$deb" 2>/dev/null | grep -c '\./usr/lib/systemd/system/cadence-agent[^ ]*\.timer$')" = "3" ] \
+            || { echo "FAIL: $deb lacks the 3 packaged timers"; exit 1; }
+          rm -rf /tmp/debprobe && mkdir -p /tmp/debprobe
+          dpkg-deb --extract "$deb" /tmp/debprobe
+          grep -q '^ExecStart=/usr/bin/cadence-agent$' \
+            /tmp/debprobe/usr/lib/systemd/system/cadence-agent.service \
+            || { echo "FAIL: packaged cadence-agent.service ExecStart"; exit 1; }
+          grep -q '^ExecStart=/usr/bin/cadence-agent -poll$' \
+            /tmp/debprobe/usr/lib/systemd/system/cadence-agent-poll.service \
+            || { echo "FAIL: packaged cadence-agent-poll.service ExecStart"; exit 1; }
+          grep -q '^ExecStart=/usr/bin/cadence-agent -health-check-boot$' \
+            /tmp/debprobe/usr/lib/systemd/system/cadence-agent-health-check-boot.service \
+            || { echo "FAIL: packaged health-check-boot.service ExecStart"; exit 1; }
+          echo "debprobe: OK, packaged .deb converges on /usr/bin/cadence-agent"
       - name: caddy entrypoint rejects a broken dashboard hash
         run: |
           if CADENCE_DASHBOARD_AUTH=on CADENCE_DASHBOARD_PASSWORD_HASH=2a14brokenhash CADENCE_INTERNAL_PROXY_KEY=ci-internal-proxy-key-0123456789abcdef CADENCE_LEGACY_AGENT_ENDPOINTS=off sh caddy/entrypoint.sh true; then

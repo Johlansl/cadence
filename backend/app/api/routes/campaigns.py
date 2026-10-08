@@ -60,6 +60,7 @@ def _to_out(campaign: Campaign, rows: list[tuple[CampaignHost, str]]) -> Campaig
         id=campaign.id,
         name=campaign.name,
         job_type=campaign.job_type,
+        job_params=campaign.job_params,
         stages=campaign.stages,
         max_concurrency=campaign.max_concurrency,
         max_failures=campaign.max_failures,
@@ -177,6 +178,8 @@ def create_campaign(
     )
     campaign = Campaign(
         name=payload.name,
+        job_type=payload.job_type,
+        job_params=dict(payload.job_params or {}),
         stages=payload.stages,
         max_concurrency=payload.max_concurrency,
         max_failures=payload.max_failures,

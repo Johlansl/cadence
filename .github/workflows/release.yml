@@ -55,14 +55,14 @@ jobs:
         run: |
           set -eu
           mkdir -p dist/stage dist/units
-          # The committed units target /usr/local (the curl|sh flow); a package
-          # uses the FHS /usr paths.
+          # The committed units already carry the canonical /usr/bin binary
+          # path; only the doc pointer still differs per channel (a package
+          # uses the FHS /usr/share/doc path).
           for u in cadence-agent.service cadence-agent.timer \
                    cadence-agent-poll.service cadence-agent-poll.timer \
                    cadence-agent-health-check-boot.service \
                    cadence-agent-health-check-boot.timer; do
-            sed -e 's#/usr/local/bin#/usr/bin#g' \
-                -e 's#/usr/local/share/doc#/usr/share/doc#g' \
+            sed -e 's#/usr/local/share/doc#/usr/share/doc#g' \
                 "agent/systemd/$u" > "dist/units/$u"
           done
           for a in amd64 arm64; do

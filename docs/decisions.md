@@ -314,11 +314,12 @@ Two version lines on purpose:
   `0.1.0` would erase that. It reports its version on every report so the
   dashboard shows what each host runs.
 
-A release build stamps the agent version from the newest `agent-v*` git tag
-reachable from `HEAD` (`git describe`, `agent-v` prefix stripped), injected at
-link time by `scripts/publish-agent.sh` via
-`-ldflags "-X main.agentVersion=<version>"`. `agent/CHANGELOG.md` headings track
-that tag (`## 0.7.0` ↔ `agent-v0.7.0`). The `agentVersion` literal in
+A release build stamps the agent version at link time via
+`-ldflags "-X main.agentVersion=<version>"`. The CI release takes `<version>`
+from the `agent-v*` tag name; a LAN release build
+(`scripts/build-agent-release.sh`) takes it as an explicit argument, which
+must match an `agent/CHANGELOG.md` heading. `agent/CHANGELOG.md` headings track the tag
+(`## 0.7.0` ↔ `agent-v0.7.0`). The `agentVersion` literal in
 `agent/cmd/agent/main.go` is only the fallback for dev / untagged builds; the
 tag is the source of truth for anything published. The server version stays a
 hand-set string (`backend/app/__init__.py`).
@@ -339,16 +340,38 @@ server release on every agent bump and vice versa.
 
 ## Agent distribution / signing
 
-The agent binary, its SHA-256, systemd units and server CA are staged into
-`dist/` by `scripts/publish-agent.sh`. HTTP serves only `/agent/ca.crt`; all
-other artifacts require HTTPS rooted in that CA.
+Versioned agent binaries (amd64 + arm64, each with SHA-256 and minisign
+signature), systemd units and server CA are staged into `dist/` by
+`scripts/publish-agent.sh`. HTTP serves only `/agent/ca.crt`; all other
+artifacts require HTTPS rooted in that CA.
 
-- **Releases are minisign-signed.** `scripts/publish-agent.sh` signs the binary
-  when a private key is present, and, once `agent/minisign.pub` is committed,
-  *refuses to publish unsigned* rather than silently dropping the signature.
-  The signing key is passwordless, kept at `~/.cadence/minisign.key` (outside
-  the repo, gitignored). CI builds a SHA-256-only artifact on purpose: no
-  signing key is exposed to CI.
+- **Releases are built and signed off-server.** `build-agent-release.sh`
+  runs on the key-holder machine: it builds both binaries from an identified
+  checkout, smoke-tests (`-version`, GOARCH), hashes and signs them. The
+  server (`publish-agent.sh publish`) only verifies (closed bundle,
+  recomputed SHA-256, `minisign -V` against the committed
+  `agent/minisign.pub`, amd64 `-version` after the signature verifies, ELF
+  machine per arch) and stages atomically. The deliberate reason: had the
+  server built what the operator signs, a root-compromised server could get
+  an arbitrary binary signed by serving malicious build output, and
+  server-side signature checks would then "verify" the attack. The private
+  key is never present on the Cadence server; publishing refuses without a
+  public key configured, and unsigned publishing does not exist. CI builds a
+  SHA-256-only artifact on purpose: no signing key is exposed to CI.
+- **Published versions are immutable and complete.** A version stages as one
+  atomic directory with both architectures; republishing refuses loudly, and
+  an incomplete triplet is never exposed. Absent version or arch is a 404,
+  never a fallback.
+- **Release threat boundary.** A root-compromised Cadence server can refuse
+  to serve, delete artifacts, DoS, or serve stale published versions; it
+  cannot produce a newly signed release, alter signed bytes, or obtain a
+  signature by manipulating its own build (it has no build step and no
+  key). The key-holder machine is the actual root of trust: its compromise
+  can sign arbitrary code, so it is protected as such (offline secrets,
+  enforced tag/commit/clean-tree check). Signing does not detect
+  an operator willingly building the wrong source; the runbook
+  (`build-agent-release.sh` header) binds version, tag and commit by
+  process. Full supply-chain provenance is out of scope.
 - **Enrollment is the trust root.** One manually transferred, single-use code
   contains a 192-bit secret and the exact server-CA SHA-256. A trusted prelude
   validates the unauthenticated CA download before executing any downloaded
@@ -363,37 +386,159 @@ other artifacts require HTTPS rooted in that CA.
   request. The two identities must resolve to the same host UUID.
 - **Forking Cadence.** A third party who redeploys this repo inherits the
   upstream `agent/minisign.pub` and cannot hold its private half, so their
-  `scripts/publish-agent.sh` fails the "unsigned release" guard by
-  construction. They must replace `agent/minisign.pub` with their own key
-  (`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`) or delete
-  it to publish unsigned. Called out in `publish-agent.sh` at the guard.
-- **Key backup.** `scripts/backup-signing-key.sh` writes a passphrase-protected
-  copy of the key to `~/.cadence/minisign.key.enc` (`minisign -C`, scrypt) and
-  `scripts/backup.sh` folds that already-encrypted copy into every nightly
-  backup dir. The live key stays passwordless (`publish-agent.sh` needs it); a
-  plaintext copy is never written anywhere. The passphrase is typed into
-  `minisign`'s own prompt and kept by the operator (password manager), never
-  on the box, in the repo, or in a command. It is a *stronger* bar than
-  `backups/<ts>/env` on purpose: `env`'s secrets only attack this one server,
-  the signing key forges releases for the whole fleet from anywhere.
-- **Key restore.** `scripts/restore-signing-key.sh` takes a backup (or a
-  `minisign.key.enc`), prompts for the passphrase, installs the passwordless
-  key, and refuses to install it unless a fresh signature verifies against the
-  committed `agent/minisign.pub`. `restore-check.sh` check 5 asserts the backup
-  is present and encrypted.
-- **Key rotation** (written down so it is not improvised; not yet executed):
+  `scripts/publish-agent.sh` fails signature verification by construction.
+  They must replace `agent/minisign.pub` with their own key
+  (`minisign -G -W -p agent/minisign.pub -s <their-key>`, kept off their
+  server too). There is no unsigned escape hatch. Called out in
+  `publish-agent.sh` at the guard.
+- **Key backup.** `scripts/backup-signing-key.sh` runs on the key-holder
+  machine and writes a passphrase-protected copy of the key to
+  `~/.cadence/minisign.key.enc` (`minisign -C`, scrypt), kept with the
+  operator's offline secrets; server backups (`scripts/backup.sh`)
+  deliberately never include key material. A plaintext copy is never written
+  anywhere. The passphrase is typed into `minisign`'s own prompt and kept by
+  the operator (password manager), never on the box, in the repo, or in a
+  command. It is a *stronger* bar than `backups/<ts>/env` on purpose:
+  `env`'s secrets only attack this one server, the signing key forges
+  releases for the whole fleet from anywhere.
+- **Key restore.** `scripts/restore-signing-key.sh` runs on the key-holder
+  machine, takes a `minisign.key.enc` (old server backups still carry one),
+  prompts for the passphrase, installs the passwordless key, and refuses to
+  install it unless a fresh signature verifies against the committed
+  `agent/minisign.pub`. The restored key must never be copied onto the
+  server. `restore-check.sh` check 5 asserts server backups carry no key
+  material.
+- **Key rotation** (written down so it is not improvised; not yet executed,
+  all key steps on the key-holder machine):
   1. `minisign -G -W -p /tmp/new.pub -s ~/.cadence/minisign.key.new`.
   2. Replace `~/.cadence/minisign.key` with the new secret key; copy the new
      public key over `agent/minisign.pub`.
   3. Commit + push `agent/minisign.pub` to both remotes.
   4. `scripts/backup-signing-key.sh --force` with a fresh passphrase.
-  5. `scripts/deploy.sh`, re-signs `dist/agent/` with the new key.
+  5. Publish the next agent version: it is verified against the new key;
+     already-published versions keep their old signatures (immutable).
   6. Re-roll every host with the new `CADENCE_MINISIGN_PUB`.
   There is no transition window to manage: a host keeps running its installed
   agent until step 6 re-rolls it, and is never "stuck" because the operator
   re-runs the installer on each. A zero-touch multi-key rotation (installer
   accepting several keys) is only needed if hosts self-update without the
   operator, they do not.
+- **`agent_upgrade` is a closed declarative job (6B).** The server names a
+  target version and nothing else: `params` must be exactly
+  `{"target_version": "N.N.N"}` (strict grammar, any extra key rejected,
+  migration 0026 + `JobCreate` validator). No URL, checksum, pubkey, path,
+  command or downgrade flag is a parameter, and remote downgrade is absent
+  from V1. Server-side validation is defense in depth for operator mistakes
+  and a closed auditable API, not a trust root against a compromised
+  server; agent-side parsing (which enforces the same contract) lands
+  separately. Current agents refuse the type as unknown (`agent_refused`).
+- **An `agent_upgrade` is never succeeded on the word of the process that
+  replaces the binary (6B).** Success needs a later authenticated contact
+  (poll or report) with `agent_version == params.target_version`, applied
+  by one shared helper through an atomic `running -> succeeded` UPDATE
+  (single winner, single `job.succeeded`). No intermediate result
+  (`result` is just `{"proven": true}`), no new status, no process memory:
+  a restart loses nothing. An upgrade that never proves within
+  `CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS` (default 600, `0` disables) is
+  failed by a dedicated sweeper under `upgrade_proof_timeout`, ahead of
+  the generic reaper on the same tick; the config forbids a proof timeout
+  longer than the generic running timeout. The poll carries
+  `agent_version` additively (old `{}` polls unchanged) only to shrink the
+  proof delay from ~30 min to ~1 min.
+- **The agent re-validates the closed contract locally (6B).**
+  `agent/internal/upgrade` (pure, dormant in PR5, still unwired: the
+  dispatcher refuses `agent_upgrade` as unknown) decodes params with an
+  exact one-key token scan (unknown and duplicate keys rejected), orders
+  versions on the three integers only (target strict `N.N.N`, current
+  `N.N.N` plus an optional describe suffix), and maps the outcome to a
+  fail-closed policy: newer is eligible, equal is already-at-target, older
+  is refused with no downgrade flag or exception, invalid is refused.
+  Artifact URLs are derived locally from the configured ServerURL host
+  (agent port dropped, https forced) plus version and platform
+  (`linux/amd64`, `linux/arm64` only): no URL fragment ever comes from the
+  job. Self-upgrade eligibility additionally requires the resolved
+  executable to be exactly `/usr/bin/cadence-agent`.
+- **The agent self-upgrades only from a locally derived, signed artifact
+  (6B).** `agent/internal/upgrade.Installer` (wired into `runJob` below
+  the `CADENCE_ENABLE_UPGRADES` gate) takes `target_version` as its sole
+  job input: URLs come from the PR5 builder, the Minisign root of trust
+  is the fleet key compiled into the binary (kept in sync with
+  `agent/minisign.pub` by test), and versions are canonical `N.N.N` on
+  both sides (leading zeros refused). Verification order is fixed:
+  bounded HTTPS fetch (TLS 1.2+, pinned server CA, zero redirects) into
+  a same-filesystem temp file, strict `.sha256` parse and recompute,
+  Minisign over the exact bytes (message signature, key ID, global
+  signature), ELF 64-bit machine check, and only then a `-version`
+  probe (empty env, bounded output, killed on timeout) that must print
+  exactly the target. **A downloaded binary is never executed, even
+  with `-version`, before full cryptographic validation.** Install is a
+  single `.prev` hardlink refresh plus an atomic rename onto
+  `/usr/bin/cadence-agent` (chmod 0755, fsync file, rename, fsync dir;
+  never in-place); the old process keeps running from its inode, no
+  service is restarted, and the old agent submits nothing after the
+  commit: PR4's versioned proof (or its timeout) is the only success
+  verdict. Recovery past a crash is an operator running `.prev`.
+  Supply-chain notes: the single Go dependency is
+  `github.com/jedisct1/go-minisign` (MIT, pinned pseudo-version, verified
+  against the reference CLI both directions); `go mod verify` gates CI
+  while `govulncheck` stays a separate manual validation.
+- **The local pre-commit phase is strictly shorter than the server proof
+  timeout (6B).** The agent aborts any `agent_upgrade` attempt 300s after
+  job acceptance (one context covering downloads, verification, probe,
+  and the `.prev`/rename gates; no lease, heartbeat, or server ping),
+  while a non-zero `CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS` must be at
+  least 420s (300s plus 120s margin, enforced at startup; `0` keeps the
+  2h generic reaper as backstop, and the agent still self-aborts and
+  submits failed at 300s). The server therefore cannot mark the job
+  failed while the agent is still legitimately pre-commit, so a rename
+  can never follow a terminal failed. Past the rename the deadline has
+  no authority and PR4 alone judges. The server validates the effective
+  terminal timeout at startup (`proof` when enabled, else `generic`):
+  0 (both disabled, the agent still self-aborts at 300s) or at least
+  420s, so `proof=0` with a short generic reaper cannot reintroduce the
+  race either. The local deadline is dual-clock: the monotonic context
+  cancels work, and a wall-clock twin (UnixNano, no monotonic reading)
+  gates `.prev` and the rename, so a host suspended mid-upgrade resumes
+  with its window consumed and can never rename late; forward jumps
+  fail closed, backward drift under 60s is tolerated (inside the 120s
+  margin), gross incoherence refuses. Failure modes: offline network
+  (local deadline stops indefinite work, failed submitted when
+  reachable), suspend (wall gate blocks the late rename),
+  power-off/crash (rename atomicity plus operator recovery via `.prev`),
+  server timeout (no pre-commit mutation may follow). A locally
+  root-controlled clock exempting itself across a suspend is outside
+  the threat model, like hand-replacing the binary.
+- **Path migration is proven on effective systemd state, by the
+  operator (6B).** A host is 6B-ready only when every agent unit that
+  can launch the binary effectively (`systemctl show` ExecStart, not
+  source files) runs exactly `/usr/bin/cadence-agent` with no
+  drop-in; `scripts/check-agent-host-upgrade-readiness.sh` decides
+  read-only. Migration reuses the existing installers
+  (`agent-install.sh CADENCE_UPGRADE_ONLY=true` or a repo
+  `install.sh` rerun), never touches `/etc/cadence` identity, and
+  deletes the `/usr/local/bin` residue only once proven unreferenced.
+  Fleet qualification stays a local-diagnostic checklist: no
+  executable path is added to reports (it would need a backend column
+  for a one-shot migration while PR6 already refuses off-path hosts),
+  and the server never orchestrates SSH.
+- **The unit upgrade primitive is proven by a real E2E chain, not by
+  mocks (6B).** `sh scripts/test-agent-upgrade-e2e.sh` stands up a
+  throwaway stack plus privileged systemd host containers and drives
+  N to N+1 through production paths only: real enrollment and
+  mTLS/HMAC, real timers, offline-signed publish (a test Minisign
+  key the whole fixture fleet embeds, never present on servers),
+  deterministic download, SHA/Minisign/ELF/`-version` checks,
+  `.prev`, atomic rename, no restart, then PR4 proof when N+1
+  checks in. It also demonstrates operator `.prev` recovery after
+  a proof timeout, a pre-commit checksum refusal against tampered
+  served bytes, an offline host that cannot rename late, and a
+  backend restart between rename and proof. The script adds no
+  upgrade capability and no fleet orchestration. It stays out of
+  per-PR CI (privileged docker, ~20 minutes, fixed loopback
+  ports); a manual green is required before merge, and the
+  automation target is a scheduled/manual workflow on a
+  privileged runner (nightly or workflow_dispatch), not manual
+  forever.
 
 ## Release automation
 

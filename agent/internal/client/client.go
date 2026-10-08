@@ -29,6 +29,16 @@ type Client struct {
 	baseURL string
 	token   string
 	hc      *http.Client
+	// version is the embedded agent version, sent on the job-claim polls
+	// so the server can prove a running agent_upgrade (6B). Empty until
+	// SetVersion is called; an empty version is omitted from the poll body.
+	version string
+}
+
+// SetVersion records the embedded agent version for the job-claim polls.
+// Called once by main with the ldflags-stamped version.
+func (c *Client) SetVersion(v string) {
+	c.version = v
 }
 
 func New(baseURL, token string, timeout time.Duration) *Client {
@@ -112,7 +122,7 @@ func (c *Client) sendReport(ctx context.Context, r report.Report) (*report.JobHa
 // ClaimNextJob asks the server for a pending job without sending a package
 // report (the fast poll path). Returns nil when nothing is pending.
 func (c *Client) ClaimNextJob(ctx context.Context) (*report.JobHandoff, error) {
-	resp, err := c.do(ctx, "/api/v1/agent/next-job", pollBody(bootid.Read()))
+	resp, err := c.do(ctx, "/api/v1/agent/next-job", pollBody(bootid.Read(), c.version))
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +146,7 @@ func (c *Client) ClaimNextJob(ctx context.Context) (*report.JobHandoff, error) {
 // host already has another job pending or running -- the regular
 // cadence-agent-poll.timer picks that up on its own schedule.
 func (c *Client) ClaimHealthCheckJob(ctx context.Context) (*report.JobHandoff, error) {
-	resp, err := c.do(ctx, "/api/v1/agent/health-check-job", pollBody(bootid.Read()))
+	resp, err := c.do(ctx, "/api/v1/agent/health-check-job", pollBody(bootid.Read(), c.version))
 	if err != nil {
 		return nil, err
 	}
@@ -236,16 +246,18 @@ type JobResult struct {
 	WillReboot *bool `json:"will_reboot,omitempty"`
 }
 
-// pollBody is the body of the job-claim polls: just this boot's identifier so
-// the server can attribute the contact to a boot. Empty (byte-identical to the
-// historic "{}") when the boot cannot be read.
-func pollBody(bootID string) []byte {
-	if bootID == "" {
+// pollBody is the body of the job-claim polls: this boot's identifier so the
+// server can attribute the contact to a boot, plus the embedded agent
+// version so a running agent_upgrade can be proven (6B). Empty
+// (byte-identical to the historic "{}") when neither is known.
+func pollBody(bootID, version string) []byte {
+	if bootID == "" && version == "" {
 		return []byte("{}")
 	}
 	body, err := json.Marshal(struct {
-		BootID string `json:"boot_id"`
-	}{BootID: bootID})
+		BootID  string `json:"boot_id,omitempty"`
+		Version string `json:"agent_version,omitempty"`
+	}{BootID: bootID, Version: version})
 	if err != nil {
 		return []byte("{}")
 	}

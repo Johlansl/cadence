@@ -17,6 +17,7 @@ from app.api.routes.jobs import claim_pending_job
 from app.core.config import settings
 from app.models.models import Host, HostPackage, Package, Report
 from app.schemas.schemas import JobHandoff, ReportAccepted, ReportIn, ReportSummary
+from app.upgrade_proof import complete_agent_upgrade_if_proven
 from app.webhooks.events import on_report
 
 router = APIRouter(prefix="/api/v1", tags=["reports"])
@@ -181,7 +182,14 @@ def create_report(
         occurred_at=now,
     )
 
-    # 6. Piggyback: hand the oldest pending job (if any) to the agent and mark
+    # 6. Upgrade proof (6B): the report's agent_version may complete a running
+    #    agent_upgrade. Runs before the piggyback claim so a proven upgrade
+    #    frees the one-active-job guard first. Same transaction as the report
+    #    itself: the proof helper never raises on a mismatch, so the report
+    #    persists regardless; only a DB failure rolls both back together.
+    complete_agent_upgrade_if_proven(db, host, report_in.agent_version, now)
+
+    # 7. Piggyback: hand the oldest pending job (if any) to the agent and mark
     #    it running. A post-job inventory explicitly opts out because that
     #    one-shot run is about to exit and would ignore a second handoff.
     job = claim_pending_job(db, host, now) if report_in.claim_job else None

@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/cadence/agent.env
-ExecStart=/usr/local/bin/cadence-agent
+ExecStart=/usr/bin/cadence-agent
 
 # A run may collect, POST a report, and then run a piggybacked apt-get
 # dist-upgrade job plus a follow-up report. Must exceed the sum of the agent's

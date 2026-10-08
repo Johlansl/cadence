@@ -360,3 +360,136 @@ def test_list_is_newest_first_and_detail_404(client, db_session):
     names = [c["name"] for c in client.get("/api/v1/campaigns").json()]
     assert names.index("newer") < names.index("older")
     assert client.get(f"/api/v1/campaigns/{uuid.uuid4()}").status_code == 404
+
+
+# --- C1: agent_upgrade contract (persisted, not executable) ---------------------
+
+
+def _agent_body(h, **over):
+    body = dict(
+        name="fleet",
+        job_type="agent_upgrade",
+        job_params={"target_version": "0.15.0"},
+        host_ids=[str(h.id)],
+        stages=["rest"],
+        max_concurrency=1,
+        max_failures=0,
+    )
+    body.update(over)
+    return body
+
+
+def test_create_without_new_fields_stays_apt_with_empty_params(client, db_session):
+    (h,) = _hosts(db_session, "legacy")
+    r = _create(
+        client, name="legacy", host_ids=[str(h.id)], stages=["rest"],
+        max_concurrency=1, max_failures=0,
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["job_type"] == "apt_upgrade"
+    assert r.json()["job_params"] == {}
+    row = db_session.get(Campaign, uuid.UUID(r.json()["id"]))
+    assert row.job_type == "apt_upgrade" and row.job_params == {}
+
+
+def test_create_apt_with_nonempty_params_is_rejected(client, db_session):
+    (h,) = _hosts(db_session, "noisy")
+    r = _create(
+        client, name="noisy", host_ids=[str(h.id)], stages=["rest"],
+        max_concurrency=1, max_failures=0,
+        job_params={"target_version": "0.15.0"},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_create_agent_persists_exact_type_and_target(client, db_session):
+    (h,) = _hosts(db_session, "fleet-0")
+    r = _create(client, **_agent_body(h))
+    assert r.status_code == 201, r.text
+    assert r.json()["job_type"] == "agent_upgrade"
+    assert r.json()["job_params"] == {"target_version": "0.15.0"}
+    row = db_session.get(Campaign, uuid.UUID(r.json()["id"]))
+    assert row.job_type == "agent_upgrade"
+    assert row.job_params == {"target_version": "0.15.0"}
+    detail = client.get(f"/api/v1/campaigns/{row.id}").json()
+    assert detail["job_params"] == {"target_version": "0.15.0"}
+
+
+def test_create_agent_is_audited(client, db_session):
+    (h,) = _hosts(db_session, "audited-agent")
+    r = _create(client, **_agent_body(h, name="audited-agent"))
+    assert r.status_code == 201, r.text
+    row = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.action == "campaign.create",
+            AuditLog.target_id == r.json()["id"],
+        )
+    ).scalar_one()
+    assert row.target_type == "campaign"
+    # The audit detail carries name/hosts/stages (historic shape); the exact
+    # target stays readable from the persisted campaign row itself.
+
+
+_TRAP_KEYS = [
+    "url", "sha256", "checksum", "pubkey", "path", "command", "cmd",
+    "args", "base_url", "allow_downgrade",
+]
+
+
+def test_create_agent_rejects_every_trap_key(client, db_session):
+    (h,) = _hosts(db_session, "trap")
+    for key in _TRAP_KEYS:
+        params = {"target_version": "0.15.0", key: "x"}
+        r = _create(client, **_agent_body(h, job_params=params))
+        assert r.status_code == 422, (key, r.text)
+
+
+def test_create_agent_rejects_bad_targets(client, db_session):
+    (h,) = _hosts(db_session, "badtgt")
+    bad = [
+        "01.2.3", "1.02.3", "1.2.03",  # non-canonical leading zeros
+        "v0.15.0", "0.15.0-rc1", "0.15.0+build", " 0.15.0", "0.15.0 ",
+        "", "0.15", "0.15.0.1", "x" * 65,
+    ]
+    for target in bad:
+        r = _create(client, **_agent_body(h, job_params={"target_version": target}))
+        assert r.status_code == 422, (target, r.text)
+    for params in ({}, {"target_version": 15}, {"target_version": None}):
+        r = _create(client, **_agent_body(h, job_params=params))
+        assert r.status_code == 422, (params, r.text)
+
+
+def test_create_rejects_non_campaign_job_types(client, db_session):
+    (h,) = _hosts(db_session, "reboot-camp")
+    for t in ("reboot", "health_check", "apt_dry_run", "nope"):
+        r = _create(client, **_agent_body(h, job_type=t))
+        assert r.status_code == 422, (t, r.text)
+
+
+def test_activate_agent_campaign_runs_and_creates_no_job_yet(client, db_session):
+    (h,) = _hosts(db_session, "unblocked")
+    cid = _create(client, **_agent_body(h)).json()["id"]
+    r = _act(client, cid, "activate")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "running"
+    assert r.json()["job_params"] == {"target_version": "0.15.0"}
+    row = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.action == "campaign.activate",
+            AuditLog.target_id == cid,
+        )
+    ).scalar_one()
+    assert row.target_type == "campaign"  # target recoverable from the row itself
+
+
+def test_lifecycle_never_rewrites_job_contract(client, db_session):
+    (h,) = _hosts(db_session, "frozen")
+    cid = _create(client, **_agent_body(h)).json()["id"]
+    for verb in ("pause", "resume", "cancel", "pause", "cancel"):
+        # pause/resume fail on a draft; cancel succeeds: only the status may
+        # move, never the snapshotted contract.
+        _act(client, cid, verb)
+    row = db_session.get(Campaign, uuid.UUID(cid))
+    assert row.status == "cancelled"
+    assert row.job_type == "agent_upgrade"
+    assert row.job_params == {"target_version": "0.15.0"}

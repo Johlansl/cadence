@@ -4,7 +4,7 @@
 # Pinned files (every `golang:X.Y` image, `go-version` and `go.mod` pin must
 # carry the same major.minor -- run this in CI and before any Go bump):
 #   agent/go.mod, .gitlab-ci.yml, .github/workflows/ci.yml,
-#   .github/workflows/release.yml, scripts/publish-agent.sh,
+#   .github/workflows/release.yml, scripts/build-agent-release.sh,
 #   README.md, CONTRIBUTING.md, CLAUDE.md
 # Files absent from the tree (e.g. the private-only ones on the public
 # mirror) are skipped with a notice. A listed file that is present but
@@ -20,7 +20,7 @@ files="agent/go.mod
 .gitlab-ci.yml
 .github/workflows/ci.yml
 .github/workflows/release.yml
-scripts/publish-agent.sh
+scripts/build-agent-release.sh
 README.md
 CONTRIBUTING.md
 CLAUDE.md"

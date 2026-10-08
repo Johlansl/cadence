@@ -1,0 +1,22 @@
+# E2E port remaps: the test stack runs as `docker compose -p e2e` next to
+# a dev stack without colliding on published ports. Container-side ports
+# (and therefore all in-network URLs, including the agent's
+# https://caddy:8443) are unchanged; only the loopback mappings move.
+# `!override` REPLACES each base ports list (a plain list would merge and
+# keep binding the dev ports too). Used only by
+# scripts/test-agent-upgrade-e2e.sh.
+services:
+  db:
+    ports: !override
+      - "127.0.0.1:5433:5432"
+  backend:
+    ports: !override
+      - "127.0.0.1:8001:8000"
+  frontend:
+    ports: !override
+      - "127.0.0.1:8081:80"
+  caddy:
+    ports: !override
+      - "127.0.0.1:8082:80"
+      - "127.0.0.1:4443:443"
+      - "127.0.0.1:8444:8443"

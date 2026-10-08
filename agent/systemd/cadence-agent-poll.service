@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/cadence/agent.env
-ExecStart=/usr/local/bin/cadence-agent -poll
+ExecStart=/usr/bin/cadence-agent -poll
 
 # Does nothing when no job is pending; when one is, it runs apt-get dist-upgrade
 # and then a follow-up report. Must exceed jobTimeout + postJobReportTimeout

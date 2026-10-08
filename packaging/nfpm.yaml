@@ -1,7 +1,8 @@
 # nfpm spec for the Cadence agent .deb (built by .github/workflows/release.yml
 # on an agent-v* tag). ARCH and VER are passed as env vars; the arch binary is
 # staged to ./stage/cadence-agent and the systemd units are copied to ./units/
-# with /usr/local -> /usr paths by the workflow step before nfpm runs.
+# with /usr/local/share/doc -> /usr/share/doc paths by the workflow step
+# before nfpm runs (the /usr/bin binary path needs no rewrite).
 #
 # Unsigned on purpose: no long-lived signing key in CI (see docs/decisions.md
 # "Release automation"). Provenance is the Sigstore attestation on the file.

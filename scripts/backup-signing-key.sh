@@ -1,15 +1,17 @@
 #!/bin/sh
 # Write a passphrase-protected backup of the agent signing key.
 #
-# The live key (scripts/publish-agent.sh reads it) MUST stay passwordless, so it
-# is never in scripts/backup.sh's output. This makes a separate copy encrypted
-# at rest with `minisign -C`: same key material, protected by a passphrase you
-# type here and record in your password manager. scripts/backup.sh then folds
-# that encrypted copy into every nightly backup.
+# Run on the KEY-HOLDER machine (operator laptop/vault) -- never on the
+# Cadence server. The release key lives only there; the server verifies
+# with agent/minisign.pub and must never see the private half.
 #
-# Run on the central server, from a checkout of this repo. Run it once now, and
-# again whenever you rotate the key (docs/decisions.md, "Agent distribution /
-# signing").
+# This makes a copy of the live key encrypted at rest with `minisign -C`:
+# same key material, protected by a passphrase you type here and record in
+# your password manager. Server backups (scripts/backup.sh) deliberately do
+# NOT include it; store this copy with your other offline secrets.
+#
+# Run it once now, and again whenever you rotate the key
+# (docs/decisions.md, "Agent distribution / signing").
 #
 #   scripts/backup-signing-key.sh [--force]
 #
@@ -61,5 +63,5 @@ mv "$tmp" "$enc"
 chmod 0600 "$enc"
 
 echo "backup-signing-key.sh: wrote $enc (password-protected)."
-echo "  It is included in every scripts/backup.sh run from now on."
+echo "  Keep it with your offline secrets; server backups never include it."
 echo "  Restore with scripts/restore-signing-key.sh."

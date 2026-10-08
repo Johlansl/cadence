@@ -103,7 +103,7 @@ else
 	install -m 0644 "$verified_ca" "$server_ca"
 fi
 update-ca-certificates >/dev/null 2>&1
-install -m 0755 "$temporary/cadence-agent" /usr/local/bin/cadence-agent
+install -m 0755 "$temporary/cadence-agent" /usr/bin/cadence-agent
 for unit in cadence-agent.service cadence-agent.timer \
 	cadence-agent-poll.service cadence-agent-poll.timer \
 	cadence-agent-health-check-boot.service cadence-agent-health-check-boot.timer; do
@@ -115,12 +115,12 @@ done
 # have been validated and written. Authenticated upgrades preserve the
 # existing credential bundle and need no new enrollment code.
 if [ "$upgrade_only" = "false" ]; then
-	/usr/local/bin/cadence-agent -enroll -enroll-server "$base" \
+	/usr/bin/cadence-agent -enroll -enroll-server "$base" \
 		-enroll-ca "$server_ca" -enroll-directory /etc/cadence
 else
 	echo "install.sh: preserving enrolled credentials"
 fi
-echo "install.sh: agent $(/usr/local/bin/cadence-agent -version 2>/dev/null || echo '(installed)')"
+echo "install.sh: agent $(/usr/bin/cadence-agent -version 2>/dev/null || echo '(installed)')"
 
 systemctl daemon-reload
 systemctl enable --now cadence-agent.timer cadence-agent-poll.timer \

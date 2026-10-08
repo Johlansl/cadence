@@ -1,7 +1,12 @@
 #!/bin/sh
 # Redeploy the Cadence central server in one step: rebuild and restart the
-# stack, let Alembic migrate on boot, and re-stage the agent bootstrap assets
-# so the binary Caddy serves always matches this checkout.
+# stack, let Alembic migrate on boot, and re-stage the agent bootstrap
+# assets (installer, units, CA).
+#
+# Agent release binaries are NOT published here: a version is built and
+# signed on the key-holder machine (scripts/build-agent-release.sh) and
+# staged explicitly (scripts/publish-agent.sh publish). Deploying the
+# backend/frontend never requires one.
 #
 # Run on the central server, from a checkout of this repo, after `git pull`.
 #
@@ -9,8 +14,8 @@
 #
 # This is the documented redeploy command. `docker compose up -d --build` on
 # its own still works for a stack-only change, but it does NOT restage the
-# agent (a stale agent binary keeps being served) and does NOT recreate caddy
-# to pick up a host-edited Caddyfile or the freshly staged bootstrap assets.
+# bootstrap assets and does NOT recreate caddy to pick up a host-edited
+# Caddyfile or the freshly staged assets.
 
 set -eu
 
@@ -25,7 +30,7 @@ echo "deploy.sh: migration head"
 docker compose run --rm backend alembic current
 
 echo "deploy.sh: staging the agent bootstrap assets"
-"$here/publish-agent.sh"
+"$here/publish-agent.sh" assets
 
 # caddy bind-mounts the Caddyfile, caddy/entrypoint.sh and ./dist. A host-side
 # edit (atomic write = new inode) or a recreated dist/ leaves the running

@@ -13,7 +13,7 @@ StartLimitBurst=5
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/cadence/agent.env
-ExecStart=/usr/local/bin/cadence-agent -health-check-boot
+ExecStart=/usr/bin/cadence-agent -health-check-boot
 
 # A health check is read-only and bounded (healthCheckTimeout = 5 min in
 # cmd/agent/main.go), plus two short HTTP round trips; this margin covers a

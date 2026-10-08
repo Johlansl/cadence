@@ -5,11 +5,13 @@ For each `running` campaign, in its own locked transaction:
   1. reconcile finished jobs into campaign_hosts state (a succeeded action is
      done only when health is healthy/degraded; unhealthy/unknown stops the
      rollout; failed actions skip or halt per CAMPAIGN_DISPOSITIONS). A
-     succeeded upgrade the agent will reboot on stays running with its
-     pre-reboot boot snapshotted until the host proves its return (a
-     different boot plus fresh acceptable health); a reboot expected from
-     an agent that sent no proof halts immediately; an unproven await past
-     CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS halts;
+     succeeded agent_upgrade is done directly (PR4 already proved the new
+     binary runs at the target version): no health, reboot or awaited
+     return applies. A succeeded upgrade the agent will reboot on stays
+     running with its pre-reboot boot snapshotted until the host proves
+     its return (a different boot plus fresh acceptable health); a reboot
+     expected from an agent that sent no proof halts immediately; an
+     unproven await past CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS halts;
   2. stop the campaign if a halt disposition fired, or if the skipped count
      has passed max_failures;
   3. otherwise create jobs for the active stage's not-yet-started hosts, up to
@@ -40,6 +42,7 @@ from app.core.config import settings
 from app.db.base import SessionLocal
 from app.job_creation import create_job_for_host
 from app.models.models import Campaign, CampaignHost, Host, Job
+from app.schemas.schemas import validate_agent_upgrade_params
 from app.webhooks.enqueue import enqueue_event
 
 log = logging.getLogger("cadence.campaigns")
@@ -54,6 +57,9 @@ def _f(**fields: object) -> dict:
 # stops the whole campaign on the first occurrence. Lives here, not in the
 # schema, so it can change without a migration. A category not in this map
 # (an older agent's NULL, a future value) is treated as "halt" -- fail safe.
+# Agent-upgrade V1: download/verification/proof failures may be systemic
+# (bad publish, bad release/key, a successor that never phones home), so
+# they halt; install/refused/lost are host-local, so they skip.
 CAMPAIGN_DISPOSITIONS: dict[str, str] = {
     "apt_locked": "skip",
     "dpkg_error": "skip",
@@ -63,6 +69,10 @@ CAMPAIGN_DISPOSITIONS: dict[str, str] = {
     "agent_refused": "skip",
     "network_or_repo": "halt",
     "unknown": "halt",
+    "upgrade_download_failed": "halt",
+    "upgrade_verification_failed": "halt",
+    "upgrade_install_failed": "skip",
+    "upgrade_proof_timeout": "halt",
 }
 
 _ACTIVE = ("pending", "running")
@@ -207,7 +217,14 @@ def _reconcile(
             if job.status not in ("succeeded", "failed"):
                 continue  # still in flight
 
-            if job.status == "succeeded":
+            if job.status == "succeeded" and job.job_type == "agent_upgrade":
+                # PR4 already proved the new binary runs and authenticates
+                # at the target version: direct done, never the apt health /
+                # reboot / awaited-return path below. Must stay first: a
+                # {"proven": true} result carries no health_status, so the
+                # apt gate would misread it as health_unknown and halt.
+                ch.state = "done"
+            elif job.status == "succeeded":
                 health = (job.result or {}).get("health_status")
                 if health not in ("healthy", "degraded"):
                     category = (
@@ -286,7 +303,12 @@ def _fill_stage(
         if slots <= 0:
             break
         job = create_job_for_host(
-            db, host_id=ch.host_id, campaign_id=c.id, requested_by="campaign"
+            db,
+            host_id=ch.host_id,
+            job_type=c.job_type,
+            params=dict(c.job_params or {}),
+            campaign_id=c.id,
+            requested_by="campaign",
         )
         if job is None:
             log.info(
@@ -336,6 +358,17 @@ def _step(
         c.completed_at = now
         c.updated_at = now
         return Outcome("completed", tuple(completed_stages))
+
+    if c.job_type == "agent_upgrade":
+        # The API validates job_params at creation and no route mutates it,
+        # but the engine must never mint an agent_upgrade job with anything
+        # but {"target_version"} even from a hand-corrupted row: fail closed.
+        try:
+            validate_agent_upgrade_params(dict(c.job_params or {}))
+        except ValueError as exc:
+            reason = f"invalid job_params: {exc}"
+            _stop_campaign(db, c, reason=reason, now=now)
+            return Outcome("stopped", tuple(completed_stages), stop_reason=reason)
 
     created = _fill_stage(db, c, stage, ch_rows, hostnames, now)
     c.updated_at = now

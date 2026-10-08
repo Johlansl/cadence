@@ -150,14 +150,20 @@ this overlay.
 
 ## Add a monitored host
 
-**1. Stage the agent assets** (once per server, re-run after each agent release):
+**1. Publish an agent version, then stage the bootstrap assets** (once per
+server; repeat the version publish for each agent release):
 
 ```sh
-scripts/publish-agent.sh
+# on the key-holder machine: build, smoke-test, hash and sign
+scripts/build-agent-release.sh <version> <outdir>
+# transfer <outdir> to the server, then on the server:
+scripts/publish-agent.sh publish <version> <outdir>  # verify + atomic stage
+scripts/publish-agent.sh assets                      # installer + units + CA
 ```
 
 This publishes the CA at the one intentionally unauthenticated path and every
-executable artifact over HTTPS only.
+executable artifact over HTTPS only. Published versions are immutable: a bad
+release needs a new version, never a republish.
 
 **2. Create an enrollment code** (on the server, reads `CADENCE_ADMIN_KEY`
 from `.env`):
@@ -237,10 +243,15 @@ The fingerprint-pinned bootstrap does this for you.
 ### Signed agent releases
 
 The installer fetches the agent over authenticated HTTPS and also checks a
-SHA-256 sum to catch truncation or staging mistakes. `scripts/publish-agent.sh`
-[minisign](https://jedisct1.github.io/minisign/)-signs every release
-(`cadence-agent.minisig` beside the binary); with `agent/minisign.pub`
-committed it refuses to publish unsigned.
+SHA-256 sum to catch truncation or staging mistakes. Every release is
+[minisign](https://jedisct1.github.io/minisign/)-signed
+(`cadence-agent.minisig` beside the binary), and the server re-verifies each
+signature against the committed `agent/minisign.pub` before staging. Both the
+build and the signing happen on the key-holder machine (operator
+laptop/vault); the private key is never present on the Cadence server and the
+server never builds release bytes. This matters: had the server built what the
+operator signs, a root-compromised server could get an arbitrary binary signed
+just by serving malicious build output. Unsigned publishing does not exist.
 
 For an additional release-signing check, install `minisign` on the host first
 (`apt-get install -y minisign` on Debian/Ubuntu), transfer the public key out of
@@ -256,11 +267,15 @@ installed the installer stops and tells you to install it. Minisign is an
 extra release-authenticity layer; server authentication already comes from the
 CA fingerprint carried in the enrollment code.
 
-Back up the (passwordless) signing key with `scripts/backup-signing-key.sh`, it
-writes a passphrase-protected copy that `scripts/backup.sh` then includes in
-every backup; `scripts/restore-signing-key.sh` restores it. Key rotation is
-written up in
-[docs/decisions.md](docs/decisions.md#agent-distribution--signing).
+Back up the signing key on the key-holder machine with
+`scripts/backup-signing-key.sh`; it writes a passphrase-protected copy to keep
+with your offline secrets (`scripts/restore-signing-key.sh` restores it).
+Server backups deliberately never include key material. Never copy the private
+key onto the Cadence server, not even temporarily; losing the key means
+rotation, not disabling signatures. Key rotation is written up in
+[docs/decisions.md](docs/decisions.md#agent-distribution--signing). The exact
+build/sign/publish commands live in the `scripts/build-agent-release.sh` and
+`scripts/publish-agent.sh` headers.
 
 The pre-built binaries attached to each GitHub **Release** (`agent-v*` tag) are
 a separate channel, not minisign-signed (the fleet key never touches CI), but
@@ -482,17 +497,16 @@ requires fleet re-enrollment.
 
 ```sh
 scripts/backup.sh
-# -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, client_pki.tgz, env, minisign.key.enc, MANIFEST}
+# -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, client_pki.tgz, env, MANIFEST}
 ```
 
-`minisign.key.enc` (the agent signing key, passphrase-protected) is included
-only once `scripts/backup-signing-key.sh` has been run, see [Signed agent
-releases](#signed-agent-releases).
+The agent signing key is backed up separately on the key-holder machine, never
+in server backups, see [Signed agent releases](#signed-agent-releases).
 
 `CADENCE_BACKUP_DIR` / `CADENCE_BACKUP_KEEP` (default 14) tune it. Run it
 nightly from cron. `scripts/restore-check.sh [dir]` restores the newest (or
 given) backup into throwaway containers, asserts it loads, both PKIs validate
-and the signing-key backup is encrypted, and tears them down without touching
+and no signing-key material is present, and tears them down without touching
 the live stack.
 
 To restore for real, from a checkout at the commit in `MANIFEST`:
@@ -523,15 +537,24 @@ immediately before.
 
 Tag the release first so the built binary reports the right version:
 `git tag -a agent-v0.14.0 -m 'agent 0.14.0'` on the commit matching the newest
-`agent/CHANGELOG.md` heading, and push the tag. `scripts/publish-agent.sh`
-stamps that tag into the binary (`git describe`, via `-ldflags`); an untagged
-build falls back to the `agentVersion` literal in `agent/cmd/agent/main.go`.
+`agent/CHANGELOG.md` heading, and push the tag.
 
-Then redeploy the server with `scripts/deploy.sh` (or run
-`scripts/publish-agent.sh` alone if the stack is otherwise untouched). An
-already-enrolled host can authenticate the installer with its pinned CA and
-set `CADENCE_UPGRADE_ONLY=true`; this preserves its HMAC and mTLS credentials.
-Never fetch or execute the installer over HTTP. See `agent/CHANGELOG.md` and
+Then publish that exact version explicitly (the version is passed on the
+command line and stamped via `-ldflags`; an untagged build falls back to the
+`agentVersion` literal in `agent/cmd/agent/main.go`):
+
+```sh
+# on the key-holder machine, from a checkout of agent-v0.14.0:
+scripts/build-agent-release.sh 0.14.0 /tmp/agent-0.14.0
+# transfer /tmp/agent-0.14.0 to the server, then on the server:
+scripts/publish-agent.sh publish 0.14.0 /tmp/agent-0.14.0
+```
+
+`scripts/deploy.sh` does not publish agent versions; it only restages the
+bootstrap assets. An already-enrolled host can authenticate the installer with
+its pinned CA and set `CADENCE_UPGRADE_ONLY=true`; this preserves its HMAC and
+mTLS credentials. Never fetch or execute the installer over HTTP. See
+`agent/CHANGELOG.md` and
 [docs/enrollment-mtls.md](docs/enrollment-mtls.md).
 
 ### Rotating a host's agent token

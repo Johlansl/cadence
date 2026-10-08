@@ -13,8 +13,8 @@ from __future__ import annotations
 import pathlib
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.core.config import settings
 from app.models.models import Campaign, Host
@@ -275,3 +275,134 @@ def test_campaign_hosts_skip_reason_biconditional(db_session):
             "reason": "apt_locked",
         },
     )
+
+
+# --- migration 0027 (campaign agent_upgrade contract) --------------------------
+
+
+def _reflect_0027(url: str) -> dict:
+    eng = create_engine(url, future=True)
+    try:
+        with eng.connect() as conn:
+            insp = inspect(conn)
+            checks = {
+                c["name"]: c["sqltext"]
+                for c in insp.get_check_constraints("campaigns")
+            }
+            return {
+                "job_params": "job_params"
+                in {c["name"] for c in insp.get_columns("campaigns")},
+                "job_type_check": str(checks.get("campaigns_job_type_check")),
+                "revision": conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one(),
+            }
+    finally:
+        eng.dispose()
+
+
+def test_0027_up_down_up_round_trip(throwaway_db):
+    from alembic import command
+
+    cfg = _alembic_config()
+
+    command.upgrade(cfg, "0027")
+    assert _reflect_0027(throwaway_db) == {
+        "job_params": True,
+        "job_type_check": "job_type = ANY (ARRAY['apt_upgrade'::text, 'agent_upgrade'::text])",
+        "revision": "0027",
+    }
+
+    command.downgrade(cfg, "0026")
+    assert _reflect_0027(throwaway_db) == {
+        "job_params": False,
+        "job_type_check": "job_type = 'apt_upgrade'::text",
+        "revision": "0026",
+    }
+
+    command.upgrade(cfg, "0027")  # re-upgrading a downgraded DB must be clean
+    assert _reflect_0027(throwaway_db)["revision"] == "0027"
+
+
+def test_0027_downgrade_refuses_a_surviving_agent_campaign(throwaway_db):
+    """Downgrade never deletes or rewrites rows: the narrowing CHECK fails
+    while an agent_upgrade campaign exists (same class as 0016/0026)."""
+    from alembic import command
+
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0027")
+    eng = create_engine(throwaway_db, future=True)
+    try:
+        with eng.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO campaigns "
+                    "(name, job_type, job_params, stages, max_concurrency, "
+                    " max_failures, observation_window_seconds, status) "
+                    "VALUES ('fleet', 'agent_upgrade', "
+                    '\'{"target_version": "0.15.0"}\', \'[1]\', 1, 0, 600, '
+                    "'draft')"
+                )
+            )
+        with pytest.raises(DBAPIError):
+            command.downgrade(cfg, "0026")
+        assert _reflect_0027(throwaway_db)["revision"] == "0027"
+    finally:
+        eng.dispose()
+
+
+_INSERT_CAMPAIGN = (
+    "INSERT INTO campaigns "
+    "(name, job_type, stages, max_concurrency, max_failures, "
+    " observation_window_seconds, status) "
+    "VALUES ('c1', :t, '[1]', 1, 0, 600, 'draft')"
+)
+
+
+def test_campaigns_job_type_check_accepts_both_known_types(db_session):
+    for t in ("apt_upgrade", "agent_upgrade"):
+        with db_session.begin_nested():
+            db_session.execute(text(_INSERT_CAMPAIGN), {"t": t})
+
+
+def test_campaigns_job_type_check_rejects_an_unknown_type(db_session):
+    _rejects(db_session, _INSERT_CAMPAIGN, {"t": "reboot"})
+
+
+def test_campaigns_job_params_defaults_to_empty_object(db_session):
+    db_session.execute(text(_INSERT_CAMPAIGN), {"t": "apt_upgrade"})
+    db_session.flush()
+    row = db_session.execute(
+        text("SELECT job_params FROM campaigns WHERE name = 'c1'")
+    ).scalar_one()
+    assert row == {}
+
+
+def test_campaigns_job_params_rejects_null(db_session):
+    _rejects(
+        db_session,
+        "INSERT INTO campaigns "
+        "(name, job_type, job_params, stages, max_concurrency, max_failures, "
+        " observation_window_seconds, status) "
+        "VALUES ('c2', 'apt_upgrade', NULL, '[1]', 1, 0, 600, 'draft')",
+    )
+
+
+def test_campaign_orm_roundtrip_carries_job_type_and_params(db_session):
+    c = Campaign(
+        name="orm",
+        job_type="agent_upgrade",
+        job_params={"target_version": "0.15.0"},
+        stages=[1],
+        max_concurrency=1,
+        max_failures=0,
+        observation_window_seconds=600,
+    )
+    db_session.add(c)
+    db_session.flush()
+    db_session.expunge_all()
+    got = db_session.execute(
+        select(Campaign).where(Campaign.name == "orm")
+    ).scalar_one()
+    assert got.job_type == "agent_upgrade"
+    assert got.job_params == {"target_version": "0.15.0"}

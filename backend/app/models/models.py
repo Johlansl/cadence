@@ -511,8 +511,11 @@ class Campaign(Base):
     all remaining, last only); the hosts are sliced into campaign_hosts rows at
     creation and never re-resolved. The scheduler's advance_campaigns() drives
     it. `status` and `campaign_hosts.state` both carry a DB CHECK (migration
-    0016). `job_type` is fixed to 'apt_upgrade' in v1 (CHECK); the column is
-    kept for a later widening. `halt_reason` is set only when status='stopped'.
+    0016). `job_type` accepts 'apt_upgrade' and 'agent_upgrade' (widened
+    by migration 0027); `job_params` snapshots the exact params every job
+    of the campaign is created with ({} for apt, {"target_version": ...}
+    for agent), immutable after creation. `halt_reason` is set only when
+    status='stopped'.
     The current stage index and the stage-ready timestamp are recomputed at
     read time from campaign_hosts / jobs, not stored."""
 
@@ -524,6 +527,9 @@ class Campaign(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     job_type: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'apt_upgrade'")
+    )
+    job_params: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     stages: Mapped[list] = mapped_column(JSONB, nullable=False)
     max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False)

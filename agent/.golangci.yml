@@ -1,5 +1,6 @@
-# Conservative baseline. golangci-lint is a CI-only tool; it does not change
-# the agent's "standard library only" rule for its own imports.
+# Conservative baseline. golangci-lint is a CI-only tool. The agent was
+# standard-library-only until 6B, which added the single pinned Minisign
+# dependency (no other third-party imports are accepted).
 version: "2"
 
 run:

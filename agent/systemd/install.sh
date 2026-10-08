@@ -11,7 +11,7 @@
 set -eu
 
 BIN="${1:-bin/cadence-agent}"
-PREFIX=/usr/local/bin
+PREFIX=/usr/bin
 CONFDIR=/etc/cadence
 UNITDIR=/etc/systemd/system
 DOCDIR=/usr/local/share/doc/cadence

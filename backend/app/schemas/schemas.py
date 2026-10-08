@@ -25,10 +25,29 @@ RebootMode = Literal["auto", "never", "prompt"]
 # anything on the host. 'health_check' is also a pure read: it reruns an
 # apt_upgrade's post-check phase (dpkg audit, apt dependencies, disk space,
 # failed services, reboot required) with no upgrade attached, on demand or
-# once per boot. jobs.job_type carries a DB CHECK since migration 0016
-# (widened for 'health_check' by 0019); this Literal is the parallel
-# closed-set enforcement at the API layer.
-JobType = Literal["apt_upgrade", "reboot", "apt_dry_run", "health_check"]
+# once per boot. 'agent_upgrade' (6B) is declarative: the server names a
+# target agent version, the agent (once it learns the type) upgrades itself
+# to it. jobs.job_type carries a DB CHECK since migration 0016 (widened for
+# 'health_check' by 0019, for 'agent_upgrade' by 0026); this Literal is the
+# parallel closed-set enforcement at the API layer.
+JobType = Literal["apt_upgrade", "reboot", "apt_dry_run", "health_check", "agent_upgrade"]
+
+# The job types a campaign may roll out (campaigns.job_type CHECK, 0016 as
+# widened by 0027). Narrower than JobType on purpose: read-only and reboot
+# jobs are never campaign-driven, and the API must 422 them instead of
+# letting the DB CHECK 500.
+CampaignJobType = Literal["apt_upgrade", "agent_upgrade"]
+
+# Strict agent target versions: three dot-separated integers in canonical
+# decimal form (no leading zeros, except a component that is exactly "0"),
+# nothing else. No 'v' prefix, prerelease, metadata or whitespace; at most
+# 64 chars so a garbage payload cannot grow params unboundedly. Canonical
+# on both sides (the agent enforces the same rule): one release, one
+# spelling, so the derived artifact path can never disagree with params.
+_AGENT_TARGET_RE = re.compile(
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+)
+_AGENT_TARGET_MAX_LEN = 64
 
 # Scope of a package_exclusions rule: every host, one named host, or every
 # host carrying a tag (roadmap item 6). A genuinely small, closed set (unlike
@@ -329,11 +348,13 @@ class AgentContactIn(BaseModel):
     """Optional body of the job-claim polls (next-job, health-check-job).
 
     Old agents POST "{}" (or nothing at all); capable agents add their boot so
-    the server can attribute the contact. Every field stays optional so all
-    three shapes validate.
+    the server can attribute the contact, and (6B) their own version so a
+    running agent_upgrade can be proven without waiting for the next report.
+    Every field stays optional so all three shapes validate.
     """
 
     boot_id: str | None = None
+    agent_version: str | None = None
 
 
 class ReportSummary(BaseModel):
@@ -476,6 +497,25 @@ class PackageSummary(BaseModel):
 
 # --- jobs ----------------------------------------------------------------
 
+def validate_agent_upgrade_params(params: dict) -> str:
+    """Validate the closed agent_upgrade contract, shared by JobCreate and
+    CampaignCreate so the two can never diverge: exactly one key,
+    `target_version`, a strict canonical N.N.N (no 'v', prerelease,
+    metadata, whitespace or non-canonical leading zeros; bounded length).
+    Returns the target. Raises ValueError, surfaced by the callers'
+    Pydantic validators with the historic JobCreate messages."""
+    if set(params) != {"target_version"}:
+        raise ValueError("agent_upgrade params must be exactly {'target_version': ...}")
+    target = params["target_version"]
+    if (
+        not isinstance(target, str)
+        or len(target) > _AGENT_TARGET_MAX_LEN
+        or not _AGENT_TARGET_RE.fullmatch(target)
+    ):
+        raise ValueError("target_version must be strict N.N.N (e.g. '0.15.0')")
+    return target
+
+
 class JobCreate(BaseModel):
     job_type: JobType = "apt_upgrade"
     params: dict = Field(default_factory=dict)
@@ -489,6 +529,19 @@ class JobCreate(BaseModel):
         if reboot is not None and reboot not in ("auto", "never", "prompt"):
             raise ValueError("params.reboot must be 'auto', 'never' or 'prompt'")
         return v
+
+    @model_validator(mode="after")
+    def _validate_upgrade_target(self) -> JobCreate:
+        # agent_upgrade is a closed declarative contract: exactly one key,
+        # a strict N.N.N target. Anything else (url, checksum, pubkey,
+        # path, command, allow_downgrade, ...) is rejected, never silently
+        # ignored. Defense in depth for operator mistakes and a closed
+        # auditable API -- not a trust root against a compromised server,
+        # which the agent-side parsing (a later 6B lot) does not rely on.
+        if self.job_type != "agent_upgrade":
+            return self
+        validate_agent_upgrade_params(self.params or {})
+        return self
 
 
 class DryRunPackageIn(BaseModel):
@@ -951,9 +1004,13 @@ class CampaignCreate(BaseModel):
     wave sizes -- a positive integer (absolute host count), "N%" (1-100,
     percent of the resolved total, floored), or "rest" (all remaining, last
     entry only). `observation_window_seconds` falls back to
-    CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS when omitted."""
+    CADENCE_CAMPAIGN_OBSERVATION_WINDOW_SECONDS when omitted. `job_type`
+    selects the rolled-out job ('apt_upgrade' with empty `job_params`, or
+    'agent_upgrade' with exactly {"target_version": "N.N.N"})."""
 
     name: str = Field(min_length=1, max_length=200)
+    job_type: CampaignJobType = "apt_upgrade"
+    job_params: dict = Field(default_factory=dict)
     stages: list = Field(min_length=1)
     max_concurrency: int = Field(ge=1)
     max_failures: int = Field(ge=0)
@@ -990,6 +1047,14 @@ class CampaignCreate(BaseModel):
             raise ValueError("provide exactly one of host_ids or tag")
         return self
 
+    @model_validator(mode="after")
+    def _validate_job_contract(self) -> "CampaignCreate":
+        if self.job_type == "agent_upgrade":
+            validate_agent_upgrade_params(self.job_params or {})
+        elif self.job_params:
+            raise ValueError("job_params must be empty for apt_upgrade campaigns")
+        return self
+
 
 class CampaignOut(BaseModel):
     """A campaign for the list view. The counts and `current_stage_index` are
@@ -998,6 +1063,7 @@ class CampaignOut(BaseModel):
     id: uuid.UUID
     name: str
     job_type: str
+    job_params: dict
     stages: list
     max_concurrency: int
     max_failures: int

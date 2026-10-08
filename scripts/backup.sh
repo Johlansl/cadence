@@ -11,16 +11,16 @@
 #   caddy_data.tgz     the Caddy /data volume (internal CA + certs)
 #   client_pki.tgz     client root/intermediate certificates and private keys
 #   env                a copy of .env (secrets: admin key, DB password) -- 0600
-#   minisign.key.enc   the agent signing key, passphrase-protected (only if
-#                      scripts/backup-signing-key.sh has been run)
 #   MANIFEST           timestamp, git commit, alembic revision, sha256 sums
+#
+# The agent release signing key is deliberately NOT backed up here: it
+# lives on the key-holder machine (operator laptop/vault), never on this
+# server. Back it up there with scripts/backup-signing-key.sh.
 #
 # Environment:
 #   CADENCE_BACKUP_DIR    base directory for backups (default: <repo>/backups)
 #   CADENCE_BACKUP_KEEP   how many timestamped dirs to keep (default: 14)
 #   CADENCE_ENV_FILE      .env to read POSTGRES_* from (default: <repo>/.env)
-#   CADENCE_MINISIGN_KEY  live signing key (default: ~/.cadence/minisign.key);
-#                         its .enc sibling is what gets backed up
 
 set -eu
 umask 077
@@ -93,22 +93,13 @@ fi
 cp "$env_file" "$out/env"
 chmod 0600 "$out/env"
 
-# 3b. Agent signing key, already passphrase-protected by
-#     scripts/backup-signing-key.sh. The live key is passwordless and is never
-#     copied; only its .enc sibling. Warn (don't fail) if signing is configured
-#     but the encrypted copy is missing.
+# 3b. No agent signing key here on purpose: the release key lives on the
+#     key-holder machine, never on this server, so server backups must not
+#     carry key material. (Pre-PR2 backups may still contain minisign.key.enc;
+#     that file is ignored on restore.)
 manifest_files="db.dump caddy_data.tgz env"
 if [ -n "$client_pki_vol" ]; then
 	manifest_files="$manifest_files client_pki.tgz"
-fi
-minisign_key=${CADENCE_MINISIGN_KEY:-$HOME/.cadence/minisign.key}
-if [ -f "$minisign_key.enc" ]; then
-	cp "$minisign_key.enc" "$out/minisign.key.enc"
-	chmod 0600 "$out/minisign.key.enc"
-	manifest_files="$manifest_files minisign.key.enc"
-elif [ -f "$repo/agent/minisign.pub" ]; then
-	echo "backup.sh: WARNING agent signing is configured but $minisign_key.enc" \
-		"is missing -- run scripts/backup-signing-key.sh" >&2
 fi
 
 # 4. Manifest.

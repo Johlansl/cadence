@@ -218,6 +218,83 @@ def reap_stuck_jobs(
     return reaped
 
 
+def sweep_unproven_agent_upgrades(
+    now: datetime | None = None,
+    db: Session | None = None,
+    *,
+    timeout_seconds: int | None = None,
+) -> int:
+    """Fail `agent_upgrade` jobs still 'running' past the proof timeout (6B):
+    the new agent never checked back with the target version. Only this job
+    type, only running, only older than the cutoff. 0 = disabled. Returns the
+    number of jobs swept.
+
+    Runs ahead of the generic reaper on the same tick (the config guard
+    forbids a longer proof timeout), so an unproven upgrade always fails
+    under `upgrade_proof_timeout`, never under the generic categories. The
+    conditional UPDATE is the race guard against a concurrent proof: exactly
+    one of them moves the row to terminal. Pure PostgreSQL, no process
+    memory, safe to re-run after a restart.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = settings.upgrade_proof_timeout_seconds
+    if timeout_seconds <= 0:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    own_session = db is None
+    db = db or SessionLocal()
+    cutoff = now - timedelta(seconds=timeout_seconds)
+    try:
+        rows = db.execute(
+            update(Job)
+            .where(
+                Job.job_type == "agent_upgrade",
+                Job.status == "running",
+                Job.started_at.is_not(None),
+                Job.started_at < cutoff,
+            )
+            .values(
+                status="failed",
+                completed_at=now,
+                failure_category="upgrade_proof_timeout",
+                failure_summary=(
+                    f"no proof after {timeout_seconds}s; agent_version never "
+                    "matched target_version"
+                ),
+                result={"reaped": True, "reason": "upgrade proof timeout exceeded"},
+                log=func.concat(
+                    func.coalesce(Job.log, ""),
+                    f"\n[cadence] no proof after {timeout_seconds}s; "
+                    "marked failed by the upgrade sweeper",
+                ),
+            )
+            .returning(
+                Job.id,
+                Job.host_id,
+                Job.job_type,
+                Job.requested_by,
+                Job.failure_category,
+                Job.failure_summary,
+                Job.completed_at,
+                Job.log,
+            )
+            .execution_options(synchronize_session=False)
+        ).all()
+        swept = len(rows)
+        if rows:
+            _enqueue_reaped_job_failed(db, rows, occurred_at=now)
+        db.commit()
+    finally:
+        if own_session:
+            db.close()
+    if swept:
+        log.warning(
+            "swept unproven agent upgrades",
+            extra=_f(count=swept, timeout_seconds=timeout_seconds),
+        )
+    return swept
+
+
 def _enqueue_reaped_job_failed(db: Session, rows, *, occurred_at: datetime) -> None:
     """Stage a job.failed webhook for each job the reaper just failed. The
     reaper is the only path that fails a job without an agent result, so it
@@ -663,6 +740,7 @@ def main() -> None:
     log.info("scheduler started", extra=_f(tick_seconds=TICK_SECONDS))
     while not _stop:
         try:
+            sweep_unproven_agent_upgrades()
             reap_stuck_jobs()
             tick()
             advance_campaigns()
