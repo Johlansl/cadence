@@ -464,7 +464,7 @@ if [ "${DOCKER_TESTS:-0}" = "1" ]; then
 		else
 			R=$T/rbuild
 			mkdir -p "$R/agent"
-			cp agent/go.mod agent/CHANGELOG.md "$R/agent/"
+			cp agent/go.mod agent/go.sum agent/CHANGELOG.md "$R/agent/"
 			cp -r agent/cmd agent/internal "$R/agent/"
 			(cd "$R" && git init -q 2>/dev/null \
 				&& git -c user.email=t@t -c user.name=t add -A \
