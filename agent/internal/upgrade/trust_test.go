@@ -1,6 +1,7 @@
 package upgrade
 
 import (
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,25 +11,75 @@ import (
 )
 
 func TestTrustedKeyMatchesRepoKey(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "minisign.pub"))
-	if err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		file string
+		text string
+	}{
+		{"minisign.pub", activePubKeyText},
+		{"minisign-backup.pub", backupPubKeyText},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("..", "..", tc.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(string(raw)) != strings.TrimSpace(tc.text) {
+				t.Fatalf("embedded trusted key drifted from agent/%s: "+
+					"rotate both together", tc.file)
+			}
+			key, err := parsePubKey(tc.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if key.KeyId != keyIDFromComment(t, tc.text) {
+				t.Errorf("parsed key ID = %X, want the ID in the comment line", key.KeyId)
+			}
+		})
 	}
-	if strings.TrimSpace(string(raw)) != strings.TrimSpace(trustedPubKeyText) {
-		t.Fatal("embedded trusted key drifted from agent/minisign.pub: " +
-			"rotate both together")
+}
+
+func TestTrustedKeysAreDistinct(t *testing.T) {
+	keys := mustBuildTrustedKeys(activePubKeyText, backupPubKeyText)
+	if len(keys) != 2 {
+		t.Fatalf("got %d keys, want 2", len(keys))
 	}
-	key, err := parsePubKey(trustedPubKeyText)
-	if err != nil {
-		t.Fatal(err)
+	if keys[0].KeyId == keys[1].KeyId {
+		t.Fatal("active and backup keys must not share a key ID")
 	}
-	// The CLI prints the key ID as a little-endian uint64
-	// (229C17EE3D3EDC7B); on the wire it is these raw bytes.
-	var wantID [8]byte
-	copy(wantID[:], []byte{0x7B, 0xDC, 0x3E, 0x3D, 0xEE, 0x17, 0x9C, 0x22})
-	if key.KeyId != wantID {
-		t.Errorf("trusted key ID = %X, want 7BDC3E3DEE179C22", key.KeyId)
+}
+
+func TestMustBuildTrustedKeysPanicsOnDuplicateKeyID(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("mustBuildTrustedKeys accepted two keys sharing a key ID")
+		}
+	}()
+	mustBuildTrustedKeys(activePubKeyText, activePubKeyText)
+}
+
+// keyIDFromComment extracts the key ID from a .pub file's own
+// "untrusted comment: minisign public key <HEX>" line and returns it as the
+// raw little-endian bytes minisign.PublicKey.KeyId carries (the CLI prints
+// the ID as the big-endian hex string of those same bytes reversed).
+// Deriving the expectation from the text itself, rather than a hand-typed
+// byte literal, is what actually catches a comment/key mismatch instead of
+// just restating one.
+func keyIDFromComment(t *testing.T, text string) [8]byte {
+	t.Helper()
+	const prefix = "untrusted comment: minisign public key "
+	line := strings.SplitN(text, "\n", 2)[0]
+	if !strings.HasPrefix(line, prefix) {
+		t.Fatalf("key text has no recognizable comment line: %q", line)
 	}
+	raw, err := hex.DecodeString(strings.TrimSpace(strings.TrimPrefix(line, prefix)))
+	if err != nil || len(raw) != 8 {
+		t.Fatalf("cannot parse key ID in %q: %v", line, err)
+	}
+	var id [8]byte
+	for i, b := range raw {
+		id[len(raw)-1-i] = b
+	}
+	return id
 }
 
 func TestInteropVerifiesCLIProducedSignature(t *testing.T) {
@@ -60,12 +111,14 @@ func TestInteropVerifiesCLIProducedSignature(t *testing.T) {
 	}
 }
 
-// swapTrustedKey installs a test root of trust for one test.
+// swapTrustedKey replaces the entire trust set with a single test key for
+// one test. Every call site elsewhere in this package (install_test.go)
+// still expects exactly this: trust only the one key under test.
 func swapTrustedKey(t *testing.T, key minisign.PublicKey) {
 	t.Helper()
-	prev := trustedPubKey
-	trustedPubKey = key
-	t.Cleanup(func() { trustedPubKey = prev })
+	prev := trustedKeys
+	trustedKeys = []minisign.PublicKey{key}
+	t.Cleanup(func() { trustedKeys = prev })
 }
 
 func TestVerifySignatureRejects(t *testing.T) {
@@ -80,11 +133,7 @@ func TestVerifySignatureRejects(t *testing.T) {
 	swapTrustedKey(t, key)
 
 	other := testKey(t) // a different valid key: must not verify
-	swapToOther := func() {
-		prev := trustedPubKey
-		trustedPubKey = other.pub
-		t.Cleanup(func() { trustedPubKey = prev })
-	}
+	swapToOther := func() { swapTrustedKey(t, other.pub) }
 
 	cases := map[string]func(){
 		"tampered message": func() {
@@ -139,7 +188,7 @@ func TestParsePubKeyRejects(t *testing.T) {
 		"",
 		"garbage",
 		"untrusted comment: only one line",
-		"wrong prefix\nRWR73D497hecIlc6UpAyi6dawVeZ4k5+XJQpz7s74EA9coOyDo0PazMr",
+		"wrong prefix\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=",
 		"untrusted comment: bad base64\n!!!not-base64!!!",
 		"untrusted comment: short\nQUJD",
 		"untrusted comment: a\nQUJD\ntrailing line",

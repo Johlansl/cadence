@@ -7,22 +7,31 @@ import (
 	minisign "github.com/jedisct1/go-minisign"
 )
 
-// trustedPubKeyText is the Minisign root of trust for agent upgrades: the
-// committed fleet public key (agent/minisign.pub), compiled into the
-// binary as a literal. The server, the job, and every runtime config are
-// unable to replace it: verification below parses this text and nothing
-// else. A rotation edits the file and this literal together; TestTrustedKey
-// MatchesRepoKey fails CI on any drift between the two. (A go:embed was
-// considered and rejected: embed patterns cannot name parent directories,
-// so the literal plus the sync test is the smaller mechanism.) In-package
-// tests reassign trustedPubKey (a test-only seam, never a production knob)
-// to exercise verification against test keys.
-const trustedPubKeyText = `untrusted comment: minisign public key 229C17EE3D3EDC7B
-RWR73D497hecIlc6UpAyi6dawVeZ4k5+XJQpz7s74EA9coOyDo0PazMr`
+// activePubKeyText is the Minisign root of trust used to sign every release
+// in CI (agent/minisign.pub), compiled into the binary as a literal. A
+// rotation edits the file and this literal together; TestTrustedKeyMatchesRepoKey
+// fails CI on any drift between the two. (A go:embed was considered and
+// rejected: embed patterns cannot name parent directories, so the literal
+// plus the sync test is the smaller mechanism.)
+const activePubKeyText = `untrusted comment: minisign public key C9EDE89E1DEEED37
+RWQ37e4dnujtyfC7Twy6ItYBgiBIG/Fl/btaG6f3Pg8tUd2tDzQtEB+Q`
 
-// trustedPubKey is the parsed root of trust. Reassigned by in-package
-// tests only.
-var trustedPubKey = mustParsePubKey(trustedPubKeyText)
+// backupPubKeyText is the offline backup root of trust (agent/minisign-backup.pub),
+// held only by the maintainer, outside CI. It exists to sign an emergency
+// release if the active key is ever lost or compromised: every agent trusts
+// it already, so such a release verifies on hosts that never saw the
+// incident. Kept in sync with agent/minisign-backup.pub the same way as
+// activePubKeyText.
+const backupPubKeyText = `untrusted comment: minisign public key 2167C9939EC0F4FC
+RWT89MCek8lnIQSGl1pzce0uAEqbX+AdYBzpzhRebFg7LszYq0eOy+Ks`
+
+// trustedKeys is the root of trust for agent upgrades: every key in this set
+// is accepted, tried in order. The server, the job, and every runtime
+// config are unable to replace it: verification below parses these
+// constants and nothing else. In-package tests reassign trustedKeys (a
+// test-only seam, never a production knob) to exercise verification against
+// test keys.
+var trustedKeys = mustBuildTrustedKeys(activePubKeyText, backupPubKeyText)
 
 func mustParsePubKey(text string) minisign.PublicKey {
 	key, err := parsePubKey(text)
@@ -30,6 +39,26 @@ func mustParsePubKey(text string) minisign.PublicKey {
 		panic("upgrade: embedded minisign public key is invalid: " + err.Error())
 	}
 	return key
+}
+
+// mustBuildTrustedKeys parses every embedded key text and panics if any
+// two parsed keys share a key ID. A trust set is only as strong as its
+// members being independent; a duplicate (for instance a rotation that
+// accidentally commits the same key twice) must fail loud at startup, not
+// silently collapse to a single effective key.
+func mustBuildTrustedKeys(texts ...string) []minisign.PublicKey {
+	keys := make([]minisign.PublicKey, len(texts))
+	for i, text := range texts {
+		keys[i] = mustParsePubKey(text)
+	}
+	for i := range keys {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[i].KeyId == keys[j].KeyId {
+				panic("upgrade: trusted keys are not distinct, found a duplicate key ID")
+			}
+		}
+	}
+	return keys
 }
 
 // parsePubKey decodes full .pub file content ("untrusted comment: ...\n" +
@@ -47,10 +76,14 @@ func parsePubKey(text string) (minisign.PublicKey, error) {
 	return key, nil
 }
 
-// verifySignature checks the downloaded bytes against a .minisig file with
-// the embedded root of trust. The library call verifies the message
-// signature, the key identifier binding, and the trusted comment's global
-// signature; any failure (or a malformed signature file) refuses. The
+// verifySignature checks the downloaded bytes against a .minisig file,
+// trying every key in the embedded trust set in order and accepting on the
+// first match. The library call verifies the message signature, the key
+// identifier binding, and the trusted comment's global signature; a key
+// whose id does not match the signature simply fails that one attempt
+// (minisign.PublicKey.Verify returns false, error, never a panic or shared
+// state) and the next key is tried. Refuses only once every key has been
+// tried and none verified, or the signature file itself is malformed. The
 // trusted comment is returned for logging only: it is never version truth.
 func verifySignature(data, sigText []byte) (trustedComment string, err error) {
 	if len(sigText) == 0 || len(sigText) > maxMetaBytes {
@@ -60,9 +93,10 @@ func verifySignature(data, sigText []byte) (trustedComment string, err error) {
 	if err != nil {
 		return "", fmt.Errorf("signature file is malformed: %v", err)
 	}
-	ok, err := trustedPubKey.Verify(data, sig)
-	if err != nil || !ok {
-		return "", fmt.Errorf("signature verification failed: %v", err)
+	for _, key := range trustedKeys {
+		if ok, _ := key.Verify(data, sig); ok {
+			return sig.TrustedComment, nil
+		}
 	}
-	return sig.TrustedComment, nil
+	return "", fmt.Errorf("signature verification failed: no trusted key matched")
 }
