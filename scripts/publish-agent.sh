@@ -19,27 +19,37 @@
 # binary, the operator signs it blindly, and server-side signature checks
 # then "verify" the attacker's bytes. Signature verification only proves the
 # staged bytes are the signed bytes; it says nothing about a build the
-# attacker controlled. So the server is never the source of signed bytes:
-# releases are built AND signed on the key-holder machine
-# (scripts/build-agent-release.sh), and this script only verifies and stages
-# the transferred bundle.
+# attacker controlled. So the server is never the source of signed bytes,
+# and this script only verifies and stages a bundle it got from elsewhere,
+# by one of two paths:
 #
-# Publishing is an explicit two-machine flow (never part of
-# scripts/deploy.sh):
+#   scripts/publish-agent.sh fetch <version>
+#      The normal path. Downloads the 6 release assets (binary, .sha256,
+#      .minisig, per arch) for a released version (agent-v<version>) from
+#      a GitHub Release -- by default this project's, overridable for a
+#      fork -- into a temp directory, writes the local "version" marker
+#      itself (the 7th closed-set member: never a release asset, see
+#      stage_version below), then runs exactly the same verify-and-stage
+#      path as `publish` below. The transport is never trusted: it is
+#      plain HTTPS to a release host, hardened in transit (TLS 1.2+,
+#      HTTPS enforced through redirects, bounded size and time, hard
+#      failure on any HTTP error) but the decision to stage is minisign
+#      -V against the trust set alone, not the download succeeding.
+#   scripts/publish-agent.sh publish <version> <indir>
+#      The break-glass path, for an operator-assembled bundle (normally
+#      produced by scripts/build-agent-release.sh on a key-holder machine,
+#      see that script's header): verifies and stages a local directory
+#      instead of downloading one.
 #
-#   1. key-holder: scripts/build-agent-release.sh <version> <outdir>
-#      Builds both binaries from an identified checkout, smoke-tests them,
-#      hashes and signs them. See that script's header for the release
-#      discipline (tag/version/commit binding, air-gap transfer).
-#   2. server:     scripts/publish-agent.sh publish <version> <indir>
-#      Verifies (grammar, version binding, closed file set, triplet
-#      completeness per arch, recomputed SHA-256, minisign -V against the
-#      committed agent/minisign.pub, amd64 -version AFTER the signature
-#      verifies, ELF machine per arch) then stages atomically: the version
-#      directory appears via one rename, and the unversioned triplet is
-#      refreshed from the just-published amd64 files. Refuses loudly if
-#      the version already exists: published versions are immutable, a bad
-#      release needs a new version, never a republish.
+# Both paths converge on the same checks once a candidate bundle exists
+# (grammar, version binding, closed file set, triplet completeness per
+# arch, recomputed SHA-256, minisign -V against the trust set in
+# agent/minisign.pub and agent/minisign-backup.pub, amd64 -version AFTER
+# the signature verifies, ELF machine per arch) then stage atomically: the
+# version directory appears via one rename, and the unversioned triplet is
+# refreshed from the just-published amd64 files. Both refuse loudly if the
+# version already exists: published versions are immutable, a bad release
+# needs a new version, never a republish.
 #
 #   scripts/publish-agent.sh assets
 #      Stage only the unversioned bootstrap assets (installer, units, CA).
@@ -49,24 +59,32 @@
 # Rules, enforced by scripts/test-publish-agent.sh:
 # - this script never builds (no compiler, no docker for binaries), never
 #   signs (no `minisign -S`) and never reads a private key; it only
-#   verifies with the committed public key, using sh + coreutils +
+#   verifies with the committed public keys, using sh + coreutils + curl +
 #   minisign (no Go toolchain needed);
 # - downloaded code never runs before its signature verifies: the amd64
 #   -version smoke runs only after minisign -V succeeds, on a linux/amd64
 #   publish host (the server target is amd64); anything else refuses;
-# - unsigned publishing does not exist: no agent/minisign.pub, no publish
-#   (a fork must generate its own key, it cannot publish unsigned);
+# - unsigned publishing does not exist: a missing, malformed, or
+#   non-independent (duplicate key ID) trust set refuses before any
+#   verification is attempted (a fork must generate its own keys, it
+#   cannot publish unsigned);
 # - absent version/arch/triplet member, or any unexpected extra file in
 #   the bundle: the version is not published, and Caddy answers 404 for it
 #   (no fallback);
-# - the private key must never be copied onto the Cadence server, not even
-#   temporarily. Losing the key means rotation (docs/decisions.md), never
+# - neither trusted private key is ever present on the Cadence server, not
+#   even temporarily. Losing or rotating a key is docs/decisions.md, never
 #   disabling signatures.
 #
 # Environment (advanced/test only):
-#   CADENCE_PUBLISH_DIST     dist root to stage into (default: <repo>/dist)
-#   CADENCE_PUBLISH_PUBKEY   minisign public key to verify with
-#                            (default: <repo>/agent/minisign.pub)
+#   CADENCE_PUBLISH_DIST          dist root to stage into (default: <repo>/dist)
+#   CADENCE_PUBLISH_PUBKEY        active trust key (default: <repo>/agent/minisign.pub)
+#   CADENCE_PUBLISH_PUBKEY_BACKUP backup trust key (default: <repo>/agent/minisign-backup.pub)
+#   CADENCE_FETCH_REPO            GitHub "owner/repo" to fetch releases from
+#                                 (default: Johlansl/cadence)
+#   CADENCE_FETCH_BASE_URL        release host: exactly https://<host> or
+#                                 https://<host>:<port>, nothing else
+#                                 (default: https://github.com; test-only
+#                                 override)
 
 set -eu
 
@@ -76,14 +94,46 @@ cd "$repo"
 
 dist=${CADENCE_PUBLISH_DIST:-$repo/dist}
 pubkey=${CADENCE_PUBLISH_PUBKEY:-$repo/agent/minisign.pub}
+pubkey_backup=${CADENCE_PUBLISH_PUBKEY_BACKUP:-$repo/agent/minisign-backup.pub}
 
 ARCHS="amd64 arm64"
 UNITS="cadence-agent.service cadence-agent.timer
 cadence-agent-poll.service cadence-agent-poll.timer
 cadence-agent-health-check-boot.service cadence-agent-health-check-boot.timer"
 
+# Each temp directory this script creates gets its own dedicated cleanup
+# variable, removed quoted and individually: a single space-joined list
+# passed unquoted to `rm -rf` would word-split on any space in $dist or
+# $TMPDIR (a repo checked out under a path like "/home/bob/my
+# projects/cadence" would then remove "/home/bob/my"). A path already
+# renamed away (the normal success path for the staging directory) is
+# simply absent by then, so removing it again is a silent no-op. One
+# process-wide EXIT trap, set once: a function-local `trap ... EXIT`
+# would silently replace it instead of composing with it (that bug is
+# exactly why this is process-wide, rather than one trap per temp
+# directory).
+cleanup_stage_tmp=""
+cleanup_fetch_tmp=""
+cleanup() {
+	[ -n "$cleanup_stage_tmp" ] && rm -rf -- "$cleanup_stage_tmp"
+	[ -n "$cleanup_fetch_tmp" ] && rm -rf -- "$cleanup_fetch_tmp"
+	# Explicit, unconditional: the last `[ -n ... ] && ...` above is false
+	# (and so is cleanup's own return status) whenever that particular
+	# temp var was never set, e.g. a plain `publish` run never sets
+	# cleanup_fetch_tmp. Run as the EXIT trap, that false status must
+	# never leak into the script's own exit code.
+	return 0
+}
+trap cleanup EXIT
+# INT/TERM must clean up AND terminate: a bare `trap cleanup INT TERM`
+# only runs the handler and then resumes the interrupted script instead
+# of stopping it. Exit with the conventional 128+signal code afterward.
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
 usage() {
-	echo "usage: publish-agent.sh publish <version> <indir>   (verify + atomic stage)" >&2
+	echo "usage: publish-agent.sh fetch <version>             (download + verify + atomic stage)" >&2
+	echo "       publish-agent.sh publish <version> <indir>   (verify + atomic stage a local bundle)" >&2
 	echo "       publish-agent.sh assets                      (bootstrap assets only)" >&2
 	exit 2
 }
@@ -115,6 +165,139 @@ elf_machine() {
 	od -A n -t u2 -j 18 -N 2 "$1" 2>/dev/null | tr -d ' \n'
 }
 
+# Extract and validate the 16-hex-char key ID from a minisign .pub file's
+# own comment line, on stdout, without needing the private key or the Go
+# library: exactly two lines, the expected comment prefix, a 16-hex-char
+# ID, and a key body of the length every minisign Ed25519 public key
+# encodes to. A structural check only (same spirit as the SHA-256 hex
+# check above), not a substitute for the minisign -V calls that follow: a
+# key that passes here but is otherwise bogus simply never verifies any
+# real signature.
+pubkey_id() {
+	f=$1
+	if [ ! -f "$f" ]; then
+		echo "publish-agent.sh: missing public key $f" >&2
+		return 1
+	fi
+	prefix="untrusted comment: minisign public key "
+	first=$(sed -n '1p' "$f")
+	second=$(sed -n '2p' "$f")
+	third=$(sed -n '3p' "$f")
+	case $first in
+	"$prefix"*) id=${first#"$prefix"} ;;
+	*)
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (bad comment line)" >&2
+		return 1
+		;;
+	esac
+	if [ "${#id}" -ne 16 ]; then
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (key ID is not 16 hex characters)" >&2
+		return 1
+	fi
+	case $id in
+	*[!0-9A-Fa-f]*)
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (key ID is not hex)" >&2
+		return 1
+		;;
+	esac
+	if [ "${#second}" -ne 56 ]; then
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (unexpected key body length)" >&2
+		return 1
+	fi
+	if [ -n "$third" ]; then
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (extra content after line 2)" >&2
+		return 1
+	fi
+	printf '%s' "$id"
+}
+
+# Refuse to start if minisign is missing, either trusted public key is
+# absent or malformed, or the two keys are not independent (same key ID):
+# a "trust set" that collapses to one effective key, or to zero, must fail
+# loud before any verification is attempted, never fall back silently.
+# Called first thing by both publish and fetch, before anything else.
+check_trust_keys() {
+	if ! command -v minisign >/dev/null 2>&1; then
+		echo "publish-agent.sh: minisign is not installed -- install the minisign package (e.g. 'apt-get install minisign') and retry" >&2
+		exit 1
+	fi
+	active_id=$(pubkey_id "$pubkey") || exit 1
+	backup_id=$(pubkey_id "$pubkey_backup") || exit 1
+	if [ "$active_id" = "$backup_id" ]; then
+		echo "publish-agent.sh: active and backup public keys share key ID $active_id -- refusing (they must be independent)" >&2
+		exit 1
+	fi
+}
+
+# Verify a signature against every trusted key in turn, accepting on the
+# first that verifies; refuse only once none has. Logs which key ID
+# verified and the signature's trusted comment for operator visibility --
+# like the agent, this script never treats the comment as version truth,
+# only as a label.
+verify_signature() {
+	bin=$1
+	sig=$2
+	for p in "$pubkey" "$pubkey_backup"; do
+		if out=$(minisign -V -p "$p" -m "$bin" -x "$sig" 2>&1); then
+			id=$(pubkey_id "$p") || id="?"
+			comment=$(printf '%s\n' "$out" | sed -n 's/^Trusted comment: //p')
+			echo "publish-agent.sh: signature OK for $bin (key $id)"
+			[ -n "$comment" ] && echo "publish-agent.sh:   trusted comment: $comment"
+			return 0
+		fi
+	done
+	echo "publish-agent.sh: no trusted key verified the signature for $bin" >&2
+	return 1
+}
+
+# Parse a .sha256 file with exactly the same rules as the agent's
+# parseSHA256File (agent/internal/upgrade/install.go), so a file this
+# script accepts is guaranteed to be one the agent will later accept too:
+# at most one trailing newline is stripped, then the remainder must
+# contain no other newline and no carriage return at all (this rejects
+# CRLF, a second line, or any stray byte after it); the result must split
+# on exactly two literal spaces into a 64-char lowercase hex hash and a
+# name field equal to $2 exactly. Prints the hash on stdout, or refuses.
+parse_sha256_file() {
+	shafile=$1
+	wantname=$2
+	nl=$(printf '\nX'); nl=${nl%X}
+	cr=$(printf '\rX'); cr=${cr%X}
+	content=$(cat "$shafile"; printf X) || return 1
+	content=${content%X}
+	content=${content%"$nl"}
+	case $content in
+	*"$nl"*|*"$cr"*)
+		echo "publish-agent.sh: $shafile must be a single line" >&2
+		return 1
+		;;
+	esac
+	case $content in
+	*"  "*) ;;
+	*)
+		echo "publish-agent.sh: $shafile must name $wantname" >&2
+		return 1
+		;;
+	esac
+	hash=${content%%"  "*}
+	name=${content#*"  "}
+	if [ "$name" != "$wantname" ]; then
+		echo "publish-agent.sh: $shafile must name $wantname" >&2
+		return 1
+	fi
+	if [ "${#hash}" -ne 64 ]; then
+		echo "publish-agent.sh: $shafile is not a SHA-256" >&2
+		return 1
+	fi
+	case $hash in
+	*[!0-9a-f]*)
+		echo "publish-agent.sh: $shafile is not hex" >&2
+		return 1
+		;;
+	esac
+	printf '%s' "$hash"
+}
+
 # Verify one (binary, sha256, minisig) triplet. The .sha256 file is parsed,
 # never trusted as a checksum root: only its hash field is compared
 # against a locally recomputed digest. Order matters: nothing runs before
@@ -132,14 +315,7 @@ verify_triplet() {
 			return 1
 		fi
 	done
-	want=$(awk '{print $1}' "$sha")
-	case $want in
-	*[!0-9a-f]*|"") echo "publish-agent.sh: $sha is not hex" >&2; return 1 ;;
-	esac
-	if [ "${#want}" -ne 64 ]; then
-		echo "publish-agent.sh: $sha is not a SHA-256" >&2
-		return 1
-	fi
+	want=$(parse_sha256_file "$sha" "cadence-agent-linux-$arch") || return 1
 	got=$(sha256sum "$bin" | awk '{print $1}')
 	if [ "$want" != "$got" ]; then
 		echo "publish-agent.sh: checksum mismatch for $bin" >&2
@@ -147,12 +323,7 @@ verify_triplet() {
 		echo "  actual   $got" >&2
 		return 1
 	fi
-	# minisign -V checks the message signature AND the trusted comment's
-	# global signature. No fallback if minisign is missing.
-	if ! minisign -V -p "$pubkey" -m "$bin" -x "$sig" >/dev/null 2>&1; then
-		echo "publish-agent.sh: bad signature for $bin" >&2
-		return 1
-	fi
+	verify_signature "$bin" "$sig" || return 1
 	case $arch in
 	amd64) want_machine=62 ;;
 	arm64) want_machine=183 ;;
@@ -176,20 +347,16 @@ verify_triplet() {
 	return 0
 }
 
-cmd_publish() {
+# Shared verify+stage path for both `publish` (operator-supplied indir) and
+# `fetch` (a freshly downloaded indir): validate the bundle is exactly the
+# closed 7-file set for $ver, verify every triplet against the trust set,
+# then atomically stage it into dist/agent/v$ver and refresh the
+# unversioned install triplet. fetch builds its indir to look exactly like
+# a publish bundle and hands it here unchanged: this is the one place
+# either path can reach dist/, so there is nothing to duplicate or drift.
+stage_version() {
 	ver=$1
 	indir=$2
-	# Publish host precondition (the server target is amd64,
-	# docs/decisions.md): the amd64 -version smoke below executes a
-	# binary. Refuse clearly instead of failing with Exec format error.
-	if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
-		echo "publish-agent.sh: publishing runs on linux/amd64 only" >&2
-		exit 1
-	fi
-	check_version "$ver" || {
-		echo "publish-agent.sh: version '$ver' is not strict N.N.N" >&2
-		exit 1
-	}
 	if [ ! -d "$indir" ]; then
 		echo "publish-agent.sh: $indir is not a directory" >&2
 		exit 1
@@ -212,18 +379,6 @@ cmd_publish() {
 			exit 1
 		fi
 	done
-	if [ ! -f "$pubkey" ]; then
-		echo "publish-agent.sh: no public key at $pubkey -- refusing unsigned publish" >&2
-		exit 1
-	fi
-	if ! command -v minisign >/dev/null 2>&1; then
-		echo "publish-agent.sh: minisign is not installed -- cannot verify, refusing" >&2
-		exit 1
-	fi
-	if [ -e "$dist/agent/v$ver" ]; then
-		echo "publish-agent.sh: dist/agent/v$ver already published (immutable, never overwrite)" >&2
-		exit 1
-	fi
 
 	for arch in $ARCHS; do
 		verify_triplet "$arch" "$indir" "$ver" || exit 1
@@ -236,16 +391,15 @@ cmd_publish() {
 	# dist/agent/, so even a killed run exposes nothing.
 	mkdir -p "$dist/agent"
 	tmp="$dist/.staging-v$ver-$$"
-	rm -rf "$tmp"
+	rm -rf -- "$tmp"
 	mkdir -p "$tmp"
-	trap 'rm -rf "$tmp"' EXIT INT TERM
+	cleanup_stage_tmp=$tmp
 	for arch in $ARCHS; do
 		cp "$indir/cadence-agent-linux-$arch" \
 			"$indir/cadence-agent-linux-$arch.sha256" \
 			"$indir/cadence-agent-linux-$arch.minisig" "$tmp/"
 	done
 	mv "$tmp" "$dist/agent/v$ver"
-	trap - EXIT INT TERM
 
 	# Refresh the unversioned install triplet from the just-published
 	# amd64 files (the legacy installer fetches fixed names; bootstrap
@@ -269,6 +423,157 @@ cmd_publish() {
 	echo "  unversioned install triplet refreshed from $ver/amd64"
 }
 
+# Publish host precondition (the server target is amd64, docs/decisions.md):
+# the amd64 -version smoke in verify_triplet executes a binary. Refuse
+# clearly instead of failing with Exec format error. Shared by publish and
+# fetch.
+check_publish_host() {
+	if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+		echo "publish-agent.sh: publishing runs on linux/amd64 only" >&2
+		exit 1
+	fi
+}
+
+cmd_publish() {
+	ver=$1
+	indir=$2
+	check_trust_keys
+	check_publish_host
+	check_version "$ver" || {
+		echo "publish-agent.sh: version '$ver' is not strict N.N.N" >&2
+		exit 1
+	}
+	if [ -e "$dist/agent/v$ver" ]; then
+		echo "publish-agent.sh: dist/agent/v$ver already published (immutable, never overwrite)" >&2
+		exit 1
+	fi
+	stage_version "$ver" "$indir"
+}
+
+# Strict owner/repo grammar for CADENCE_FETCH_REPO overrides: letters,
+# digits, dot, underscore, hyphen in each segment, exactly one slash, no
+# empty segment. Defense in depth against a stray character reaching a
+# constructed URL; GitHub's own naming rules are a superset of this.
+check_fetch_repo() {
+	case $1 in
+	*[!A-Za-z0-9._/-]*|"") return 1 ;;
+	esac
+	case $1 in
+	*/*/*|/*|*/) return 1 ;;
+	*/*) ;;
+	*) return 1 ;;
+	esac
+	return 0
+}
+
+# Strict grammar for CADENCE_FETCH_BASE_URL: exactly https://<host> or
+# https://<host>:<port>, nothing else. No userinfo (no "@"), no path, no
+# trailing slash, no query, no fragment -- the release path itself is
+# built separately from $repo_slug/releases/download/..., so this
+# variable names only the host. Host restricted to [A-Za-z0-9.-]; port,
+# if present, a plain decimal 1-65535.
+check_fetch_base_url() {
+	case $1 in
+	https://*) ;;
+	*) return 1 ;;
+	esac
+	rest=${1#https://}
+	case $rest in
+	*[@/?'#']*) return 1 ;;
+	esac
+	case $rest in
+	*:*)
+		host=${rest%%:*}
+		port=${rest#*:}
+		case $port in
+		*:*) return 1 ;;
+		*[!0-9]*|"") return 1 ;;
+		esac
+		if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+			return 1
+		fi
+		;;
+	*)
+		host=$rest
+		;;
+	esac
+	case $host in
+	*[!A-Za-z0-9.-]*|"") return 1 ;;
+	esac
+	return 0
+}
+
+# Download one URL into a destination path: -q first so curl never reads
+# ~/.curlrc (a local config file must not be able to silently change how
+# this verification-critical download behaves), HTTPS only even across a
+# redirect (GitHub release asset downloads redirect to a different host),
+# TLS 1.2 minimum, bounded size and time, hard failure on any HTTP error
+# status. This is anti-corruption and a DoS bound on an untrusted
+# transport, never a substitute for the minisign verification that follows
+# in stage_version: curl succeeding proves nothing about the bytes.
+fetch_file() {
+	url=$1
+	out=$2
+	max=$3
+	if ! curl -q -fsS -L --proto '=https' --proto-redir '=https' --tlsv1.2 \
+		--max-filesize "$max" --connect-timeout 10 --max-time 120 \
+		-o "$out" "$url"; then
+		echo "publish-agent.sh: download failed: $url" >&2
+		return 1
+	fi
+}
+
+cmd_fetch() {
+	ver=$1
+	check_trust_keys
+	check_publish_host
+	check_version "$ver" || {
+		echo "publish-agent.sh: version '$ver' is not strict N.N.N" >&2
+		exit 1
+	}
+	if [ -e "$dist/agent/v$ver" ]; then
+		echo "publish-agent.sh: dist/agent/v$ver already published (immutable, never overwrite)" >&2
+		exit 1
+	fi
+	repo_slug=${CADENCE_FETCH_REPO:-Johlansl/cadence}
+	check_fetch_repo "$repo_slug" || {
+		echo "publish-agent.sh: CADENCE_FETCH_REPO '$repo_slug' is not a valid owner/repo" >&2
+		exit 1
+	}
+	base=${CADENCE_FETCH_BASE_URL:-https://github.com}
+	check_fetch_base_url "$base" || {
+		echo "publish-agent.sh: CADENCE_FETCH_BASE_URL '$base' must be exactly https://<host> or https://<host>:<port> (no userinfo, path, query or fragment)" >&2
+		exit 1
+	}
+	tag="agent-v$ver"
+
+	tmp=$(mktemp -d "${TMPDIR:-/tmp}/publish-agent-fetch.XXXXXX")
+	cleanup_fetch_tmp=$tmp
+
+	for arch in $ARCHS; do
+		name="cadence-agent-linux-$arch"
+		fetch_file "$base/$repo_slug/releases/download/$tag/$name" \
+			"$tmp/$name" 67108864 || exit 1
+		# HTTP carries no POSIX permission bits: a local bundle handed to
+		# `publish` already has its executable bit (it came from a real
+		# build), but a freshly downloaded file never does. The later
+		# -version probe (verify_triplet, after the signature verifies)
+		# needs to exec this file.
+		chmod +x "$tmp/$name"
+		fetch_file "$base/$repo_slug/releases/download/$tag/$name.sha256" \
+			"$tmp/$name.sha256" 4096 || exit 1
+		fetch_file "$base/$repo_slug/releases/download/$tag/$name.minisig" \
+			"$tmp/$name.minisig" 4096 || exit 1
+	done
+	# The 7th closed-set member: a plain local marker, never a release
+	# asset. stage_version only uses it to bind this directory to the
+	# $ver it was asked to stage; fetch already knows that from its own
+	# argument, so it writes the file itself instead of fetching one.
+	printf '%s\n' "$ver" >"$tmp/version"
+
+	stage_version "$ver" "$tmp"
+}
+
 cmd_assets() {
 	# Bootstrap assets only: no binaries, no versions, no signatures.
 	# Safe to run on every deploy.
@@ -288,6 +593,10 @@ cmd_assets() {
 }
 
 case "${1:-}" in
+fetch)
+	[ $# -eq 2 ] || usage
+	cmd_fetch "$2"
+	;;
 publish)
 	[ $# -eq 3 ] || usage
 	cmd_publish "$2" "$3"

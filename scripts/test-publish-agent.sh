@@ -12,12 +12,18 @@
 #   binaries. GitHub CI + local runs (GitLab `scripts` has no docker).
 #
 # Only ephemeral test keys, generated in temp dirs. No repo file is
-# modified (overrides: CADENCE_PUBLISH_DIST, CADENCE_PUBLISH_PUBKEY).
+# modified (overrides: CADENCE_PUBLISH_DIST, CADENCE_PUBLISH_PUBKEY,
+# CADENCE_PUBLISH_PUBKEY_BACKUP, CADENCE_FETCH_REPO, CADENCE_FETCH_BASE_URL).
 #
 #   sh scripts/test-publish-agent.sh
 #   DOCKER_TESTS=1 sh scripts/test-publish-agent.sh
 #
 # Requires: minisign installed (apk add / apt-get install minisign).
+# The fetch tests additionally need python3 and openssl to run a throwaway
+# local HTTPS server (no real network to GitHub): a real curl client
+# against a real TLS listener, trusted for the test the same way curl
+# lets any caller trust a non-default CA, via CURL_CA_BUNDLE -- never a
+# test-only flag added to publish-agent.sh itself.
 
 set -eu
 
@@ -199,10 +205,14 @@ DIST="$T/dist"
 mkdir -p "$DIST/agent"
 PUB="$T/keys/test.pub"
 KEY="$T/keys/test.key"
+PUB_BACKUP="$T/keys/backup.pub"
+KEY_BACKUP="$T/keys/backup.key"
 mkdir -p "$T/keys"
 minisign -G -W -p "$PUB" -s "$KEY" >/dev/null 2>&1
+minisign -G -W -p "$PUB_BACKUP" -s "$KEY_BACKUP" >/dev/null 2>&1
 export CADENCE_PUBLISH_DIST="$DIST"
 export CADENCE_PUBLISH_PUBKEY="$PUB"
+export CADENCE_PUBLISH_PUBKEY_BACKUP="$PUB_BACKUP"
 
 # Emit one byte ($1, decimal) on stdout. POSIX sh + printf only.
 byte() { printf '%b' "$(printf '\\0%o' "$1")"; }
@@ -447,6 +457,458 @@ if [ ! -e "$DIST/agent/v9.9.13" ]; then
 	ok "no public dir for swapped architectures"
 else
 	fail "public dir for swapped architectures"
+fi
+
+# --- part 1b: 2-key trust set -------------------------------------------
+
+# 14. the backup key alone verifies (signed with KEY_BACKUP, not KEY):
+# proves the loop genuinely tries the second key, not just the first.
+mksigned 9.9.14 "$T/b14"
+rm "$T/b14"/*.minisig
+minisign -S -s "$KEY_BACKUP" -m "$T/b14/cadence-agent-linux-amd64" \
+	-t "test 9.9.14" >/dev/null 2>&1
+minisign -S -s "$KEY_BACKUP" -m "$T/b14/cadence-agent-linux-arm64" \
+	-t "test 9.9.14" >/dev/null 2>&1
+out=$(sh scripts/publish-agent.sh publish 9.9.14 "$T/b14" 2>&1) && res=0 || res=$?
+if [ "$res" -eq 0 ] && [ -e "$DIST/agent/v9.9.14" ]; then
+	ok "backup key alone verifies and publishes"
+else
+	fail "backup key alone did not verify (exit=$res): $out"
+fi
+backup_id=$(sed -n '1p' "$PUB_BACKUP" | sed 's/^.*key //')
+if printf '%s' "$out" | grep -qF "key $backup_id"; then
+	ok "publish logs the backup key ID that verified"
+else
+	fail "publish did not log the verifying key ID"
+fi
+if printf '%s' "$out" | grep -q "trusted comment: test 9.9.14"; then
+	ok "publish logs the trusted comment"
+else
+	fail "publish did not log the trusted comment"
+fi
+
+# 15. active key alone verifies and is tried first (logged key ID matches
+# the active key, not the backup, for a bundle only the active key signed
+# -- already exercised by every earlier test; assert the log explicitly
+# once here).
+mksigned 9.9.15 "$T/b15"
+active_id=$(sed -n '1p' "$PUB" | sed 's/^.*key //')
+out=$(sh scripts/publish-agent.sh publish 9.9.15 "$T/b15" 2>&1) && res=0 || res=$?
+if [ "$res" -eq 0 ] && printf '%s' "$out" | grep -qF "key $active_id"; then
+	ok "active key alone verifies and is logged"
+else
+	fail "active key path did not log as expected (exit=$res): $out"
+fi
+
+# 16. neither key verifies (foreign signature): both are tried, both fail,
+# publish refuses. Reuses the same bundle shape as the existing foreign-
+# signature case (test 10) but asserted here as the 2-key end state.
+minisign -G -W -p "$T/keys/other2.pub" -s "$T/keys/other2.key" >/dev/null 2>&1
+mksigned 9.9.16 "$T/b16"
+minisign -S -s "$T/keys/other2.key" -m "$T/b16/cadence-agent-linux-amd64" \
+	-t "forged" >/dev/null 2>&1
+expect_fail "neither key verifies" sh scripts/publish-agent.sh publish 9.9.16 "$T/b16"
+if [ ! -e "$DIST/agent/v9.9.16" ]; then
+	ok "no public dir when neither trusted key verifies"
+else
+	fail "public dir when neither trusted key verifies"
+fi
+
+# 17. active and backup public keys share a key ID: refuse to start, no
+# bundle inspection at all. Scoped to this one invocation only.
+mksigned 9.9.17 "$T/b17"
+CADENCE_PUBLISH_PUBKEY_BACKUP="$PUB" \
+	expect_fail "duplicate trust keys" sh scripts/publish-agent.sh publish 9.9.17 "$T/b17"
+if [ ! -e "$DIST/agent/v9.9.17" ]; then
+	ok "no public dir when active and backup keys are identical"
+else
+	fail "public dir when active and backup keys are identical"
+fi
+
+# 18. backup public key absent: refuse to start
+mksigned 9.9.18 "$T/b18"
+CADENCE_PUBLISH_PUBKEY_BACKUP="$T/keys/absent-backup.pub" \
+	expect_fail "backup pubkey absent" sh scripts/publish-agent.sh publish 9.9.18 "$T/b18"
+if [ ! -e "$DIST/agent/v9.9.18" ]; then
+	ok "no public dir when the backup public key is absent"
+else
+	fail "public dir when the backup public key is absent"
+fi
+
+# 19. backup public key malformed: refuse to start
+mksigned 9.9.19 "$T/b19"
+printf 'not a minisign key\nat all\n' >"$T/keys/garbage-backup.pub"
+CADENCE_PUBLISH_PUBKEY_BACKUP="$T/keys/garbage-backup.pub" \
+	expect_fail "backup pubkey malformed" sh scripts/publish-agent.sh publish 9.9.19 "$T/b19"
+if [ ! -e "$DIST/agent/v9.9.19" ]; then
+	ok "no public dir when the backup public key is malformed"
+else
+	fail "public dir when the backup public key is malformed"
+fi
+
+# 20. minisign not installed: clear message naming the package, nonzero
+# exit, no fallback to an unsigned publish. Built from a restricted PATH
+# holding only the coreutils this script and the test itself need, minus
+# minisign, rather than guessing which directory the real binary lives in
+# (fragile on a distro where every package shares one bin directory).
+NO_MINISIGN_BIN="$T/no-minisign-bin"
+mkdir -p "$NO_MINISIGN_BIN"
+for tool in dirname pwd find wc tr awk sha256sum od sed cat mkdir rm cp mv \
+	uname grep cut basename printf true false; do
+	p=$(command -v "$tool" 2>/dev/null) || continue
+	ln -sf "$p" "$NO_MINISIGN_BIN/$tool"
+done
+real_sh=$(command -v sh)
+mksigned 9.9.20 "$T/b20"
+out=$(PATH="$NO_MINISIGN_BIN" "$real_sh" scripts/publish-agent.sh publish 9.9.20 "$T/b20" 2>&1) \
+	&& res=0 || res=$?
+if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -qi "minisign"; then
+	ok "missing minisign: clear message and nonzero exit"
+else
+	fail "missing minisign: unclear behavior (exit=$res): $out"
+fi
+if [ ! -e "$DIST/agent/v9.9.20" ]; then
+	ok "no public dir when minisign is missing"
+else
+	fail "public dir when minisign is missing"
+fi
+
+# --- part 1c: fetch, against a throwaway local HTTPS server -------------
+# No real network to GitHub. A real curl client against a real TLS
+# listener is trusted the standard curl way (CURL_CA_BUNDLE naming our
+# throwaway CA), never through a test-only flag added to publish-agent.sh.
+# python3 and openssl are the only extra tools this part needs.
+
+# mkrelease_assets <version> <destdir> <signing-key>: the 6 release assets
+# fetch expects (binary+sha256+minisig per arch), signed with the given
+# key. Same bundle shape as mksigned, minus the local "version" marker:
+# fetch writes that itself, a real GitHub Release has no such file.
+mkrelease_assets() {
+	ver=$1
+	dir=$2
+	signkey=$3
+	mkdir -p "$dir"
+	mkstub "$ver" "$dir/cadence-agent-linux-amd64"
+	cp "$dir/cadence-agent-linux-amd64" "$dir/cadence-agent-linux-arm64"
+	printf '\267\000' | dd of="$dir/cadence-agent-linux-arm64" bs=1 seek=18 \
+		conv=notrunc 2>/dev/null
+	(
+		cd "$dir"
+		sha256sum cadence-agent-linux-amd64 >cadence-agent-linux-amd64.sha256
+		sha256sum cadence-agent-linux-arm64 >cadence-agent-linux-arm64.sha256
+	)
+	minisign -S -s "$signkey" -m "$dir/cadence-agent-linux-amd64" \
+		-t "test $ver" >/dev/null 2>&1
+	minisign -S -s "$signkey" -m "$dir/cadence-agent-linux-arm64" \
+		-t "test $ver" >/dev/null 2>&1
+}
+
+if ! command -v python3 >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
+	echo "publish-test: skip fetch tests (need python3 and openssl)"
+else
+	RELPORT=18443
+	REPO_SLUG="test/repo"
+	RELROOT="$T/relroot"
+	ASSETDIR="$RELROOT/$REPO_SLUG/releases/download"
+	mkdir -p "$ASSETDIR" "$T/tls"
+
+	openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+		-keyout "$T/tls/key.pem" -out "$T/tls/cert.pem" \
+		-subj '/CN=127.0.0.1' >/dev/null 2>&1
+
+	# Nominal release (9.9.21), one with a missing asset (9.9.22, no
+	# .minisig), one signed by a foreign key (9.9.23). Laid out as a real
+	# GitHub Release would serve them: releases/download/agent-v<ver>/<name>.
+	mkrelease_assets 9.9.21 "$ASSETDIR/agent-v9.9.21" "$KEY"
+	mkrelease_assets 9.9.22 "$ASSETDIR/agent-v9.9.22" "$KEY"
+	rm "$ASSETDIR/agent-v9.9.22/cadence-agent-linux-amd64.minisig"
+	minisign -G -W -p "$T/keys/other3.pub" -s "$T/keys/other3.key" >/dev/null 2>&1
+	mkrelease_assets 9.9.23 "$ASSETDIR/agent-v9.9.23" "$T/keys/other3.key"
+
+	python3 -c '
+import http.server, ssl, sys
+root, port, cert, key = sys.argv[1:5]
+def handler(*a, **kw):
+	return http.server.SimpleHTTPRequestHandler(*a, directory=root, **kw)
+httpd = http.server.HTTPServer(("127.0.0.1", int(port)), handler)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(cert, key)
+httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+httpd.serve_forever()
+' "$RELROOT" "$RELPORT" "$T/tls/cert.pem" "$T/tls/key.pem" >/dev/null 2>&1 &
+	RELPID=$!
+	trap 'kill "$RELPID" 2>/dev/null; rm -rf "$T" "$S"' EXIT INT TERM
+
+	export CADENCE_FETCH_REPO="$REPO_SLUG"
+	export CADENCE_FETCH_BASE_URL="https://127.0.0.1:$RELPORT"
+	export CURL_CA_BUNDLE="$T/tls/cert.pem"
+	# Confines fetch's own download temp dir (mktemp -d
+	# "${TMPDIR:-/tmp}/publish-agent-fetch.XXXXXX") under $T, so the
+	# "no download temp dir left behind" checks below actually look
+	# where one would land instead of vacuously passing by checking the
+	# wrong directory.
+	export TMPDIR="$T"
+
+	up=0
+	i=0
+	while [ "$i" -lt 20 ]; do
+		if curl -fsS "https://127.0.0.1:$RELPORT/" >/dev/null 2>&1; then
+			up=1
+			break
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+	if [ "$up" -ne 1 ]; then
+		fail "local HTTPS test server did not start"
+	fi
+
+	# 21. malformed version: refused before any request. An unreachable
+	# base URL proves it: if fetch had tried to connect, it would fail
+	# with a connection error instead of this specific grammar message.
+	out=$(CADENCE_FETCH_BASE_URL="https://127.0.0.1:1" \
+		sh scripts/publish-agent.sh fetch 1.2 2>&1) && res=0 || res=$?
+	if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "not strict N.N.N"; then
+		ok "fetch: malformed version refused before any request"
+	else
+		fail "fetch: malformed version did not refuse as expected (exit=$res): $out"
+	fi
+
+	# 22. already-published version: refused before any download, same
+	# unreachable-URL proof. 9.9.1 is already published by test 1 above.
+	out=$(CADENCE_FETCH_BASE_URL="https://127.0.0.1:1" \
+		sh scripts/publish-agent.sh fetch 9.9.1 2>&1) && res=0 || res=$?
+	if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "already published"; then
+		ok "fetch: already-published version refused before any download"
+	else
+		fail "fetch: already-published version did not refuse as expected (exit=$res): $out"
+	fi
+
+	# 23. missing asset in the release: clean failure, nothing staged.
+	expect_fail "fetch: missing release asset" sh scripts/publish-agent.sh fetch 9.9.22
+	if [ ! -e "$DIST/agent/v9.9.22" ]; then
+		ok "fetch: no public dir when a release asset is missing"
+	else
+		fail "fetch: public dir when a release asset is missing"
+	fi
+	if ls "$T"/publish-agent-fetch.* >/dev/null 2>&1; then
+		fail "fetch: download temp dir left behind after missing-asset failure"
+	else
+		ok "fetch: no download temp dir left behind after missing-asset failure"
+	fi
+
+	# 24. invalid signature (foreign key): clean failure, nothing staged.
+	expect_fail "fetch: invalid signature" sh scripts/publish-agent.sh fetch 9.9.23
+	if [ ! -e "$DIST/agent/v9.9.23" ]; then
+		ok "fetch: no public dir for a foreign-signed release"
+	else
+		fail "fetch: public dir for a foreign-signed release"
+	fi
+
+	# 25. nominal case: correct staging, identical to a local publish of
+	# the same bytes.
+	if sh scripts/publish-agent.sh fetch 9.9.21 >/dev/null 2>&1; then
+		n=$(find "$DIST/agent/v9.9.21" -type f | wc -l)
+		if [ "$n" = "6" ]; then
+			ok "fetch: nominal case stages 6 files"
+		else
+			fail "fetch: nominal case staged $n files, want 6"
+		fi
+		if cmp -s "$ASSETDIR/agent-v9.9.21/cadence-agent-linux-amd64" \
+			"$DIST/agent/v9.9.21/cadence-agent-linux-amd64"; then
+			ok "fetch: staged bytes are byte-identical to the release asset"
+		else
+			fail "fetch: staged bytes differ from the release asset"
+		fi
+		if cmp -s "$DIST/agent/v9.9.21/cadence-agent-linux-amd64" "$DIST/agent/cadence-agent"; then
+			ok "fetch: unversioned triplet refreshed from amd64"
+		else
+			fail "fetch: unversioned triplet not refreshed"
+		fi
+	else
+		fail "fetch: nominal case failed"
+	fi
+	if ls "$T"/publish-agent-fetch.* >/dev/null 2>&1; then
+		fail "fetch: download temp dir left behind after success"
+	else
+		ok "fetch: no download temp dir left behind after success"
+	fi
+
+	# --- regression: a dist path containing a space -----------------
+	# cleanup() used to pass a space-joined list of paths unquoted to
+	# `rm -rf`, which word-splits on any space in $dist or $TMPDIR. A
+	# witness directory sharing the exact prefix before the space (what
+	# the old bug would have deleted instead of the real staging temp
+	# dir) must survive both a local publish and a fetch into such a
+	# path.
+	SPACE_DIST="$T/mes projets/dist"
+	mkdir -p "$SPACE_DIST/agent"
+	WITNESS="$T/mes"
+	mkdir -p "$WITNESS"
+	printf 'witness\n' >"$WITNESS/marker"
+
+	mksigned 9.9.26 "$T/b26"
+	if CADENCE_PUBLISH_DIST="$SPACE_DIST" \
+		sh scripts/publish-agent.sh publish 9.9.26 "$T/b26" >/dev/null 2>&1; then
+		ok "publish into a dist path containing a space succeeds"
+	else
+		fail "publish into a dist path containing a space failed"
+	fi
+	if [ -e "$SPACE_DIST/agent/v9.9.26/cadence-agent-linux-amd64" ]; then
+		ok "publish: staged correctly under the space-containing path"
+	else
+		fail "publish: nothing staged under the space-containing path"
+	fi
+	if ls "$SPACE_DIST"/agent/.staging-* >/dev/null 2>&1; then
+		fail "publish: staging temp dir left behind under the space-containing path"
+	else
+		ok "publish: no staging temp dir left behind under the space-containing path"
+	fi
+	if [ -f "$WITNESS/marker" ]; then
+		ok "publish: witness directory (space prefix) untouched"
+	else
+		fail "publish: witness directory was removed (cleanup word-split bug)"
+	fi
+
+	mkrelease_assets 9.9.27 "$ASSETDIR/agent-v9.9.27" "$KEY"
+	if CADENCE_PUBLISH_DIST="$SPACE_DIST" \
+		sh scripts/publish-agent.sh fetch 9.9.27 >/dev/null 2>&1; then
+		ok "fetch into a dist path containing a space succeeds"
+	else
+		fail "fetch into a dist path containing a space failed"
+	fi
+	if [ -e "$SPACE_DIST/agent/v9.9.27/cadence-agent-linux-amd64" ]; then
+		ok "fetch: staged correctly under the space-containing path"
+	else
+		fail "fetch: nothing staged under the space-containing path"
+	fi
+	if ls "$SPACE_DIST"/agent/.staging-* >/dev/null 2>&1; then
+		fail "fetch: staging temp dir left behind under the space-containing path"
+	else
+		ok "fetch: no staging temp dir left behind under the space-containing path"
+	fi
+	if ls "$T"/publish-agent-fetch.* >/dev/null 2>&1; then
+		fail "fetch: download temp dir left behind (space-path case)"
+	else
+		ok "fetch: no download temp dir left behind (space-path case)"
+	fi
+	if [ -f "$WITNESS/marker" ]; then
+		ok "fetch: witness directory (space prefix) untouched"
+	else
+		fail "fetch: witness directory was removed (cleanup word-split bug)"
+	fi
+
+	kill "$RELPID" 2>/dev/null
+	unset CADENCE_FETCH_REPO CADENCE_FETCH_BASE_URL CURL_CA_BUNDLE TMPDIR
+fi
+
+# --- part 1d: CADENCE_FETCH_BASE_URL grammar -----------------------------
+# Extracted verbatim from the real script (never retyped), so these cases
+# can never silently drift from the implementation under test.
+eval "$(sed -n '/^check_fetch_base_url() {/,/^}/p' scripts/publish-agent.sh)"
+
+check_base_url_case() {
+	desc=$1
+	url=$2
+	want=$3
+	if check_fetch_base_url "$url"; then got=accept; else got=reject; fi
+	if [ "$got" = "$want" ]; then
+		ok "base URL $desc -> $want"
+	else
+		fail "base URL $desc: got $got, want $want"
+	fi
+}
+check_base_url_case "default (https://github.com)" "https://github.com" accept
+check_base_url_case "host:port" "https://github.com:8443" accept
+check_base_url_case "userinfo (user@host)" "https://user@github.com" reject
+check_base_url_case "path" "https://github.com/some/path" reject
+check_base_url_case "trailing slash" "https://github.com/" reject
+check_base_url_case "query" "https://github.com?x=1" reject
+check_base_url_case "fragment" "https://github.com#frag" reject
+check_base_url_case "http scheme" "http://github.com" reject
+check_base_url_case "no scheme" "github.com" reject
+check_base_url_case "empty host" "https://" reject
+check_base_url_case "empty port" "https://github.com:" reject
+check_base_url_case "non-numeric port" "https://github.com:abc" reject
+check_base_url_case "port zero" "https://github.com:0" reject
+check_base_url_case "port too big" "https://github.com:70000" reject
+check_base_url_case "bad host characters" "https://git_hub.com" reject
+
+# Black-box proof that cmd_fetch actually wires this validator in (not
+# just that the function is correct in isolation): a rejected base URL
+# refuses before using it for anything, an accepted one is used as-is
+# (connection then fails elsewhere, which is a different, later error).
+out=$(CADENCE_FETCH_BASE_URL="https://user@127.0.0.1:1" \
+	sh scripts/publish-agent.sh fetch 9.9.25 2>&1) && res=0 || res=$?
+if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "must be exactly https"; then
+	ok "fetch: userinfo base URL refused with the grammar message"
+else
+	fail "fetch: userinfo base URL not refused as expected (exit=$res): $out"
+fi
+
+# --- part 1e: .sha256 parser, aligned with the agent's parseSHA256File --
+eval "$(sed -n '/^parse_sha256_file() {/,/^}/p' scripts/publish-agent.sh)"
+
+HASH64=$(printf '%064d' 0 | tr '0' 'a')
+SHAT=$(mktemp -d)
+
+check_sha_case() {
+	desc=$1
+	content=$2
+	wantname=$3
+	want=$4
+	printf '%s' "$content" >"$SHAT/case.sha256"
+	if parse_sha256_file "$SHAT/case.sha256" "$wantname" >/dev/null 2>&1; then
+		got=accept
+	else
+		got=reject
+	fi
+	if [ "$got" = "$want" ]; then
+		ok ".sha256 parser: $desc -> $want"
+	else
+		fail ".sha256 parser: $desc: got $got, want $want"
+	fi
+}
+check_sha_case "release.yml format (two spaces, one trailing newline)" \
+	"$HASH64  cadence-agent-linux-amd64
+" "cadence-agent-linux-amd64" accept
+check_sha_case "no trailing newline at all (agent also accepts this)" \
+	"$HASH64  cadence-agent-linux-amd64" "cadence-agent-linux-amd64" accept
+check_sha_case "path in name" \
+	"$HASH64  /abs/path/cadence-agent-linux-amd64
+" "cadence-agent-linux-amd64" reject
+check_sha_case "single space separator" \
+	"$HASH64 cadence-agent-linux-amd64
+" "cadence-agent-linux-amd64" reject
+# CRLF needs a real \r byte, not expressible as a plain shell literal, so
+# it is built explicitly with printf instead of through check_sha_case.
+printf '%s  cadence-agent-linux-amd64\r\n' "$HASH64" >"$SHAT/crlf.sha256"
+if parse_sha256_file "$SHAT/crlf.sha256" "cadence-agent-linux-amd64" >/dev/null 2>&1; then
+	fail ".sha256 parser: CRLF line ending -> accept, want reject"
+else
+	ok ".sha256 parser: CRLF line ending -> reject"
+fi
+check_sha_case "two lines" \
+	"$HASH64  cadence-agent-linux-amd64
+extra
+" "cadence-agent-linux-amd64" reject
+check_sha_case "wrong arch name" \
+	"$HASH64  cadence-agent-linux-arm64
+" "cadence-agent-linux-amd64" reject
+rm -rf "$SHAT"
+
+# Black-box proof the real publish path uses this stricter parser: a
+# single-space .sha256 (accepted by the old lenient awk-based parser) must
+# now refuse the whole triplet.
+mksigned 9.9.24 "$T/b24"
+realhash=$(awk '{print $1}' "$T/b24/cadence-agent-linux-amd64.sha256")
+printf '%s cadence-agent-linux-amd64\n' "$realhash" >"$T/b24/cadence-agent-linux-amd64.sha256"
+expect_fail "single-space .sha256 (strict parser)" \
+	sh scripts/publish-agent.sh publish 9.9.24 "$T/b24"
+if [ ! -e "$DIST/agent/v9.9.24" ]; then
+	ok "no public dir for a single-space .sha256"
+else
+	fail "public dir for a single-space .sha256"
 fi
 
 # --- part 2: key-holder build + server publish (docker) -----------------
