@@ -637,7 +637,12 @@ httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
 httpd.serve_forever()
 ' "$RELROOT" "$RELPORT" "$T/tls/cert.pem" "$T/tls/key.pem" >/dev/null 2>&1 &
 	RELPID=$!
-	trap 'kill "$RELPID" 2>/dev/null; rm -rf "$T" "$S"' EXIT INT TERM
+	# `|| true`: under `set -e`, a trap that kills an already-dead process
+	# (the explicit kill below, or the server having exited on its own)
+	# would otherwise fail and that failure would become this whole
+	# script's exit status, silently turning "109 passed, 0 failed" into
+	# a failed job.
+	trap 'kill "$RELPID" 2>/dev/null || true; rm -rf "$T" "$S"' EXIT INT TERM
 
 	export CADENCE_FETCH_REPO="$REPO_SLUG"
 	export CADENCE_FETCH_BASE_URL="https://127.0.0.1:$RELPORT"
@@ -798,7 +803,9 @@ httpd.serve_forever()
 		fail "fetch: witness directory was removed (cleanup word-split bug)"
 	fi
 
-	kill "$RELPID" 2>/dev/null
+	# The EXIT/INT/TERM trap above kills $RELPID; no need to do it here
+	# too (a redundant kill of an already-dead process would fail under
+	# `set -e`, exactly the bug the trap's own `|| true` now guards).
 	unset CADENCE_FETCH_REPO CADENCE_FETCH_BASE_URL CURL_CA_BUNDLE TMPDIR
 fi
 
