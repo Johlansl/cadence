@@ -130,6 +130,7 @@ jobs:
       - run: DOCKER_TESTS=1 sh scripts/test-publish-agent.sh
       - run: sh scripts/test-agent-readiness.sh
       - run: sh scripts/test-ci-sign-agent.sh
+      - run: sh scripts/test-agent-install.sh
       - name: agent .deb carries the canonical binary path
         # Platform-specific proof: GitHub runners have docker and free
         # minutes, while the GitLab `scripts` job (metered minutes, no
