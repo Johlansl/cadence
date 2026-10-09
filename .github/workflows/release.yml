@@ -1,11 +1,26 @@
 name: Release
 
 # Tag-triggered. Two independent halves, one per tag namespace:
-#   agent-v*  -> build the agent for amd64+arm64, attach to a GitHub Release
+#   agent-v*  -> build, sign (minisign, in CI), publish a DRAFT GitHub Release
 #   v*        -> build+push the backend/frontend images to GHCR, cut a Release
-# Every artifact gets a Sigstore build-provenance attestation (no long-lived
-# signing key touches CI -- the minisign fleet key stays on the central server;
-# see docs/decisions.md "Release automation").
+# Every agent artifact also gets a Sigstore build-provenance attestation.
+#
+# Agent half, three jobs:
+#   build    builds the binaries and .deb packages, attests them, reports the
+#            SHA-256 of both binaries as job outputs, uploads the assets.
+#   sign     the ONLY job that touches the minisign secret key. It runs in the
+#            GitHub environment `release` (required reviewer, restricted to
+#            agent-v* tags), re-checks the binaries against build's hashes,
+#            signs them and verifies every signature against the committed
+#            agent/minisign.pub (logic in scripts/ci-sign-agent.sh).
+#   publish  creates the Release as a DRAFT. It is never published
+#            automatically: the .minisig files are checked by hand first, then
+#            `gh release edit <tag> --draft=false`.
+# The v* jobs below never reference the `release` environment, and this file
+# has no pull_request or workflow_dispatch trigger. A future dispatch trigger
+# used to test signing must stay behind the same environment.
+# The offline backup key (agent/minisign-backup.pub) never reaches CI.
+# See docs/decisions.md "Release automation".
 
 on:
   push:
@@ -20,15 +35,20 @@ concurrency:
 permissions: {}
 
 jobs:
-  agent-release:
+  build:
     if: startsWith(github.ref_name, 'agent-v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the Release
+      contents: read
       id-token: write # OIDC for the attestation
       attestations: write # write the attestation
+    outputs:
+      amd64_sha256: ${{ steps.stage.outputs.amd64_sha256 }}
+      arm64_sha256: ${{ steps.stage.outputs.arm64_sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.27"
@@ -86,32 +106,186 @@ jobs:
       - name: extract release notes
         run: |
           set -eu
+          mkdir -p release-assets
           awk -v v="## $VER" '
             $0 == v {grab=1; next}
             /^## / && grab {exit}
             grab {print}
-          ' agent/CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
+          ' agent/CHANGELOG.md > release-assets/notes.md
+          if [ ! -s release-assets/notes.md ]; then
             echo "release.yml: no '## $VER' section in agent/CHANGELOG.md" >&2
             exit 1
           fi
 
-      - name: create release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # The two binary hashes below are what `sign` signs. They are taken from
+      # the attested bytes in dist/, before the copy into release-assets/, and
+      # the copy is re-checked against the .sha256 files.
+      - name: report binary hashes and stage release assets
+        id: stage
         run: |
           set -eu
+          for a in amd64 arm64; do
+            ( cd dist && sha256sum -c "cadence-agent-linux-$a.sha256" )
+            h=$(sha256sum "dist/cadence-agent-linux-$a" | cut -d' ' -f1)
+            echo "${a}_sha256=$h" >> "$GITHUB_OUTPUT"
+          done
+          cp dist/cadence-agent-linux-* dist/cadence-agent_* release-assets/
+          cd release-assets
+          for f in *.sha256; do
+            sha256sum -c "$f"
+          done
+          ls -l
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-dist
+          path: release-assets/
+          retention-days: 1
+          if-no-files-found: error
+
+  sign:
+    if: startsWith(github.ref_name, 'agent-v')
+    needs: build
+    runs-on: ubuntu-latest
+    # The only job allowed to use this environment (it holds the secret
+    # MINISIGN_SECRET_KEY, required reviewer, agent-v* tags only).
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      # The checkout is the tag's commit: agent/minisign.pub and
+      # scripts/ci-sign-agent.sh both come from it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agent-dist
+          path: release-assets
+
+      - name: install minisign (pinned)
+        run: |
+          set -eu
+          # minisign 0.12, linux tarball from
+          # https://github.com/jedisct1/minisign/releases/tag/0.12
+          # SHA-256 computed on 2026-10-09 after verifying the tarball's
+          # .minisig with minisign against the project's published release
+          # key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3
+          # (README.md, "Verification of Official Releases", and
+          # https://jedisct1.github.io/minisign/). Bump version and hash
+          # together, by repeating that verification.
+          MINISIGN_VERSION=0.12
+          MINISIGN_SHA256=9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73
+          tgz="$RUNNER_TEMP/minisign.tar.gz"
+          bindir="$RUNNER_TEMP/minisign-bin"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$tgz" \
+            "https://github.com/jedisct1/minisign/releases/download/${MINISIGN_VERSION}/minisign-${MINISIGN_VERSION}-linux.tar.gz"
+          echo "${MINISIGN_SHA256}  ${tgz}" | sha256sum -c -
+          mkdir -p "$bindir"
+          tar -xzf "$tgz" --warning=no-unknown-keyword --strip-components=2 \
+            -C "$bindir" minisign-linux/x86_64/minisign
+          [ "$("$bindir/minisign" -v)" = "minisign ${MINISIGN_VERSION}" ]
+          echo "$bindir" >> "$GITHUB_PATH"
+
+      # umask 077 so the key file is never group/world readable; the content
+      # only goes through printf (a shell builtin, nothing in argv) into the
+      # file, and is never echoed. No `set -x` anywhere in this job.
+      - name: write signing key
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          KEY_FILE: ${{ runner.temp }}/minisign.key
+        run: |
+          set -eu
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "release.yml: secret MINISIGN_SECRET_KEY is empty" >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$KEY_FILE"
+
+      - name: sign and self-verify
+        env:
+          KEY_FILE: ${{ runner.temp }}/minisign.key
+          SHA_AMD64: ${{ needs.build.outputs.amd64_sha256 }}
+          SHA_ARM64: ${{ needs.build.outputs.arm64_sha256 }}
+        run: |
+          set -eu
+          sh scripts/ci-sign-agent.sh "${GITHUB_REF_NAME#agent-v}" \
+            agent/minisign.pub "$KEY_FILE" release-assets \
+            "amd64=$SHA_AMD64" "arm64=$SHA_ARM64"
+
+      - name: remove signing key
+        if: always()
+        env:
+          KEY_FILE: ${{ runner.temp }}/minisign.key
+        run: rm -f -- "$KEY_FILE"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-minisig
+          path: release-assets/*.minisig
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref_name, 'agent-v')
+    needs: [build, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the Release
+    steps:
+      # No checkout: nothing from the repository runs in this job.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agent-dist
+          path: release-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agent-minisig
+          path: release-assets
+
+      - name: check the assets before releasing them
+        env:
+          SHA_AMD64: ${{ needs.build.outputs.amd64_sha256 }}
+          SHA_ARM64: ${{ needs.build.outputs.arm64_sha256 }}
+        run: |
+          set -eu
+          cd release-assets
+          [ "$(sha256sum cadence-agent-linux-amd64 | cut -d' ' -f1)" = "$SHA_AMD64" ] ||
+            { echo "release.yml: amd64 binary differs from the build job's hash" >&2; exit 1; }
+          [ "$(sha256sum cadence-agent-linux-arm64 | cut -d' ' -f1)" = "$SHA_ARM64" ] ||
+            { echo "release.yml: arm64 binary differs from the build job's hash" >&2; exit 1; }
+          for f in *.sha256; do
+            sha256sum -c "$f"
+          done
+          [ -s cadence-agent-linux-amd64.minisig ] && [ -s cadence-agent-linux-arm64.minisig ]
+
+      # Always a draft: the .minisig files are verified by hand, then
+      # `gh release edit "$tag" --draft=false` publishes.
+      - name: create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          VER="${GITHUB_REF_NAME#agent-v}"
+          cd release-assets
           gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --verify-tag \
             --title "agent $VER" \
             --notes-file notes.md \
-            dist/cadence-agent-linux-amd64 \
-            dist/cadence-agent-linux-amd64.sha256 \
-            dist/cadence-agent-linux-arm64 \
-            dist/cadence-agent-linux-arm64.sha256 \
-            "dist/cadence-agent_${VER}-1_amd64.deb" \
-            "dist/cadence-agent_${VER}-1_amd64.deb.sha256" \
-            "dist/cadence-agent_${VER}-1_arm64.deb" \
-            "dist/cadence-agent_${VER}-1_arm64.deb.sha256"
+            cadence-agent-linux-amd64 \
+            cadence-agent-linux-amd64.sha256 \
+            cadence-agent-linux-amd64.minisig \
+            cadence-agent-linux-arm64 \
+            cadence-agent-linux-arm64.sha256 \
+            cadence-agent-linux-arm64.minisig \
+            "cadence-agent_${VER}-1_amd64.deb" \
+            "cadence-agent_${VER}-1_amd64.deb.sha256" \
+            "cadence-agent_${VER}-1_arm64.deb" \
+            "cadence-agent_${VER}-1_arm64.deb.sha256"
 
   server-images:
     if: startsWith(github.ref_name, 'v')
