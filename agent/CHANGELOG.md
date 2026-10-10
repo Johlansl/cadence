@@ -3,6 +3,44 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.15.0
+
+Self-upgrade by the server (6B), reboot proof (6A) and a two-key trust set. This
+is the first release signed in CI, so it is the first with a `.minisig` on its
+GitHub Release:
+
+- `agent_upgrade` job: the agent installs a target version from the server it is
+  enrolled with. The job carries only `target_version` (a canonical `N.N.N`); the
+  download URL is derived locally from the configured server host, the version
+  and the platform (`linux/amd64` or `linux/arm64`). Before anything downloaded
+  can run, the agent fetches it over bounded HTTPS (TLS 1.2+, the pinned server
+  CA, no redirects), checks the `.sha256` strictly, verifies the minisign
+  signature over the exact bytes against its trust set, and checks the ELF
+  machine; only then does it run `-version` (empty environment, bounded output,
+  killed on timeout), which must print exactly the target. The install is a
+  `.prev` hardlink refresh followed by an atomic rename onto
+  `/usr/bin/cadence-agent` (mode 0755, files and directory synced). The running
+  process is not restarted and reports no success itself: the server decides on
+  the next authenticated contact. The whole pre-commit phase is bounded to 300
+  seconds after the job is accepted. `CADENCE_ENABLE_UPGRADES=false` (default
+  true) refuses these jobs on a host.
+- `/usr/bin/cadence-agent` is the single canonical binary path: the systemd units,
+  the installer and the `.deb` all use it. A host must be migrated to it before it
+  can self-upgrade (`docs/agent-path-migration.md`).
+- Two-key trust set: the agent compiles in two minisign public keys, the active
+  key (`C9EDE89E1DEEED37`, `agent/minisign.pub`) and an offline backup key
+  (`2167C9939EC0F4FC`, `agent/minisign-backup.pub`), and accepts a signature from
+  either. Neither the server nor a job can change that set, and the agent refuses
+  to start with two keys that share an ID.
+- Reboot proof (6A): reports, polls and job results carry the kernel boot id
+  (`boot_id`), and `apt_upgrade` and `reboot` jobs say whether they will reboot
+  the host (`will_reboot`) from the same decision that gates the reboot. Fields
+  that are not set keep older payloads byte for byte identical.
+- The agent has its first dependency outside the standard library:
+  `github.com/jedisct1/go-minisign` (pinned, and with its two indirect modules
+  `golang.org/x/crypto` and `golang.org/x/sys` checked by `go mod verify` in CI),
+  used only to verify the signature of an upgrade.
+
 ## 0.14.0
 
 Secure enrollment and mTLS transport authentication:

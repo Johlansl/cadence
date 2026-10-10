@@ -6,6 +6,70 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
+## Unreleased
+
+Sequenced reboots (6A), fleet self-upgrade of the agent (6B), and agent releases
+signed in CI with a two-key trust set. The agent side is in
+[`agent/CHANGELOG.md`](agent/CHANGELOG.md) 0.15.0.
+
+- Sequenced, budgeted multi-host reboots (6A). Agents now report the kernel boot
+  id and whether a job will reboot the host. The backend records the observed
+  boot (migrations `0024` `hosts.current_boot_id` and `0025`
+  `campaign_hosts.awaited_boot`) and a campaign no longer completes a host that
+  is rebooting until a different boot plus fresh acceptable health proves it
+  came back. An expected reboot with no proof, or a wait that stays unproven past
+  `CADENCE_CAMPAIGN_RETURN_TIMEOUT_SECONDS` (default 1800), halts the campaign
+  fail-safe. The new `CADENCE_MAX_CONCURRENT_REBOOTS` (default 0, which keeps the
+  previous behaviour: no limit) bounds unproven reboots fleet-wide under a
+  transaction advisory lock. An unproven reboot hold is never released
+  implicitly: retention spares those jobs, and only a new boot or an explicit
+  operator recovery clears it. See `docs/campaigns.md`.
+- Agent fleet upgrades (6B). A new closed job type, `agent_upgrade` (migration
+  `0026`), takes exactly `{"target_version": "N.N.N"}` and nothing else, and
+  campaigns can use it (migration `0027`: canary stage, observation gate,
+  blast-radius halt). The server never completes it on the word of the process
+  that replaces the binary: success needs a later authenticated contact from the
+  host showing the target version, and `CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS`
+  (default 600, a non-zero value below 420 is refused at startup) fails upgrades
+  that never prove. Hosts need agent 0.15.0 at the canonical path
+  `/usr/bin/cadence-agent` first: see `docs/agent-path-migration.md` and
+  `scripts/check-agent-host-upgrade-readiness.sh`. Production rollout:
+  `docs/agent-upgrade-campaigns-runbook.md`. `scripts/test-agent-upgrade-e2e.sh`
+  is the real end-to-end proof.
+- Agent releases are signed in CI, with a two-key trust set. An `agent-v*` tag
+  runs the `build`, `sign` and `publish` jobs of `release.yml`; `sign` runs in
+  the GitHub environment `release` with the secret `MINISIGN_SECRET_KEY`, and
+  `publish` creates the Release as a draft that the maintainer verifies and
+  publishes. The trusted keys are `agent/minisign.pub` (active, `C9EDE89E1DEEED37`)
+  and the new `agent/minisign-backup.pub` (offline, `2167C9939EC0F4FC`), both
+  compiled into the agent; a signature from either is accepted.
+  `scripts/publish-agent.sh fetch <version>` is now the normal way to stage a
+  release on the server (download, verify against both keys, stage atomically;
+  `CADENCE_FETCH_REPO` points it at a fork); `publish <version> <dir>` stays for
+  an air-gapped server or a break-glass release. The server needs `minisign` and
+  `curl` and must be linux/amd64. `scripts/agent-install.sh` takes an optional
+  second trusted key, `CADENCE_MINISIGN_PUB2`; both values are shape-checked
+  before anything is downloaded and the log names the key that verified. The
+  `README.md` example that passed the whole content of `agent/minisign.pub` as
+  `CADENCE_MINISIGN_PUB` did not work (minisign's `-P` takes a bare key, not a
+  two-line file) and is corrected; the installer now refuses that form
+  explicitly. See `README.md`,
+  `SECURITY.md` ("Release signing", "If a signing key is compromised") and
+  `docs/decisions.md` ("Release automation").
+- Changes for whoever runs the signing tools by hand (these are breaking for
+  scripts that call them). `scripts/build-agent-release.sh` is now the
+  break-glass path: `CADENCE_SIGNING_KEY` is required (the `~/.cadence/minisign.key`
+  default is gone), `CADENCE_RELEASE_PUBKEY` is removed (the script refuses to run
+  if it is set), and the signatures are verified against the whole trust set.
+  `scripts/restore-signing-key.sh` needs `--to <destination>` and an explicit
+  source, restores the key still encrypted (it no longer writes a passwordless
+  key), and refuses any destination inside a git repository.
+  `scripts/backup-signing-key.sh` takes the key file as an argument and checks
+  that it is one of the two trusted keys. The agent upgrade E2E now always runs
+  in a throwaway copy of the checkout with its own disposable `.env`, names its
+  Docker image `e2e-backend` instead of `cadence-backend`, and refuses to start
+  with less than 4 GiB free for Docker.
+
 ## 0.5.0
 
 - RBAC v1 for OIDC accounts: reader by default, operator for the emails
