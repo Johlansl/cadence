@@ -29,6 +29,12 @@
 
 set -eu
 
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# The trusted comment format has one definition, shared with
+# build-agent-release.sh (break-glass signing).
+# shellcheck source=scripts/agent-sign-lib.sh
+. "$here/agent-sign-lib.sh"
+
 die() {
 	echo "ci-sign-agent: $*" >&2
 	exit 1
@@ -115,7 +121,7 @@ for spec in "$@"; do
 	bin=$dir/cadence-agent-linux-$arch
 	rm -f -- "$bin.minisig"
 	if ! minisign -S -s "$seckey" -x "$bin.minisig" \
-		-t "cadence-agent $version linux/$arch sha256:$want" \
+		-t "$(agent_trusted_comment "$version" "$arch" "$want")" \
 		-m "$bin" </dev/null >/dev/null; then
 		remove_sigs "$@"
 		die "signing failed for $bin"
@@ -132,7 +138,7 @@ for spec in "$@"; do
 		die "signature for $bin does not verify against $pubkey (secret key and committed public key out of sync?)"
 	fi
 	line=$(sed -n 3p "$bin.minisig")
-	if [ "$line" != "trusted comment: cadence-agent $version linux/$arch sha256:$want" ]; then
+	if [ "$line" != "trusted comment: $(agent_trusted_comment "$version" "$arch" "$want")" ]; then
 		remove_sigs "$@"
 		die "unexpected trusted comment in $bin.minisig"
 	fi

@@ -82,7 +82,7 @@ else
 	ok "publish-agent.sh has no export subcommand"
 fi
 if [ -f scripts/build-agent-release.sh ]; then
-	ok "build-agent-release.sh exists (key-holder build tool)"
+	ok "build-agent-release.sh exists (break-glass build tool)"
 else
 	fail "scripts/build-agent-release.sh is missing"
 fi
@@ -485,6 +485,45 @@ if printf '%s' "$out" | grep -q "trusted comment: test 9.9.14"; then
 	ok "publish logs the trusted comment"
 else
 	fail "publish did not log the trusted comment"
+fi
+
+# 14b. break-glass output as is: a bundle signed by the break-glass signing
+# code itself (sign_bundle, the function build-agent-release.sh calls) with
+# the backup key is accepted by publish unchanged, the log names the backup
+# key, and the trusted comment is the CI format.
+# shellcheck source=scripts/agent-sign-lib.sh
+. scripts/agent-sign-lib.sh
+mksigned 9.9.40 "$T/b40"
+rm "$T/b40"/*.minisig
+if (trust_set_load "$PWD" 2>/dev/null && trust_set_check && sign_bundle "$KEY_BACKUP" 9.9.40 "$T/b40") >"$T/b40.log" 2>&1; then
+	ok "sign_bundle signs a bundle with the backup key and self-verifies"
+else
+	fail "sign_bundle failed: $(cat "$T/b40.log")"
+fi
+out=$(sh scripts/publish-agent.sh publish 9.9.40 "$T/b40" 2>&1) && res=0 || res=$?
+sum40=$(sha256sum "$T/b40/cadence-agent-linux-amd64" | cut -d' ' -f1)
+if [ "$res" -eq 0 ] && [ -e "$DIST/agent/v9.9.40" ] && printf '%s' "$out" | grep -qF "key $backup_id"; then
+	ok "publish accepts the break-glass bundle as is and logs the backup key"
+else
+	fail "publish of the break-glass bundle (exit=$res): $out"
+fi
+if printf '%s' "$out" | grep -qF "trusted comment: cadence-agent 9.9.40 linux/amd64 sha256:$sum40"; then
+	ok "the published signature carries the CI trusted comment format"
+else
+	fail "unexpected trusted comment: $out"
+fi
+
+# 14c. a bundle signed by a key outside the trust set never gets that far:
+# sign_bundle refuses it and leaves no signature behind.
+mksigned 9.9.41 "$T/b41"
+rm "$T/b41"/*.minisig
+minisign -G -W -f -p "$T/keys/stranger.pub" -s "$T/keys/stranger.key" >/dev/null 2>&1
+if (trust_set_load "$PWD" 2>/dev/null && trust_set_check && sign_bundle "$T/keys/stranger.key" 9.9.41 "$T/b41") >"$T/b41.log" 2>&1; then
+	fail "sign_bundle accepted a key outside the trust set"
+elif [ ! -e "$T/b41/cadence-agent-linux-amd64.minisig" ] && [ ! -e "$T/b41/cadence-agent-linux-arm64.minisig" ]; then
+	ok "a key outside the trust set is refused by the break-glass self-check, no signature left"
+else
+	fail "signatures left behind by a refused signing"
 fi
 
 # 15. active key alone verifies and is tried first (logged key ID matches
@@ -918,9 +957,11 @@ else
 	fail "public dir for a single-space .sha256"
 fi
 
-# --- part 2: key-holder build + server publish (docker) -----------------
-# Simulates both machines: the release tool builds, smokes, hashes and
-# signs with the test key, then the server path publishes the bundle.
+# --- part 2: break-glass build + server publish (docker) ----------------
+# Simulates both machines: the break-glass release tool builds, smokes,
+# hashes and signs with the test BACKUP key (its nominal use), self-checking
+# against the trust set from the CADENCE_PUBLISH_PUBKEY* variables exported
+# above, then the server path publishes the bundle.
 # The server side needs no Go toolchain and no docker here (already
 # proven by part 1 running on images without them).
 if [ "${DOCKER_TESTS:-0}" = "1" ]; then
@@ -940,10 +981,14 @@ if [ "${DOCKER_TESTS:-0}" = "1" ]; then
 				&& git -c user.email=t@t -c user.name=t commit -qm src \
 				&& git tag "agent-v$rel")
 		fi
-		if [ -n "$rel" ] && CADENCE_RELEASE_REPO="$R" CADENCE_SIGNING_KEY="$KEY" \
-			CADENCE_RELEASE_PUBKEY="$PUB" \
-			sh scripts/build-agent-release.sh "$rel" "$T/exp" >/dev/null 2>&1; then
-			ok "key-holder tool builds, smokes and signs"
+		if [ -n "$rel" ] && CADENCE_RELEASE_REPO="$R" CADENCE_SIGNING_KEY="$KEY_BACKUP" \
+			sh scripts/build-agent-release.sh "$rel" "$T/exp" >"$T/exp.log" 2>&1; then
+			ok "break-glass tool builds, smokes and signs with the backup key"
+			if grep -qF "verified by key $backup_id (backup)" "$T/exp.log"; then
+				ok "the build log names the backup key that verified"
+			else
+				fail "the build log does not name the verifying key"
+			fi
 			n=$(find "$T/exp" -maxdepth 1 -type f | wc -l | tr -d ' ')
 			if [ "$n" = "7" ]; then
 				ok "bundle holds exactly 7 files"
@@ -969,7 +1014,7 @@ if [ "${DOCKER_TESTS:-0}" = "1" ]; then
 				fail "real publish failed"
 			fi
 		else
-			fail "key-holder build failed"
+			fail "break-glass build failed: $(tail -5 "$T/exp.log" 2>/dev/null)"
 		fi
 	fi
 else

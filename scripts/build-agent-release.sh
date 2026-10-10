@@ -1,11 +1,23 @@
 #!/bin/sh
-# Build, smoke-test, hash and sign an agent release bundle.
+# BREAK-GLASS: build, smoke-test, hash and sign an agent release bundle by
+# hand with the offline backup key.
 #
-# Run on the KEY-HOLDER machine (operator laptop/vault) -- never on the
-# Cadence server. This machine needs a Cadence checkout, docker and
-# minisign. It needs no access to the server and no server secrets.
+# The normal release path is CI: an agent-v* tag makes
+# .github/workflows/release.yml build, sign (active key, GitHub environment
+# "release") and publish a draft Release, which the server then fetches with
+# scripts/publish-agent.sh fetch. Use this script only when that path is
+# unavailable or distrusted: the active key is lost or compromised, or GitHub
+# cannot be used. It signs with the key you name, on the machine you run it
+# on, and never needs the Cadence server or any server secret.
 #
-#   scripts/build-agent-release.sh <version> <outdir>
+#   CADENCE_SIGNING_KEY=<secret key file> scripts/build-agent-release.sh <version> <outdir>
+#
+# Needs a Cadence checkout, docker and minisign, on linux/amd64 (the
+# -version smoke executes the amd64 binary). The secret key is typically the
+# password-protected backup key (agent/minisign-backup.pub): minisign asks for
+# its password at the terminal, once per architecture. Restore it to a
+# temporary location with scripts/restore-signing-key.sh and delete it after
+# use. There is no default key path on purpose.
 #
 # Produces a self-contained transfer bundle (amd64 + arm64 triplets plus a
 # version file, nothing else):
@@ -14,29 +26,35 @@
 #   <outdir>/cadence-agent-linux-arm64{,.sha256,.minisig}
 #   <outdir>/version
 #
+# Signatures carry the same trusted comment as the CI ones
+# ("cadence-agent <version> linux/<arch> sha256:<hash>", one definition in
+# scripts/agent-sign-lib.sh) and are verified against the whole trust set,
+# agent/minisign.pub then agent/minisign-backup.pub: the log names the key that
+# verified, and the build fails if neither does.
+#
 # Release discipline, enforced fail-closed (scripts/check-release-source.sh):
 # check out the release source explicitly, then build from it:
 #
 #   git fetch --tags origin
 #   git checkout agent-v<version>   # must match agent/CHANGELOG.md "## <version>"
-#   scripts/build-agent-release.sh <version> /tmp/agent-<version>
+#   CADENCE_SIGNING_KEY=<key> scripts/build-agent-release.sh <version> /tmp/agent-<version>
 #   # transfer /tmp/agent-<version> to the server, then there:
 #   scripts/publish-agent.sh publish <version> <transferred-dir>
 #
 # Anything else refuses: missing tag, HEAD anywhere but the tag's commit,
 # tracked or staged edits, untracked files under agent/. The signature step
-# signs the bytes just built here, on this machine: a compromised Cadence
-# server can neither influence these bytes nor obtain a signature for
-# anything else. Release builds run on linux/amd64 only (the -version
-# smoke executes the amd64 binary).
+# signs the bytes just built here: a compromised Cadence server can neither
+# influence these bytes nor obtain a signature for anything else.
 #
 # Environment:
-#   CADENCE_SIGNING_KEY   private key to sign with
-#                         (default: ~/.cadence/minisign.key)
-#   CADENCE_RELEASE_PUBKEY   public key for the self-check (default:
-#                         <repo>/agent/minisign.pub; override in tests only)
+#   CADENCE_SIGNING_KEY   secret key to sign with (required, no default)
 #   CADENCE_RELEASE_REPO  checkout to build from (default: this repo;
 #                         the test suite points it at temp repos)
+#   CADENCE_PUBLISH_PUBKEY, CADENCE_PUBLISH_PUBKEY_BACKUP
+#                         trust set paths, tests only (the variables
+#                         publish-agent.sh reads); a warning is printed when
+#                         either is set.
+# (CADENCE_RELEASE_PUBKEY, which let the self-check use any key, is gone.)
 
 set -eu
 
@@ -44,16 +62,27 @@ here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo=${CADENCE_RELEASE_REPO:-$(CDPATH='' cd -- "$here/.." && pwd)}
 cd "$repo"
 
-key=${CADENCE_SIGNING_KEY:-$HOME/.cadence/minisign.key}
-pub=${CADENCE_RELEASE_PUBKEY:-$repo/agent/minisign.pub}
+# shellcheck source=scripts/agent-sign-lib.sh
+. "$here/agent-sign-lib.sh"
+
+key=${CADENCE_SIGNING_KEY:-}
 ARCHS="amd64 arm64"
 
 if [ $# -ne 2 ]; then
-	echo "usage: build-agent-release.sh <version> <outdir>" >&2
+	echo "usage: CADENCE_SIGNING_KEY=<secret key file> build-agent-release.sh <version> <outdir>" >&2
 	exit 2
 fi
 ver=$1
 out=$2
+
+if [ -n "${CADENCE_RELEASE_PUBKEY:-}" ]; then
+	echo "build-agent-release.sh: CADENCE_RELEASE_PUBKEY no longer exists: the signature is verified against the committed trust set" >&2
+	exit 2
+fi
+if [ -z "$key" ]; then
+	echo "build-agent-release.sh: CADENCE_SIGNING_KEY is required (break-glass tool: no default key; see the header)" >&2
+	exit 2
+fi
 
 if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
 	echo "build-agent-release.sh: release builds run on linux/amd64 only" >&2
@@ -66,8 +95,8 @@ if [ ! -f "$key" ]; then
 	echo "build-agent-release.sh: no signing key at $key" >&2
 	exit 1
 fi
-if [ ! -f "$pub" ]; then
-	echo "build-agent-release.sh: no public key at $pub" >&2
+trust_set_load "$repo"
+if ! trust_set_check; then
 	exit 1
 fi
 if [ -e "$out" ] && [ -n "$(ls -A "$out")" ]; then
@@ -115,20 +144,11 @@ fi
 	printf '%s\n' "$ver" >version
 )
 
-echo "build-agent-release.sh: signing (trusted comment: cadence-agent $ver)"
-for arch in $ARCHS; do
-	minisign -S -s "$key" -m "$stage/cadence-agent-linux-$arch" \
-		-t "cadence-agent $ver"
-done
-
-# Self-check against the same public key the server will verify with.
-for arch in $ARCHS; do
-	if ! minisign -V -p "$pub" -m "$stage/cadence-agent-linux-$arch" \
-		-x "$stage/cadence-agent-linux-$arch.minisig" >/dev/null 2>&1; then
-		echo "build-agent-release.sh: self-check failed for $arch" >&2
-		exit 1
-	fi
-done
+echo "build-agent-release.sh: signing with $key (the key's password is asked by minisign, once per architecture)"
+if ! sign_bundle "$key" "$ver" "$stage"; then
+	echo "build-agent-release.sh: signing or self-check failed" >&2
+	exit 1
+fi
 
 mv "$stage" "$out"
 trap - EXIT INT TERM
