@@ -15,7 +15,7 @@
 #
 # Threat-model note (why this script never builds): an earlier revision had
 # the server build the binaries and the operator sign the server's bytes.
-# That defeats offline signing: a root-compromised server builds a malicious
+# That defeats signing as a separate step: a root-compromised server builds a malicious
 # binary, the operator signs it blindly, and server-side signature checks
 # then "verify" the attacker's bytes. Signature verification only proves the
 # staged bytes are the signed bytes; it says nothing about a build the
@@ -36,10 +36,10 @@
 #      failure on any HTTP error) but the decision to stage is minisign
 #      -V against the trust set alone, not the download succeeding.
 #   scripts/publish-agent.sh publish <version> <indir>
-#      The break-glass path, for an operator-assembled bundle (normally
-#      produced by scripts/build-agent-release.sh on a key-holder machine,
-#      see that script's header): verifies and stages a local directory
-#      instead of downloading one.
+#      The break-glass and air-gap path, for an operator-assembled bundle
+#      (normally produced by scripts/build-agent-release.sh, signed by hand
+#      with the offline backup key, see that script's header): verifies and
+#      stages a local directory instead of downloading one.
 #
 # Both paths converge on the same checks once a candidate bundle exists
 # (grammar, version binding, closed file set, triplet completeness per
@@ -138,8 +138,9 @@ usage() {
 	exit 2
 }
 
-# Strict N.N.N grammar for publishable versions (leading zeros accepted,
-# suffixes refused).
+# Strict canonical N.N.N grammar for publishable versions: suffixes refused,
+# and so are leading zeros (a component is "0" or starts with 1-9, "01.2.3"
+# refuses like the agent does; see the loop at the end of the function).
 check_version() {
 	case $1 in
 	*[!0-9.]*|""|.*|*.|*..*) return 1 ;;

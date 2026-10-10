@@ -13,9 +13,10 @@
 #   env                a copy of .env (secrets: admin key, DB password) -- 0600
 #   MANIFEST           timestamp, git commit, alembic revision, sha256 sums
 #
-# The agent release signing key is deliberately NOT backed up here: it
-# lives on the key-holder machine (operator laptop/vault), never on this
-# server. Back it up there with scripts/backup-signing-key.sh.
+# No agent release signing key is backed up here, on purpose: the active key
+# exists only as a CI secret and the backup key is kept offline by the
+# maintainer, so neither is ever on this server. The offline backup key has its
+# own tool, scripts/backup-signing-key.sh.
 #
 # Environment:
 #   CADENCE_BACKUP_DIR    base directory for backups (default: <repo>/backups)
@@ -93,9 +94,9 @@ fi
 cp "$env_file" "$out/env"
 chmod 0600 "$out/env"
 
-# 3b. No agent signing key here on purpose: the release key lives on the
-#     key-holder machine, never on this server, so server backups must not
-#     carry key material. (Pre-PR2 backups may still contain minisign.key.enc;
+# 3b. No agent signing key here on purpose: signing keys are never on this
+#     server (CI secret, offline backup key), so server backups must not carry
+#     key material. (Pre-PR2 backups may still contain minisign.key.enc;
 #     that file is ignored on restore.)
 manifest_files="db.dump caddy_data.tgz env"
 if [ -n "$client_pki_vol" ]; then

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Refuse to build a release from anything but the exact tagged source.
 #
-# The key-holder machine authorizes fleet-wide executables, so
+# A hand-signed (break-glass) release authorizes fleet-wide executables, so
 # build-agent-release.sh calls this first and aborts unless ALL hold for
 # the requested version:
 #   - strict N.N.N grammar + matching "## <version>" CHANGELOG heading;

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prove the versioned, immutable, offline-signed agent publish flow.
+# Prove the versioned, immutable, signed agent publish flow (fetch and publish).
 #
 # Part 0 (static, no tools): publish-agent.sh never signs and never reads
 #   a private key.

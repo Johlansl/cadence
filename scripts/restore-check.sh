@@ -16,10 +16,12 @@
 #   3. GET /api/v1/hosts on a backend bound to the restored DB returns the
 #      same hostnames as the live database
 #   4. both restored PKIs validate, and Caddy serves TLS from the server PKI
-#   5. no agent signing-key material in the backup (the release key lives on
-#      the key-holder machine, never on the server). Presence is a policy
+#   5. no agent signing-key material in the backup (signing keys are never
+#      on the server: CI secret, offline backup key). Presence is a policy
 #      warning, not a restore blocker: pre-PR2 backups legitimately carry
-#      minisign.key.enc, and the restore itself is unaffected.
+#      minisign.key.enc, and the restore itself is unaffected. Only the backup
+#      directory is inspected: nothing under ~/.cadence is read, so the check
+#      does not depend on any key file existing on this machine.
 
 set -eu
 

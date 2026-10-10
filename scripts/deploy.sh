@@ -4,9 +4,10 @@
 # assets (installer, units, CA).
 #
 # Agent release binaries are NOT published here: a version is built and
-# signed on the key-holder machine (scripts/build-agent-release.sh) and
-# staged explicitly (scripts/publish-agent.sh publish). Deploying the
-# backend/frontend never requires one.
+# signed in CI (an agent-v* tag) and staged explicitly with
+# scripts/publish-agent.sh fetch <version>, or, for a break-glass release
+# built by hand, scripts/publish-agent.sh publish <version> <dir>. Deploying
+# the backend/frontend never requires one.
 #
 # Run on the central server, from a checkout of this repo, after `git pull`.
 #

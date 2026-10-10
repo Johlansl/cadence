@@ -21,7 +21,7 @@ homepage: https://github.com/Johlansl/cadence
 license: Apache-2.0
 description: |
   Cadence patch-management agent.
-  A stdlib-only Go binary run by systemd timers: it reports installed packages
+  A statically linked Go binary run by systemd timers: it reports installed packages
   and available apt updates to a Cadence server, and runs apt dist-upgrade /
   reboot jobs the server queues. Debian/Ubuntu only (uses apt and dpkg).
 
