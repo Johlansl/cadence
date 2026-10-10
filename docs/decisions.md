@@ -289,7 +289,9 @@ rather than something to defer until someone asks.
 ## Stack
 
 - **Backend: ordinary dependencies** (FastAPI, SQLAlchemy sync, psycopg2,
-  Pydantic, Alembic). **Agent: standard library only**, no config framework,
+  Pydantic, Alembic). **Agent: standard library only**, with one reviewed
+  exception, `github.com/jedisct1/go-minisign` (pinned, used only to verify an
+  upgrade's signature, see the 6B notes below); no config framework,
   no YAML, config via environment variables, one static `CGO_ENABLED=0`
   binary. The point is to stay light and trivially cross-compilable.
 - **Frontend: React + Vite + Tailwind, no router.** One master/detail view,
@@ -316,7 +318,7 @@ Two version lines on purpose:
 
 A release build stamps the agent version at link time via
 `-ldflags "-X main.agentVersion=<version>"`. The CI release takes `<version>`
-from the `agent-v*` tag name; a LAN release build
+from the `agent-v*` tag name; a break-glass release build
 (`scripts/build-agent-release.sh`) takes it as an explicit argument, which
 must match an `agent/CHANGELOG.md` heading. `agent/CHANGELOG.md` headings track the tag
 (`## 0.7.0` ↔ `agent-v0.7.0`). The `agentVersion` literal in
@@ -345,33 +347,41 @@ signature), systemd units and server CA are staged into `dist/` by
 `scripts/publish-agent.sh`. HTTP serves only `/agent/ca.crt`; all other
 artifacts require HTTPS rooted in that CA.
 
-- **Releases are built and signed off-server.** `build-agent-release.sh`
-  runs on the key-holder machine: it builds both binaries from an identified
-  checkout, smoke-tests (`-version`, GOARCH), hashes and signs them. The
-  server (`publish-agent.sh publish`) only verifies (closed bundle,
-  recomputed SHA-256, `minisign -V` against the committed
-  `agent/minisign.pub`, amd64 `-version` after the signature verifies, ELF
-  machine per arch) and stages atomically. The deliberate reason: had the
-  server built what the operator signs, a root-compromised server could get
-  an arbitrary binary signed by serving malicious build output, and
-  server-side signature checks would then "verify" the attack. The private
-  key is never present on the Cadence server; publishing refuses without a
-  public key configured, and unsigned publishing does not exist. CI builds a
-  SHA-256-only artifact on purpose: no signing key is exposed to CI.
+- **Releases are built and signed in CI, never on the Cadence server.** An
+  `agent-v*` tag runs the `build`, `sign` and `publish` jobs of
+  `.github/workflows/release.yml` (see "Release automation"); the signing key
+  is a CI secret in a protected environment. The server
+  (`publish-agent.sh fetch`, or `publish <version> <dir>` for a local
+  directory) only verifies (closed bundle, recomputed SHA-256, `minisign -V`
+  against the two committed trusted keys, amd64 `-version` after the signature
+  verifies, ELF machine per arch) and stages atomically. The deliberate reason
+  is the one this design always had: had the server built what gets signed, a
+  root-compromised server could get an arbitrary binary signed by serving
+  malicious build output, and server-side signature checks would then "verify"
+  the attack. The private keys are never present on the Cadence server;
+  publishing refuses without both public keys, and unsigned publishing does
+  not exist.
 - **Published versions are immutable and complete.** A version stages as one
   atomic directory with both architectures; republishing refuses loudly, and
   an incomplete triplet is never exposed. Absent version or arch is a 404,
   never a fallback.
 - **Release threat boundary.** A root-compromised Cadence server can refuse
-  to serve, delete artifacts, DoS, or serve stale published versions; it
+  to serve, delete artifacts, DoS, or serve stale published versions (an
+  enrolled agent refuses a lower `agent_upgrade` target, but the installer
+  path does not compare versions: SECURITY.md, "Release signing"); it
   cannot produce a newly signed release, alter signed bytes, or obtain a
   signature by manipulating its own build (it has no build step and no
-  key). The key-holder machine is the actual root of trust: its compromise
-  can sign arbitrary code, so it is protected as such (offline secrets,
-  enforced tag/commit/clean-tree check). Signing does not detect
-  an operator willingly building the wrong source; the runbook
-  (`build-agent-release.sh` header) binds version, tag and commit by
-  process. Full supply-chain provenance is out of scope.
+  key). The root of trust is the CI signing path plus the offline backup
+  key: whoever controls the `release` environment, or the repository's admin
+  settings, can have arbitrary agent code signed with the active key. That is
+  why the release is created as a draft that the maintainer verifies before
+  publishing, why the environment is meant to require a reviewer (a GitHub
+  setting the workflow cannot enforce), and why a second, offline key exists
+  (SECURITY.md, "Release signing"). Signing does not detect a maintainer
+  willingly tagging the wrong source; for the break-glass path
+  `scripts/check-release-source.sh` binds version, tag and commit (clean
+  tree). Full supply-chain provenance is out of scope beyond the Sigstore
+  attestation of the CI artifacts.
 - **Enrollment is the trust root.** One manually transferred, single-use code
   contains a 192-bit secret and the exact server-CA SHA-256. A trusted prelude
   validates the unauthenticated CA download before executing any downloaded
@@ -379,50 +389,79 @@ artifacts require HTTPS rooted in that CA.
   5-240 minutes.
 - **Minisign is an extra release layer.** The authenticated HTTPS channel is
   sufficient for server origin authentication. An out-of-band
-  `CADENCE_MINISIGN_PUB` additionally verifies who produced the agent binary.
+  `CADENCE_MINISIGN_PUB` additionally verifies who produced the agent binary;
+  the optional `CADENCE_MINISIGN_PUB2` names the second trusted key. The
+  installer tries the first, then the second only if the first did not verify,
+  accepts the binary if either does, checks the shape of both values before it
+  downloads anything (a malformed second key stops the install even when the
+  first would verify; a key file must be exactly two lines, a bare key is `RW`
+  plus 54 base64 characters), and logs the key ID that verified. The key ID is
+  derived from the key bytes, never from the key file's comment. Keys are never
+  fetched from the network. The check protects against a compromised server
+  only if the installer itself reached the host out of band, and it does not
+  cover the systemd units (SECURITY.md, "Release signing").
 - **mTLS adds to HMAC.** The client certificate authenticates the transport on
   port 8443. The existing HMAC signature, timestamp window, Fernet secret and
   constant-time comparisons continue to authenticate every application
   request. The two identities must resolve to the same host UUID.
 - **Forking Cadence.** A third party who redeploys this repo inherits the
-  upstream `agent/minisign.pub` and cannot hold its private half, so their
-  `scripts/publish-agent.sh` fails signature verification by construction.
-  They must replace `agent/minisign.pub` with their own key
-  (`minisign -G -W -p agent/minisign.pub -s <their-key>`, kept off their
-  server too). There is no unsigned escape hatch. Called out in
-  `publish-agent.sh` at the guard.
-- **Key backup.** `scripts/backup-signing-key.sh` runs on the key-holder
-  machine and writes a passphrase-protected copy of the key to
-  `~/.cadence/minisign.key.enc` (`minisign -C`, scrypt), kept with the
-  operator's offline secrets; server backups (`scripts/backup.sh`)
-  deliberately never include key material. A plaintext copy is never written
-  anywhere. The passphrase is typed into `minisign`'s own prompt and kept by
-  the operator (password manager), never on the box, in the repo, or in a
-  command. It is a *stronger* bar than `backups/<ts>/env` on purpose:
-  `env`'s secrets only attack this one server, the signing key forges
+  upstream `agent/minisign.pub` and `agent/minisign-backup.pub` and cannot hold
+  their private halves, so their `scripts/publish-agent.sh` fails signature
+  verification by construction. They must replace both public keys with two
+  keys of their own (distinct; the active one without a password so CI can use
+  it, the backup one encrypted and kept offline) and the two literals in
+  `agent/internal/upgrade/trust.go` with the same keys, and point
+  `CADENCE_FETCH_REPO` at their own repository. There is no unsigned escape
+  hatch. Called out in `publish-agent.sh` at the guard, and in the README.
+- **Two keys, one trust set.** The active key (`agent/minisign.pub`, ID
+  `C9EDE89E1DEEED37`) signs in CI. The backup key (`agent/minisign-backup.pub`,
+  ID `2167C9939EC0F4FC`) is generated offline, never on a Cadence machine,
+  encrypted, and kept offline by the maintainer. Both are compiled into the
+  agent as literals (`activePubKeyText` and `backupPubKeyText` in
+  `agent/internal/upgrade/trust.go`; `TestTrustedKeyMatchesRepoKey` fails CI on
+  any drift from the `.pub` files) and tried in order. A trust set whose keys
+  share an ID is refused by the agent (it panics at start), by
+  `publish-agent.sh` and by the break-glass tool. The set is exactly two keys:
+  a third would be a code change.
+- **Key backup and restore.** `scripts/backup-signing-key.sh <key file>` (an
+  explicit path, there is no default location) checks that the key signs
+  something the trust set verifies, then writes `<key file>.enc` encrypted with
+  `minisign -C`; the password is typed into minisign's own prompt, never an
+  argument or a log. `scripts/restore-signing-key.sh --to <destination>
+  <backup>` restores it still encrypted (no option decrypts it) and refuses a
+  destination inside any git repository, a symbolic link, an existing file
+  without `--force`, a key outside the trust set and an unencrypted source; it
+  recommends `/dev/shm` and deleting the file after use. Server backups
+  (`scripts/backup.sh`) never include key material, and `restore-check.sh`
+  check 5 asserts it. This is a *stronger* bar than `backups/<ts>/env` on
+  purpose: `env`'s secrets only attack this one server, a signing key forges
   releases for the whole fleet from anywhere.
-- **Key restore.** `scripts/restore-signing-key.sh` runs on the key-holder
-  machine, takes a `minisign.key.enc` (old server backups still carry one),
-  prompts for the passphrase, installs the passwordless key, and refuses to
-  install it unless a fresh signature verifies against the committed
-  `agent/minisign.pub`. The restored key must never be copied onto the
-  server. `restore-check.sh` check 5 asserts server backups carry no key
-  material.
-- **Key rotation** (written down so it is not improvised; not yet executed,
-  all key steps on the key-holder machine):
-  1. `minisign -G -W -p /tmp/new.pub -s ~/.cadence/minisign.key.new`.
-  2. Replace `~/.cadence/minisign.key` with the new secret key; copy the new
-     public key over `agent/minisign.pub`.
-  3. Commit + push `agent/minisign.pub` to both remotes.
-  4. `scripts/backup-signing-key.sh --force` with a fresh passphrase.
-  5. Publish the next agent version: it is verified against the new key;
-     already-published versions keep their old signatures (immutable).
-  6. Re-roll every host with the new `CADENCE_MINISIGN_PUB`.
-  There is no transition window to manage: a host keeps running its installed
-  agent until step 6 re-rolls it, and is never "stuck" because the operator
-  re-runs the installer on each. A zero-touch multi-key rotation (installer
-  accepting several keys) is only needed if hosts self-update without the
-  operator, they do not.
+- **Break-glass.** `scripts/build-agent-release.sh` builds, smoke-tests and
+  signs a release by hand with the key named by `CADENCE_SIGNING_KEY` (required,
+  no default), normally the backup key. Its signatures are verified against the
+  whole trust set (active key, then backup key) and the log names the key that
+  matched; the build fails if neither does. It shares one definition of the
+  trusted comment (`cadence-agent <version> linux/<arch> sha256:<hash>`) with
+  the CI signing script, in `scripts/agent-sign-lib.sh`; that comment is for
+  human audit, the agent never parses it. The result is staged with
+  `publish-agent.sh publish <version> <dir>`.
+- **Key compromise and rotation.** Replacing a key always means shipping an
+  agent whose compiled trust set no longer has it, signed by the key that
+  stays. A new backup key is an ordinary CI release signed by the active key.
+  A new active key needs a break-glass release signed by the backup key: the CI
+  `sign` job verifies against `agent/minisign.pub` of the commit it builds, so
+  it can only ever sign with the key that file names, and the same is true of
+  the break-glass tool for the keys of its own commit. The same path serves a
+  planned rotation of the active key: the tooling refuses to sign a release
+  with a key that the same release removes, and there is no transition period
+  with three keys. Hosts
+  that are unreachable keep their old trust set, compromised key included,
+  until they install a release. After any break-glass use the backup key is
+  replaced too (it was decrypted in memory on a connected machine to sign): a
+  normal CI release swaps `agent/minisign-backup.pub` and `backupPubKeyText`,
+  a campaign rolls it out, and only then is the maintainer's offline copy
+  replaced. The step by step procedures are in SECURITY.md, "If a signing key
+  is compromised".
 - **`agent_upgrade` is a closed declarative job (6B).** The server names a
   target version and nothing else: `params` must be exactly
   `{"target_version": "N.N.N"}` (strict grammar, any extra key rejected,
@@ -462,8 +501,9 @@ artifacts require HTTPS rooted in that CA.
   (6B).** `agent/internal/upgrade.Installer` (wired into `runJob` below
   the `CADENCE_ENABLE_UPGRADES` gate) takes `target_version` as its sole
   job input: URLs come from the PR5 builder, the Minisign root of trust
-  is the fleet key compiled into the binary (kept in sync with
-  `agent/minisign.pub` by test), and versions are canonical `N.N.N` on
+  is the two trusted keys compiled into the binary (active and backup,
+  kept in sync with `agent/minisign.pub` and `agent/minisign-backup.pub`
+  by test, tried in order), and versions are canonical `N.N.N` on
   both sides (leading zeros refused). Verification order is fixed:
   bounded HTTPS fetch (TLS 1.2+, pinned server CA, zero redirects) into
   a same-filesystem temp file, strict `.sha256` parse and recompute,
@@ -525,7 +565,7 @@ artifacts require HTTPS rooted in that CA.
   mocks (6B).** `sh scripts/test-agent-upgrade-e2e.sh` stands up a
   throwaway stack plus privileged systemd host containers and drives
   N to N+1 through production paths only: real enrollment and
-  mTLS/HMAC, real timers, offline-signed publish (a test Minisign
+  mTLS/HMAC, real timers, break-glass-signed publish (a test Minisign
   key the whole fixture fleet embeds, never present on servers),
   deterministic download, SHA/Minisign/ELF/`-version` checks,
   `.prev`, atomic rename, no restart, then PR4 proof when N+1
@@ -534,8 +574,13 @@ artifacts require HTTPS rooted in that CA.
   served bytes, an offline host that cannot rename late, and a
   backend restart between rename and proof. The script adds no
   upgrade capability and no fleet orchestration. It stays out of
-  per-PR CI (privileged docker, ~20 minutes, fixed loopback
-  ports); a manual green is required before merge, and the
+  per-PR CI (privileged docker, about 25 minutes, fixed loopback
+  ports); the script always works in a throwaway copy of the checkout
+  with its own disposable `.env`, so it never reads the checkout's
+  `.env` or touches its `./dist`, and it states in its header what it
+  does not isolate (privileged host containers). Its isolation logic has
+  a fast test (`scripts/test-e2e-workdir.sh`) that does run in CI. A
+  manual green is required before merge, and the
   automation target is a scheduled/manual workflow on a
   privileged runner (nightly or workflow_dispatch), not manual
   forever.
@@ -544,31 +589,75 @@ artifacts require HTTPS rooted in that CA.
 
 A `git` tag pushed to the **public** GitHub repo triggers
 `.github/workflows/release.yml` (GitHub Actions only; the private GitLab CI
-stays test-only). An `agent-v*` tag builds the agent for `linux/amd64` and
-`linux/arm64` (`CGO_ENABLED=0`, version from the tag), packages each into a
-`.deb` with `nfpm` (`packaging/nfpm.yaml`, run from a digest-pinned image), and
-attaches the binaries + `.deb`s + a `.sha256` for each to a GitHub Release; a
-`v*` tag builds and pushes
-`ghcr.io/johlansl/cadence-{backend,frontend}` (`linux/amd64`) after asserting
-the tag matches `backend/app/__init__.py` and `frontend/package.json`, then cuts
-a Release. Notes come from the matching `## <version>` section of the relevant
-changelog.
+stays test-only). Two independent halves, one per tag namespace.
 
-- **No signing key is exposed to CI, deliberately, and this is not the old
-  "CI is a build-only artifact" wording softening.** The minisign key signs
-  releases *for the whole fleet*; putting it in a third-party CI on a personal
-  account would make a compromised workflow dependency, a stolen repo-admin
-  session, or GitHub itself enough to forge a fleet-wide agent. minisign stays
-  a central-server concern (`scripts/publish-agent.sh`), adding producer
-  authentication to the HTTPS `install.sh` channel, which does **not** go
-  through GitHub.
-- **CI artifacts carry a Sigstore build-provenance attestation instead**
+An `agent-v*` tag runs three jobs:
+
+- `build` builds the agent for `linux/amd64` and `linux/arm64`
+  (`CGO_ENABLED=0`, version from the tag), packages each into a `.deb` with
+  `nfpm` (`packaging/nfpm.yaml`, run from a digest-pinned image), attaches a
+  Sigstore attestation to the binaries and `.deb`s, extracts the release notes,
+  reports the SHA-256 of both binaries as job outputs and uploads everything as
+  a one-day artifact.
+- `sign` (environment `release`) downloads that artifact, re-computes the two
+  SHA-256 sums and refuses to go on if they differ from what `build` reported,
+  then signs both binaries with `scripts/ci-sign-agent.sh` and verifies every
+  signature against `agent/minisign.pub` of the tagged commit. A secret and a
+  committed key that have drifted apart fail here, before anything is published.
+- `publish` creates the GitHub Release as a **draft** with the binaries,
+  `.deb`s, `.sha256` files and the two `.minisig` files.
+
+A `v*` tag builds and pushes `ghcr.io/johlansl/cadence-{backend,frontend}`
+(`linux/amd64`) after asserting the tag matches `backend/app/__init__.py` and
+`frontend/package.json`, then cuts a Release. That half never references the
+`release` environment. Release notes come from the matching `## <version>`
+section of the relevant changelog.
+
+- **The signing key moved to CI: this reverses an earlier decision.** The first
+  design said "no signing key is exposed to CI": the key lived on a dedicated
+  key-holder machine and CI produced a SHA-256-only artifact. That assumed a
+  machine that holds the key and does nothing else. This project is run from a
+  homelab and has no such machine, so the offline-holder guarantee was not
+  really available, while every release still needed the maintainer's hands on a
+  build. The risk the old rule guarded against is real and is accepted knowingly:
+  with the key in CI, a compromised workflow dependency, a stolen
+  repository-admin session or GitHub itself can sign a fleet-wide agent. What
+  limits it is listed in the next bullets, and in SECURITY.md ("Release
+  signing"), which also says what none of it can do.
+- **Signing happens in one job, in a protected environment.** `sign` is the only
+  job that references the GitHub environment `release` and its secret
+  `MINISIGN_SECRET_KEY` (the whole key file, without a password: CI cannot answer
+  a prompt). The environment is meant to require the maintainer's approval and to
+  be limited to `agent-v*` tags; those are repository settings, which the
+  workflow file cannot enforce, and the design depends on them being set. The key
+  is written under `$RUNNER_TEMP` with `umask 077`, never printed, and removed by
+  a step that runs even on failure. `minisign` itself is installed from a pinned
+  version and SHA-256 (0.12, checked against the project's own signature on the
+  tarball when the pin was made), every action is pinned by commit SHA, and the
+  workflow has no `pull_request` or `workflow_dispatch` trigger. A dispatch
+  trigger added later to test signing must stay behind the same environment.
+- **Draft, then a manual check.** `publish` never publishes. The maintainer
+  downloads the draft's assets, verifies each `.minisig` against the trusted keys
+  and publishes with `gh release edit <tag> --draft=false`. Only then can a
+  server `fetch` it, since an unpublished release is not downloadable without
+  credentials. This is a second filter that does not depend on the environment's
+  approval.
+- **Two keys, the second offline.** The same trust set (active key in CI, backup
+  key offline) is described under "Agent distribution / signing", with the
+  break-glass tool and what to do if a key is compromised. A CI release can only
+  be signed by the key that `agent/minisign.pub` names.
+- **`minisign` is installed with apt on the server only.** `publish-agent.sh`
+  needs the distro `minisign` and `curl` on the server (no pinned binary, no Go
+  toolchain, no docker); CI has its own pinned copy; the agent verifies with a
+  Go implementation compiled in; hosts need `minisign` only for the optional
+  installer check.
+- **CI artifacts also carry a Sigstore build-provenance attestation**
   (`actions/attest-build-provenance`, keyless via OIDC). It proves "built by
   this workflow, from this repo, at this commit", verifiable with
-  `gh attestation verify <file-or-oci-ref> --repo Johlansl/cadence`, with no
-  long-lived key anywhere. This is the tamper-evidence for anything pulled from
-  GitHub / GHCR; minisign remains an additional release-signing layer for the
-  LAN `install.sh` path.
+  `gh attestation verify <file-or-oci-ref> --repo Johlansl/cadence`. This is the
+  tamper-evidence for anything pulled from GitHub / GHCR, and the only
+  provenance of the `.deb` packages and the container images; for the agent
+  binaries it comes on top of the minisign signature.
 - **GHCR images are `amd64` only** for now (the server target is amd64). The
   agent is built for `arm64` too. `docker-compose.release.yml` is the overlay
   that runs the published images; the central server keeps building from source
@@ -588,10 +677,12 @@ changelog.
 
 ## CI
 
-Two CI configs run the same five jobs (`agent`, `scripts`, `backend`,
-`frontend`, `stack`): `.gitlab-ci.yml` on the private GitLab repo (metered
-runner minutes) and `.github/workflows/ci.yml` on the public GitHub mirror
-(free minutes for a public repo). They are kept behaviourally equal;
+Two CI configs run the same checks (`agent`, `scripts`, `go-pins`, `backend`,
+`frontend`, `stack`; GitLab runs the agent's golangci-lint as its own
+`agent-lint` job, GitHub as a step of `agent`): `.gitlab-ci.yml` on the
+private GitLab repo (metered runner minutes) and `.github/workflows/ci.yml`
+on the public GitHub mirror (free minutes for a public repo). They are kept
+behaviourally equal;
 `MAINTAINING.md` "Keeping the two CI configs in sync" is the reference.
 
 - **Path-filter every job.** A job runs only when its own tree, the CI file,
@@ -736,7 +827,9 @@ checks (roadmap item 7: pre/post checks on every `apt_upgrade`, plus a
 standalone `health_check` job type for the no-upgrade case); enrollment with
 mTLS transport auth (short-lived codes, client certificates, dedicated
 `:8443` listener); operator sign-in via OIDC (roadmap item 10, complements
-the shared admin key, see "Authentication" above); cached CVSS scores per
+the shared admin key, see "Authentication" above) with RBAC v1 on top of it
+(two roles, operator and reader, 0.5.0; the shared key bypasses roles);
+cached CVSS scores per
 CVE from the NVD (roadmap item 9); coarse `failure_category` /
 `failure_summary` on failed jobs; sequenced multi-host reboots (6A: the
 engine awaits proven return per host, and a global budget caps concurrent

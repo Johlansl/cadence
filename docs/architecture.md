@@ -17,7 +17,8 @@ The central server runs as a `docker compose` stack:
 | `frontend` | built from `frontend/` (`nginx:1.27-alpine` serving a Vite build) | the dashboard; nginx also proxies `/api/` to `backend` |
 | `caddy` | `caddy:2-alpine` | dashboard/enrollment TLS on 443, server-CA bootstrap on HTTP, mandatory agent mTLS on 8443 |
 
-Each monitored host runs the **agent**: a single static Go binary (stdlib only),
+Each monitored host runs the **agent**: a single static Go binary (standard
+library plus one pinned module, `go-minisign`, that verifies upgrade signatures),
 invoked one-shot by three `systemd` timers: a ~30 min full report, a ~1 min job
 poll and a once-per-boot health refresh.
 

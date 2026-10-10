@@ -10,11 +10,14 @@ is not PR7-ready.
   from `/usr/bin/cadence-agent`, with effective systemd units pointing
   at the canonical path. Verify per host:
   `sh scripts/check-agent-host-upgrade-readiness.sh` prints `6B-READY`.
-- The target release was built and signed offline by the key holder
-  (`scripts/build-agent-release.sh`), then staged with
-  `scripts/publish-agent.sh publish`. Never sign on the server.
+- The target release was built and signed in CI (draft verified and published
+  by the maintainer), then staged with `scripts/publish-agent.sh fetch
+  <version>`; or, for a break-glass release built by hand with the offline key
+  (`scripts/build-agent-release.sh`), with `scripts/publish-agent.sh publish
+  <version> <dir>`. Never sign on the server.
 - Served artifacts verified: binary, `.sha256`, `.minisig` under
-  `/agent/vN.N.N/` match the key-holder bundle.
+  `/agent/vN.N.N/` match the signed release (the same bytes as the GitHub
+  Release for `fetch`, the bundle directory for `publish`).
 - `CADENCE_UPGRADE_PROOF_TIMEOUT_SECONDS` is non-zero (default 600;
   minimum 420 enforced at startup). Never pair a zero proof timeout
   with a disabled generic reaper: silent jobs would never surface.

@@ -170,16 +170,222 @@ fingerprint check runs.
 The agent generates its ECDSA P-256 private key locally and sends only a CSR.
 The returned 90-day certificate authenticates the TLS transport on the
 dedicated agent port; the existing per-request HMAC remains required as an
-independent application-authentication layer. Minisign remains available as an
-additional release-signing check, not as the root of first-contact trust.
+independent application-authentication layer. Minisign is an additional
+release-signing check on the agent binary, not the root of first-contact trust;
+what it does and does not cover is spelled out in
+[Release signing](#release-signing) below.
 
-The pre-built binaries, the `.deb` packages and the container images attached to
-each GitHub Release (`agent-v*` / `v*` tags) are a separate channel and are
-**not** minisign- or GPG-signed, no long-lived signing key touches CI (see
-[docs/decisions.md](docs/decisions.md#release-automation)). They instead carry a
-Sigstore build-provenance attestation: `gh attestation verify <file-or-oci-ref>
---repo Johlansl/cadence`. The `.deb` is for a local `apt install ./…deb`, not an
-apt repository.
+The `.deb` packages and the container images attached to each GitHub Release
+(`agent-v*` / `v*` tags) are **not** minisign- or GPG-signed. They carry a
+Sigstore build-provenance attestation instead: `gh attestation verify
+<file-or-oci-ref> --repo Johlansl/cadence` (see
+[docs/decisions.md](docs/decisions.md#release-automation)). The `.deb` is for a
+local `apt install ./…deb`, not an apt repository. The agent binaries of the same
+release also carry a minisign signature, covered next.
+
+### Release signing
+
+**Who signs, and where.** Agent releases are signed in CI, by the `sign` job of
+`.github/workflows/release.yml`, on an `agent-v*` tag. That job runs in the
+GitHub environment `release` and is the only job that references the secret
+`MINISIGN_SECRET_KEY`, the active key (`C9EDE89E1DEEED37`); the server jobs (`v*`
+tags, GHCR images) never use that environment. The job re-checks both binaries
+against the SHA-256 the build job reported, signs them, and verifies every
+signature against the committed `agent/minisign.pub` before anything is
+uploaded. `publish` then creates the GitHub Release as a **draft**; the
+maintainer checks the `.minisig` files locally and publishes it by hand. The
+server downloads the published release (`publish-agent.sh fetch`) and verifies it
+against both trusted keys before staging a byte of it.
+
+**The two keys.** The active key signs in CI. The backup key (`2167C9939EC0F4FC`)
+is encrypted and kept offline by the maintainer; it signs only a break-glass
+release (`scripts/build-agent-release.sh`) when the active key is lost or
+compromised. Both public keys are committed (`agent/minisign.pub`,
+`agent/minisign-backup.pub`) and compiled into the agent, which accepts a
+signature from either.
+
+**What the repository cannot enforce.** The workflow names the environment
+`release`, but whether that environment exists, requires a reviewer and is
+limited to `agent-v*` tags is a GitHub repository setting, not something the
+workflow file can enforce. With no protection rules, the `sign` job would run
+unattended on any pushed `agent-v*` tag. Anyone with admin access to the
+repository (or a stolen admin session) can change those settings, add or replace
+the secret, or alter the workflow in a tagged commit; a reviewer approving the
+job is approving the code that runs with the key. Earlier versions of this
+project kept the signing key off CI entirely for this reason. Putting it in CI
+was a deliberate trade, written up in
+[docs/decisions.md](docs/decisions.md#release-automation); the draft stage, the
+manual check of the signatures and the offline backup key are what limit the
+damage.
+
+**What this does and does not protect.**
+
+- A compromised Cadence server cannot produce a release the fleet accepts: it
+  holds no private key and builds nothing. It can refuse to serve and delete
+  artifacts. (It can still run `apt-get` jobs on the fleet, see
+  [The server is fully trusted by every agent](#the-server-is-fully-trusted-by-every-agent);
+  signing only covers replacing the agent binary.)
+- **Rollback.** Through `agent_upgrade` a compromised server cannot take an
+  enrolled fleet back to an older release: the agent itself refuses a target
+  below the version it is running (`upgrade.Decide` returns `RefusedDowngrade`,
+  applied in `agent/cmd/agent/main.go`; the backend does not check it) and it
+  requires the downloaded binary's `-version` to print exactly the target.
+  Another path has no such protection. A host that runs the installer
+  (`agent-install.sh`, a fresh bootstrap or `CADENCE_UPGRADE_ONLY=true`) installs
+  whatever signed binary the server serves at the unversioned install path, and
+  the installer does not compare versions. A compromised server can therefore
+  put such a host back on an older release that is validly signed but
+  vulnerable. There is no anti-rollback check on that path yet.
+- Someone who has only a signing key cannot deliver anything to an enrolled
+  fleet. Agents download upgrades from their own Cadence server, at a URL they
+  derive locally, never from GitHub. To use a stolen key against a fleet the
+  attacker also has to get a file staged on that server.
+- Self-hosters who stage releases with `publish-agent.sh fetch` from GitHub are
+  more exposed. If an attacker holds the active key and can also publish a
+  release on the repository they fetch from, the server's check passes, because
+  the key is in its trust set. Such a server must pull the commit that replaces
+  the trust set (see below) before it fetches anything else.
+- `install.sh` is served by the Cadence server, over HTTPS rooted in the CA the
+  bootstrap pinned. A key given out of band (`CADENCE_MINISIGN_PUB`) therefore
+  protects against a compromised server only if the installer itself reached the
+  host out of band; a host that downloads `install.sh` from a compromised server
+  runs whatever installer that server serves, including one that skips the check.
+- The systemd units the installer fetches are **not** signed. Only the agent
+  binary has a signature.
+- Without `CADENCE_MINISIGN_PUB`, the installer checks only a SHA-256 that comes
+  from the same server as the binary. That catches truncation and staging
+  mistakes; it does not detect a malicious server.
+- For a fleet that is already enrolled, the real protection is `agent_upgrade`.
+  The agent verifies the downloaded binary against the trust set compiled into
+  itself, which neither the server nor a job can change, then checks the SHA-256,
+  the ELF architecture, and only then runs `-version`, before it replaces
+  itself.
+
+### If a signing key is compromised
+
+Both procedures use what the code does: every agent already trusts both keys, so
+a release signed by the key that is still good is accepted everywhere, and an
+agent's trust set changes only by installing a new agent binary. They are
+written from the real tooling; steps that are GitHub settings rather than code
+are marked as such.
+
+**The backup key is compromised or lost.** The active key still works, so the
+normal release path does the job. The same procedure replaces the backup key
+after any break-glass use (below): the key was decrypted in memory on a
+connected machine to sign, so it should not be trusted afterwards.
+
+1. Generate a new backup key pair offline, with a password
+   (`minisign -G -f -p agent/minisign-backup.pub -s <offline path>`). Keep the
+   old backup key's offline copy for now: it is still the only way to sign a
+   break-glass release until the fleet trusts the new one.
+2. In one commit, replace `agent/minisign-backup.pub` and `backupPubKeyText` in
+   `agent/internal/upgrade/trust.go` (`go test ./...` in `agent/` fails if they
+   differ), and add the `## <version>` section to `agent/CHANGELOG.md`.
+3. Release as usual: tag, let CI sign with the active key (`sign` checks against
+   `agent/minisign.pub`, which did not change), verify and publish the draft, then
+   `publish-agent.sh fetch <version>` on a server checkout that has the new
+   `agent/minisign-backup.pub`.
+4. Roll the release out with an `agent_upgrade` campaign
+   ([runbook](docs/agent-upgrade-campaigns-runbook.md)). Agents still on the old
+   trust set accept it (signed by the active key); the new binary trusts the
+   active key and the new backup key.
+5. Once the fleet has the new trust set, replace the maintainer's offline copy:
+   write the new key's encrypted backup with
+   `scripts/backup-signing-key.sh <new key file>` (it checks the key against the
+   trust set, so it works from step 2 on), store it offline, and retire the old
+   one. Give the new backup key to hosts you bootstrap from now on
+   (`CADENCE_MINISIGN_PUB2`).
+
+**The active key is compromised.** Until step 7, nothing signed by the new active
+key is accepted by hosts that run the old agent.
+
+1. Stop CI signing at once: delete the secret `MINISIGN_SECRET_KEY` from the
+   `release` environment. The `sign` job refuses to run with an empty secret, so
+   no CI release can be signed. Also restrict or delete the `release`
+   environment and review who has access to the repository (GitHub settings, not
+   enforced by the repository).
+2. Generate a new active key pair offline, without a password (CI cannot answer a
+   prompt): `minisign -G -W -f -p agent/minisign.pub -s <offline path>`.
+3. In one commit, replace `agent/minisign.pub` and `activePubKeyText` in
+   `agent/internal/upgrade/trust.go`, and add the `## <version>` section to
+   `agent/CHANGELOG.md`. Tag it `agent-v<version>` (the build tool needs that
+   exact tag on the checked-out commit, `scripts/check-release-source.sh`) and
+   push the commit and the tag as usual. The version is not used up. The release
+   workflow starts, `build` runs, and `sign` fails at its "write signing key"
+   step because the secret is empty (and if a secret were still there, at the
+   check of the signatures against the new `agent/minisign.pub`); `publish` needs
+   `sign`, so it is skipped and no Release is created. The Sigstore attestations
+   `build` produces are the only trace.
+4. Restore the backup key to a tmpfs, build and sign with it, then delete it:
+
+   ```sh
+   scripts/restore-signing-key.sh --to /dev/shm/backup.key <backup key>.enc
+   CADENCE_SIGNING_KEY=/dev/shm/backup.key \
+     scripts/build-agent-release.sh <version> /tmp/agent-<version>
+   rm -f /dev/shm/backup.key
+   ```
+
+   `minisign` asks for the key's password itself (once per architecture). The
+   build log must name the backup key (`2167C9939EC0F4FC`) as the one that
+   verified.
+5. Create the GitHub Release by hand from the bundle, so that servers that stage
+   with `publish-agent.sh fetch` can get it. `fetch` downloads exactly six
+   assets, named `cadence-agent-linux-<arch>`, `.sha256` and `.minisig` for
+   `amd64` and `arm64`, and the bundle's files already carry these names and the
+   same format as CI's (the `version` file in the bundle is not an asset: do not
+   upload it). Create it as a draft, check it, then publish it:
+
+   ```sh
+   cd /tmp/agent-<version>
+   gh release create agent-v<version> --repo Johlansl/cadence --verify-tag --draft \
+     --title "agent <version>" \
+     --notes "Break-glass release signed with the backup key. See agent/CHANGELOG.md." \
+     cadence-agent-linux-amd64 cadence-agent-linux-amd64.sha256 cadence-agent-linux-amd64.minisig \
+     cadence-agent-linux-arm64 cadence-agent-linux-arm64.sha256 cadence-agent-linux-arm64.minisig
+   # download the draft into an empty directory (gh must be logged in with access
+   # to the repository, drafts are not public) and check, for each arch, against
+   # the BACKUP key:
+   #   sha256sum -c cadence-agent-linux-<arch>.sha256
+   #   minisign -V -p agent/minisign-backup.pub -m cadence-agent-linux-<arch> \
+   #     -x cadence-agent-linux-<arch>.minisig
+   # then publish it:
+   gh release edit agent-v<version> --repo Johlansl/cadence --draft=false
+   ```
+
+   Such a release has no `.deb` and no Sigstore attestation: the workflow did not
+   build it.
+6. On the server, pull the commit and run `scripts/publish-agent.sh fetch
+   <version>`; or, for a server that cannot reach GitHub, transfer the bundle and
+   run `scripts/publish-agent.sh publish <version> /tmp/agent-<version>`.
+7. Run the `agent_upgrade` campaign for the whole fleet. Only hosts that have
+   installed this release trust the new active key. Do not rely on a CI release
+   (signed by the new key) reaching a host before that.
+8. Install the new key (the whole key file) as `MINISIGN_SECRET_KEY` in the
+   `release` environment once its protection is back in place, then delete the
+   private key file that was generated offline: the active key lives only in the
+   GitHub secret. Give the new active key to hosts you bootstrap from now on
+   (`CADENCE_MINISIGN_PUB`, with `CADENCE_MINISIGN_PUB2` for the backup key).
+9. Replace the backup key, with the procedure above: the one used here was
+   decrypted in memory on a connected machine. Do it once the fleet runs the new
+   trust set and CI signs again; it is an ordinary CI release, then a campaign,
+   then the update of the maintainer's offline copy.
+
+**A planned rotation of the active key** (no compromise) is this same
+procedure, from step 2 on; deleting the secret first is optional. It cannot be
+done any other way: the CI `sign` job verifies its signatures against the
+`agent/minisign.pub` of the commit it builds, so it can only sign with the key
+that file names, and `build-agent-release.sh` does the same for the keys of its
+own commit. A release that removes a key from the trust set therefore cannot be
+signed with that key, and an agent's trust set changes only through a new binary
+that it already trusts. The backup key is the one that can sign it.
+
+**What none of this can do.** A host that is unreachable keeps its old trust
+set, compromised key included, until it installs a release: it would still accept
+something signed with that key. Such a host is repaired by running the installer
+again with the new keys (`CADENCE_UPGRADE_ONLY=true`). And a compromised key is
+only dangerous to a fleet if the attacker can also get a file staged on its
+Cadence server (above); the server-side check by `publish-agent.sh` uses the
+committed trust set, so pull the commit that changes it first.
 
 ### TLS uses an internal CA
 
@@ -208,7 +414,8 @@ protection was aimed at a narrow case: the agent binary itself being exploited
 The residual risk after removing it is exactly that case, and it is judged
 acceptable for now because the agent already runs as root for the duration of
 the upgrade (a compromised agent has many equivalent options, setuid or not),
-the code is stdlib-only with no network input it acts on (communication is
+the agent is a static Go binary (standard library plus one pinned
+signature-verification module) with no inbound network input (communication is
 outbound-only, the server never pushes), and the alternative, an upgrade tool
 that breaks upgrades silently, is worse for the operator than the marginal
 hardening was worth. The primary defence against a compromised *server* is

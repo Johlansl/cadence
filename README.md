@@ -10,12 +10,13 @@ homelab (RHEL Satellite / Uyuni: many GB of RAM, an imposed host OS, mandatory
 DNS) and tools that only show you the problem without fixing it. It gives you
 **visibility and remediation** in one place, on a 2 vCPU / 2 GB box.
 
-> **Status: v1, single-operator.** It works and is in real use. There is no
-> RBAC or user management; a single shared basic-auth credential gates the
-> dashboard and read/admin API (on by default), and agents fully trust the
-> server. Operators can also sign in individually via OIDC, but permissions
-> are not differentiated. Read [SECURITY.md](SECURITY.md) before exposing it
-> beyond a trusted network.
+> **Status: v1, single-operator.** It works and is in real use. A single shared
+> basic-auth credential gates the dashboard and read/admin API (on by default),
+> and agents fully trust the server. Operators can also sign in individually via
+> OIDC, with two roles only: an account listed in `CADENCE_OIDC_OPERATOR_EMAILS`
+> is an operator, every other signed-in account is a reader (reads only), and
+> the shared admin key bypasses roles. There is no user management beyond that.
+> Read [SECURITY.md](SECURITY.md) before exposing it beyond a trusted network.
 
 ## What it does
 
@@ -43,17 +44,31 @@ DNS) and tools that only show you the problem without fixing it. It gives you
   and severity resolved from the NVD by the scheduler. Best-effort
   enrichment, not a vulnerability scan.
 - **Reboots**: per-host policy (`never` / `auto` / `prompt`), overridable per
-  job; the agent reboots only when the upgrade actually left one pending.
+  job; the agent reboots only when the upgrade actually left one pending. In a
+  campaign a rebooting host is not done until it proves its return (a new kernel
+  boot id plus fresh health), a reboot the server cannot prove stops the
+  campaign, and an optional fleet-wide budget (`CADENCE_MAX_CONCURRENT_REBOOTS`,
+  off by default) caps the reboots still awaiting proof. See
+  [docs/campaigns.md](docs/campaigns.md).
 - **Maintenance windows**: one recurring weekly/monthly window per host,
   turned into jobs by a scheduler service.
 - **Campaigns**: roll a dist-upgrade across many hosts in ordered waves, with
   a global concurrency cap, an observation pause between waves, and an
   automatic stop when failures pile up.
+- **Agent upgrades**: an `agent_upgrade` job, on its own or in a campaign
+  (canary, observation gate, stop on failure), replaces the agent binary on a
+  host from your own Cadence server. The agent checks the signature against the
+  trust set compiled into it, the checksum, the architecture and the version
+  before it installs; the server calls the job a success only once the host
+  reports the new version; and a target older than the running version is
+  refused. Hosts need agent 0.15.0 or later, see
+  [Upgrading the agent fleet](#upgrading-the-agent-fleet).
 - **History & retention**: append-only report and job logs, pruned on a
   configurable schedule.
 
 Not in v1 (see [docs/decisions.md](docs/decisions.md#v1-scope)):
-multi-host reboot orchestration, non-apt package managers, multi-user / RBAC.
+non-apt package managers, and user management beyond the two OIDC roles
+(operator and reader).
 Webhooks carry one generic signed JSON shape; chat-native formatting
 (Discord / Slack / Teams) stays out of scope by design, relay it yourself
 (see [docs/webhooks.md](docs/webhooks.md)).
@@ -64,7 +79,7 @@ Webhooks carry one generic signed JSON shape; chat-native formatting
                           monitored hosts
                      ┌───────────────────────┐
                      │  cadence-agent (Go)   │   systemd timers:
-                     │  one-shot, stdlib     │   ~30 min report, ~1 min job poll
+                     │  one-shot, static     │   ~30 min report, ~1 min job poll
                      └───────────┬───────────┘
                         outbound │ HTTPS only
                                  ▼
@@ -134,7 +149,7 @@ Instead of `--build`, pull the images published to GHCR on each `v*` release
 overlay and set `CADENCE_VERSION` in `.env` (omit it for `:latest`):
 
 ```sh
-echo 'CADENCE_VERSION=0.4.1' >> .env
+echo 'CADENCE_VERSION=<version>' >> .env   # a published v* release, see the Releases page
 docker compose -f docker-compose.yml -f docker-compose.release.yml pull
 docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
 ```
@@ -142,7 +157,7 @@ docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
 Each image carries a Sigstore build-provenance attestation:
 
 ```sh
-gh attestation verify oci://ghcr.io/johlansl/cadence-backend:0.4.1 --repo Johlansl/cadence
+gh attestation verify oci://ghcr.io/johlansl/cadence-backend:<version> --repo Johlansl/cadence
 ```
 
 `scripts/deploy.sh` on the central server always builds from source and ignores
@@ -151,14 +166,27 @@ this overlay.
 ## Add a monitored host
 
 **1. Publish an agent version, then stage the bootstrap assets** (once per
-server; repeat the version publish for each agent release):
+server; repeat the version publish for each agent release).
+
+The server needs `minisign` (`apt-get install -y minisign` on Debian/Ubuntu)
+and `curl`, and the publishing host must be linux/amd64: once the signature
+verifies, `publish-agent.sh` runs the staged amd64 binary with `-version`, and
+it refuses to publish from any other platform.
 
 ```sh
-# on the key-holder machine: build, smoke-test, hash and sign
-scripts/build-agent-release.sh <version> <outdir>
-# transfer <outdir> to the server, then on the server:
-scripts/publish-agent.sh publish <version> <outdir>  # verify + atomic stage
+# normal path: download release agent-v<version> from GitHub, verify it against
+# the two trusted keys (see "Signed agent releases"), stage it atomically
+scripts/publish-agent.sh fetch <version>
 scripts/publish-agent.sh assets                      # installer + units + CA
+```
+
+`fetch` trusts nothing it downloads: a version is staged only if its signatures
+verify against the committed keys, whatever the download looked like. For an
+air-gapped server, or for a release built by hand with the break-glass tool,
+verify and stage a local directory instead:
+
+```sh
+scripts/publish-agent.sh publish <version> <dir>     # verify + atomic stage
 ```
 
 This publishes the CA at the one intentionally unauthenticated path and every
@@ -209,13 +237,14 @@ curl -s https://<site>/api/v1/hosts                  # the host appears, last_se
 ### Install from a `.deb`
 
 Each `agent-v*` release also ships a `.deb` (`amd64` + `arm64`) as a Release
-asset, an `apt`-native upgrade channel for hosts you manage with a
-configuration tool. It installs the binary and `systemd` units but
-deliberately does not establish first-contact trust or create credentials;
-fresh hosts must still complete enrollment first.
+asset, for hosts you manage with a configuration tool. It installs the binary
+and `systemd` units but deliberately does not establish first-contact trust or
+create credentials; fresh hosts must still complete enrollment first. The
+`.deb` is not minisign-signed: check it with the `.sha256` file and the
+attestation, as below.
 
 ```sh
-VER=0.14.0; ARCH=amd64
+VER=0.15.0; ARCH=amd64   # the release you want
 curl -fsSLO "https://github.com/Johlansl/cadence/releases/download/agent-v$VER/cadence-agent_${VER}-1_${ARCH}.deb"
 curl -fsSLO "https://github.com/Johlansl/cadence/releases/download/agent-v$VER/cadence-agent_${VER}-1_${ARCH}.deb.sha256"
 sha256sum -c "cadence-agent_${VER}-1_${ARCH}.deb.sha256"
@@ -225,8 +254,10 @@ sudo apt install "./cadence-agent_${VER}-1_${ARCH}.deb"
 # Existing /etc/cadence/agent.env and mTLS credentials are preserved.
 ```
 
-`apt upgrade` then moves the agent forward on the next release. It is not served
-from an apt repository, download the `.deb` from the Release.
+The `.deb` is not served from an apt repository, so `apt upgrade` never picks up
+a newer agent: to move a host forward, download the new `.deb` from the Release
+and install it the same way (or use an `agent_upgrade` campaign, see
+[Upgrading the agent fleet](#upgrading-the-agent-fleet)).
 
 ### Trust Caddy's internal CA on a host
 
@@ -242,55 +273,127 @@ The fingerprint-pinned bootstrap does this for you.
 
 ### Signed agent releases
 
-The installer fetches the agent over authenticated HTTPS and also checks a
-SHA-256 sum to catch truncation or staging mistakes. Every release is
-[minisign](https://jedisct1.github.io/minisign/)-signed
-(`cadence-agent.minisig` beside the binary), and the server re-verifies each
-signature against the committed `agent/minisign.pub` before staging. Both the
-build and the signing happen on the key-holder machine (operator
-laptop/vault); the private key is never present on the Cadence server and the
-server never builds release bytes. This matters: had the server built what the
-operator signs, a root-compromised server could get an arbitrary binary signed
-just by serving malicious build output. Unsigned publishing does not exist.
+Every agent release is signed with
+[minisign](https://jedisct1.github.io/minisign/), and the server stages a
+version only if its signature verifies. The trust set is two public keys that
+are committed in the repository and compiled into the agent:
 
-For an additional release-signing check, install `minisign` on the host first
-(`apt-get install -y minisign` on Debian/Ubuntu), transfer the public key out of
-band and set it while running the trusted bootstrap:
+| Key | File | Key ID | Role |
+|---|---|---|---|
+| Active | `agent/minisign.pub` | `C9EDE89E1DEEED37` | signs every release, in CI |
+| Backup | `agent/minisign-backup.pub` | `2167C9939EC0F4FC` | kept offline by the maintainer; signs only an emergency release if the active key is lost or compromised |
+
+A signature is accepted when either key verifies it (active key first). The two
+must be different keys: `publish-agent.sh` and the agent both refuse a trust set
+that collapses to one.
+
+**How a release is made.** Pushing an `agent-v<version>` tag on the repository
+that runs `.github/workflows/release.yml` starts three jobs. `build` produces
+the binaries and `.deb` packages and attests them with Sigstore. `sign` runs in
+the GitHub environment `release`, the only job that sees the secret
+`MINISIGN_SECRET_KEY`: it signs both binaries and checks every signature against
+`agent/minisign.pub` before it goes on. `publish` creates the GitHub Release as
+a **draft**. The maintainer verifies the `.minisig` files by hand and then
+publishes the draft; nothing is published automatically. The protection of the
+`release` environment (required reviewer, restriction to `agent-v*` tags) is a
+repository setting that the workflow file cannot enforce, see
+[SECURITY.md](SECURITY.md#release-signing).
+
+**The server only verifies.** `publish-agent.sh fetch` downloads six assets
+(for amd64 and arm64: the binary, its `.sha256` and its `.minisig`) from the
+published release and stages them after checking the signatures against the
+trust set above. The server never holds a private key and never builds release
+bytes. This matters: had the server built what gets signed, a root-compromised
+server could obtain a signature on an arbitrary binary just by serving malicious
+build output. Unsigned publishing does not exist, and `publish-agent.sh` refuses
+to run without both public keys.
+
+**Break-glass.** If the active key is lost or compromised, or GitHub cannot be
+used, `scripts/build-agent-release.sh` builds, signs and self-checks a release
+by hand with the key named by `CADENCE_SIGNING_KEY` (normally the offline backup
+key; there is no default key path). Its signatures are verified against both
+public keys and the log names the one that matched. The result goes to the
+server with `publish-agent.sh publish <version> <dir>`, or, for servers that use
+`fetch`, the six files are uploaded by hand to a GitHub Release of the same tag.
+The header of the script
+and [docs/decisions.md](docs/decisions.md#agent-distribution--signing) describe it;
+the full procedures after a key compromise are in
+[SECURITY.md](SECURITY.md#if-a-signing-key-is-compromised).
+
+**An optional check on every host.** Install `minisign` on the host first
+(`apt-get install -y minisign` on Debian/Ubuntu), copy the public keys to it out
+of band, and name them when you run the trusted bootstrap:
 
 ```sh
 sudo CADENCE_DASHBOARD_URL=https://cadence.lan \
-  CADENCE_MINISIGN_PUB="$(cat agent/minisign.pub)" ./agent-bootstrap.sh
+  CADENCE_MINISIGN_PUB=/root/minisign.pub \
+  CADENCE_MINISIGN_PUB2=/root/minisign-backup.pub \
+  ./agent-bootstrap.sh
 ```
 
-A missing or invalid signature then aborts the install; if `minisign` is not
-installed the installer stops and tells you to install it. Minisign is an
-extra release-authenticity layer; server authentication already comes from the
-CA fingerprint carried in the enrollment code.
+- Each value is either the path of a key file (`agent/minisign.pub` as it is in
+  the repository: exactly two lines, the `untrusted comment:` line and the key
+  line, with LF line endings) or a bare key (`RW` followed by 54 base64
+  characters, for example `"$(tail -n1 agent/minisign.pub)"`). Pasting the whole
+  content of a key file as the value is refused.
+- `CADENCE_MINISIGN_PUB2` is optional. The installer tries `CADENCE_MINISIGN_PUB`
+  first, then `CADENCE_MINISIGN_PUB2` only if the first did not verify, and accepts
+  the binary if either does. The log names the key that verified, and a failure
+  lists the key IDs it tried. `CADENCE_MINISIGN_PUB2` without
+  `CADENCE_MINISIGN_PUB` is an error.
+- Both values are checked for shape before anything is downloaded, even when the
+  first key would verify: a malformed second key stops the install. Keys are never
+  fetched from the network.
+- If `minisign` is not installed the installer stops and tells you to install it.
+  Without `CADENCE_MINISIGN_PUB` only the SHA-256 published next to the binary is
+  checked, and that comes from the same server (see
+  [SECURITY.md](SECURITY.md#release-signing)).
 
-Back up the signing key on the key-holder machine with
-`scripts/backup-signing-key.sh`; it writes a passphrase-protected copy to keep
-with your offline secrets (`scripts/restore-signing-key.sh` restores it).
-Server backups deliberately never include key material. Never copy the private
-key onto the Cadence server, not even temporarily; losing the key means
-rotation, not disabling signatures. Key rotation is written up in
-[docs/decisions.md](docs/decisions.md#agent-distribution--signing). The exact
-build/sign/publish commands live in the `scripts/build-agent-release.sh` and
-`scripts/publish-agent.sh` headers.
+Minisign is an extra release-authenticity layer; server authentication already
+comes from the CA fingerprint carried in the enrollment code.
 
-The pre-built binaries attached to each GitHub **Release** (`agent-v*` tag) are
-a separate channel, not minisign-signed (the fleet key never touches CI), but
-each carries a Sigstore build-provenance attestation:
+**The offline backup key.** It is generated offline, never on a Cadence machine,
+and kept by the maintainer. `scripts/backup-signing-key.sh <key file>` writes an
+encrypted copy next to it after checking that it is one of the two trusted keys.
+`scripts/restore-signing-key.sh --to <path> <backup>` restores it, still
+encrypted, to a location you name (not inside a git repository; use `/dev/shm`
+and delete the file after use). Server backups deliberately never include key
+material.
+
+**The GitHub Release channel.** The binaries attached to each GitHub Release
+(`agent-v*` tag) carry their `.minisig` (signed by the active key) and a Sigstore
+build-provenance attestation. The `.deb` packages and the container images carry
+the attestation only.
 
 ```sh
-gh release download agent-v0.14.0 --repo Johlansl/cadence -p 'cadence-agent-linux-amd64*'
+gh release download agent-v<version> --repo Johlansl/cadence -p 'cadence-agent-linux-amd64*'
 sha256sum -c cadence-agent-linux-amd64.sha256
+minisign -V -p agent/minisign.pub -m cadence-agent-linux-amd64 \
+  -x cadence-agent-linux-amd64.minisig
 gh attestation verify cadence-agent-linux-amd64 --repo Johlansl/cadence
 ```
 
-**Running your own Cadence?** Replace `agent/minisign.pub` with your own key
-(`minisign -G -W -p agent/minisign.pub -s ~/.cadence/minisign.key`, keep the
-secret key off the repo) or delete it to publish unsigned. See
-[docs/decisions.md](docs/decisions.md#agent-distribution--signing).
+Releases from `0.15.0` on have a `.minisig`; earlier ones only have the
+attestation.
+
+**Running your own Cadence (a fork)?** The committed keys are the upstream
+project's, and you cannot hold their private halves, so `publish-agent.sh` would
+reject anything you build. Generate two key pairs of your own, offline:
+
+```sh
+# -f replaces the committed upstream .pub files
+minisign -G -W -f -p agent/minisign.pub        -s /path/to/active.key  # CI signing key, no password (CI cannot answer a prompt)
+minisign -G    -f -p agent/minisign-backup.pub -s /path/to/backup.key  # offline backup key, with a password
+```
+
+Then update `activePubKeyText` and `backupPubKeyText` in
+`agent/internal/upgrade/trust.go` to the same two keys (a test fails if they
+drift from the `.pub` files). To sign in CI, create a GitHub environment named
+`release` on your repository with the active key's secret file as
+`MINISIGN_SECRET_KEY` (then delete that file: the active key should live only in
+the secret); to download your releases instead of upstream's, set
+`CADENCE_FETCH_REPO=<owner>/<repo>` for `publish-agent.sh fetch`. There is no
+unsigned mode. See [docs/decisions.md](docs/decisions.md#agent-distribution--signing).
 
 ## Configuration
 
@@ -500,8 +603,9 @@ scripts/backup.sh
 # -> backups/<UTC timestamp>/{db.dump, caddy_data.tgz, client_pki.tgz, env, MANIFEST}
 ```
 
-The agent signing key is backed up separately on the key-holder machine, never
-in server backups, see [Signed agent releases](#signed-agent-releases).
+Server backups never contain signing keys (the active key lives only as a CI
+secret, the backup key is kept offline), see
+[Signed agent releases](#signed-agent-releases).
 
 `CADENCE_BACKUP_DIR` / `CADENCE_BACKUP_KEEP` (default 14) tune it. Run it
 nightly from cron. `scripts/restore-check.sh [dir]` restores the newest (or
@@ -535,27 +639,51 @@ immediately before.
 
 ### Upgrading the agent fleet
 
-Tag the release first so the built binary reports the right version:
-`git tag -a agent-v0.14.0 -m 'agent 0.14.0'` on the commit matching the newest
-`agent/CHANGELOG.md` heading, and push the tag.
-
-Then publish that exact version explicitly (the version is passed on the
-command line and stamped via `-ldflags`; an untagged build falls back to the
-`agentVersion` literal in `agent/cmd/agent/main.go`):
+Tag the release so the built binary reports the right version:
+`git tag -a agent-v0.15.0 -m 'agent 0.15.0'` on the commit matching the newest
+`agent/CHANGELOG.md` heading (the workflow fails if that `## 0.15.0` section is
+missing), and push the tag to the repository that runs the release workflow.
+CI builds and signs the release and creates a draft; once you have verified the
+`.minisig` files and published the draft, stage it on the server (the version is
+stamped via `-ldflags` from the tag name):
 
 ```sh
-# on the key-holder machine, from a checkout of agent-v0.14.0:
-scripts/build-agent-release.sh 0.14.0 /tmp/agent-0.14.0
-# transfer /tmp/agent-0.14.0 to the server, then on the server:
-scripts/publish-agent.sh publish 0.14.0 /tmp/agent-0.14.0
+scripts/publish-agent.sh fetch 0.15.0
 ```
 
+The break-glass path, for a release built by hand with the offline key, is
+`scripts/build-agent-release.sh` followed by `scripts/publish-agent.sh publish
+<version> <dir>`; see [Signed agent releases](#signed-agent-releases). Either way
+the hosts then pick the version up through an `agent_upgrade` campaign (see
+[docs/agent-upgrade-campaigns-runbook.md](docs/agent-upgrade-campaigns-runbook.md)).
+
 `scripts/deploy.sh` does not publish agent versions; it only restages the
-bootstrap assets. An already-enrolled host can authenticate the installer with
-its pinned CA and set `CADENCE_UPGRADE_ONLY=true`; this preserves its HMAC and
-mTLS credentials. Never fetch or execute the installer over HTTP. See
-`agent/CHANGELOG.md` and
-[docs/enrollment-mtls.md](docs/enrollment-mtls.md).
+bootstrap assets.
+
+**Hosts older than 0.15.0 need the installer once.** An agent up to `0.14.0`
+does not know `agent_upgrade`: it fails such a job with `unsupported job type`,
+and the server does not check the agent version for you. Some of those hosts
+also still run the binary from `/usr/local/bin`, which `agent_upgrade` refuses.
+Such a host goes through the installer one time, and campaigns work from then
+on. The installer is downloaded over HTTPS with the CA the host already pinned,
+saved to a file and run as root with `CADENCE_UPGRADE_ONLY=true`:
+
+```sh
+curl -fsSL --cacert /usr/local/share/ca-certificates/cadence-server.crt \
+  https://<site>/install.sh -o install.sh
+sudo CADENCE_BASE_URL=https://<site> \
+  CADENCE_VERIFIED_CA=/usr/local/share/ca-certificates/cadence-server.crt \
+  CADENCE_UPGRADE_ONLY=true sh install.sh
+```
+
+This mode refuses to run unless the host is already enrolled, preserves its HMAC
+token and mTLS credentials, installs the binary at `/usr/bin/cadence-agent` and
+refreshes the units. Add `CADENCE_MINISIGN_PUB` (and `CADENCE_MINISIGN_PUB2`) to
+that command to check the binary's signature as described above. Afterwards
+`scripts/check-agent-host-upgrade-readiness.sh` should print `6B-READY`;
+[docs/agent-path-migration.md](docs/agent-path-migration.md) covers the other
+historical states. Never fetch or execute the installer over HTTP. See also
+`agent/CHANGELOG.md` and [docs/enrollment-mtls.md](docs/enrollment-mtls.md).
 
 ### Rotating a host's agent token
 
@@ -680,16 +808,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 A single shared basic-auth credential gates the dashboard and read/admin API
 (on by default; agent endpoints are exempt), Caddy binds to loopback by
-default, and `CADENCE_ADMIN_KEY` authorizes every write. Successful admin
+default, and `CADENCE_ADMIN_KEY` authorizes writes (so does an operator's OIDC
+session, see below). Successful admin
 writes are recorded in an audit trail (`GET /api/v1/admin/audit`), though the
 shared key means it cannot attribute them to a real user. Operators can
 alternatively sign in via OIDC (optional, see [docs/oidc.md](docs/oidc.md));
 their writes audit under the verified subject. Agent tokens
 (`agent_tokens`) can be rotated, given an expiry and revoked. There is no
-RBAC or user management (OIDC signs operators in individually but grants no
-differentiated permissions), and agents fully trust the server. Before exposing Cadence
-beyond a network you control, read **[SECURITY.md](SECURITY.md)**. Report
-vulnerabilities privately (same file).
+user management beyond two OIDC roles (an account in
+`CADENCE_OIDC_OPERATOR_EMAILS` is an operator, any other signed-in account is a
+reader; the shared admin key bypasses roles), and agents fully trust the server.
+Before exposing Cadence beyond a network you control, read
+**[SECURITY.md](SECURITY.md)**. Report vulnerabilities privately (same file).
 
 ## License
 
