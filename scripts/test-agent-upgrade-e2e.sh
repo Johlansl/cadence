@@ -14,11 +14,44 @@
 #
 #   sh scripts/test-agent-upgrade-e2e.sh
 #
-# Needs: docker (privileged containers allowed), sh, git, minisign,
-# python3, curl, openssl, linux/amd64 (the release build smoke), and free
-# loopback ports 5433/8001/8081/8082/4443/8444. Takes ~35 minutes, mostly
-# real 60s timer cycles and one real 420s proof timeout. No production
-# secret is read or written; ./dist is snapshotted and restored.
+# Needs: docker (privileged containers allowed), sh, git, tar, minisign,
+# python3, curl, openssl, linux/amd64 (the release build smoke), free
+# loopback ports 5433/8001/8081/8082/4443/8444 and 4 GiB free on the Docker
+# filesystem. Takes ~35 minutes, mostly real 60s timer cycles and one real
+# 420s proof timeout.
+#
+# ISOLATION: what this test guarantees, and what it does not.
+#
+# Guaranteed:
+# - It never works in the checkout you start it from. The script first copies
+#   what git tracks or shows as untracked (ignored files stay behind: no
+#   .env, no dist/ content, no backups/) into a throwaway directory under
+#   $TMPDIR and runs itself from there; the copy is removed at the end. Run
+#   directly inside a copy, it refuses when a running container bind-mounts
+#   that directory.
+# - It never reads the checkout's .env. It writes its own disposable .env
+#   (random test secrets) in the copy, and that file also turns off every
+#   setting that makes the server call out: advisory feeds, NVD CVE scores
+#   (and its API key is empty), OIDC, private-address webhook delivery.
+# - Docker names cannot collide with a production stack: compose project
+#   `e2e` (containers e2e-*, network e2e_default, volumes e2e_*), images
+#   e2e-backend, e2e-frontend and e2e-host (compose files force these names;
+#   the production tags cadence-backend and cadence-frontend are never
+#   written), host ports only on 127.0.0.1 and none of the production ones.
+#   It refuses to start if any e2e* container, network or volume exists.
+# - At the end it proves the non-e2e side is unchanged: same containers (id,
+#   start time, image id), same production image tags, same ./dist hash.
+#
+# NOT guaranteed:
+# - The two host containers (e2e-host-a, e2e-host-b) run a real systemd and
+#   are started --privileged with --cgroupns=host and the host's
+#   /sys/fs/cgroup mounted read-write. They are not sandboxed from the Docker
+#   host, and they have normal outbound network access (apt during enrolment
+#   and install). Do not run this on a machine whose availability you cannot
+#   afford: take a VM snapshot first.
+# - It shares the Docker daemon, the CPU, the memory, the disk and the
+#   BuildKit cache with whatever else runs there. Built images e2e-* stay
+#   afterwards (remove them yourself to reclaim space).
 #
 # Verdict: exit 0 prints PRIMITIVE UNITAIRE VALIDEE POUR ORCHESTRATION,
 # anything else prints PRIMITIVE NON VALIDEE plus the failed assertion.
@@ -27,6 +60,18 @@ set -eu
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo=$(CDPATH='' cd -- "$here/.." && pwd)
+
+# shellcheck source=scripts/e2e-workdir.sh
+. "$here/e2e-workdir.sh"
+
+# Launcher half: outside a copy (no marker), make a copy and run from it.
+if [ ! -f "$repo/$E2E_MARKER" ]; then
+	rc=0
+	e2e_launch "$repo" "scripts/$(basename -- "$0")" || rc=$?
+	exit "$rc"
+fi
+E2E_ORIGIN=$(sed -n 's/^origin=//p' "$repo/$E2E_MARKER")
+[ -n "$E2E_ORIGIN" ] || { echo "e2e: $repo/$E2E_MARKER has no origin: refusing" >&2; exit 1; }
 cd "$repo"
 
 V_N=90.0.1
@@ -93,7 +138,9 @@ e2e_cleanup() {
 	rm -rf "$T"
 }
 
-COMPOSE="docker compose -p e2e -f $repo/docker-compose.yml -f $repo/docker-compose.e2e.yml --env-file $T/e2e.env"
+# The env file is the disposable .env this script writes in the copy (phase 2),
+# never a checkout's own .env: compose reads that same file for env_file.
+COMPOSE="docker compose -p e2e -f $repo/docker-compose.yml -f $repo/docker-compose.e2e.yml --env-file $repo/.env"
 
 # --- phase 0: preflight -------------------------------------------------------
 log 'phase 0/11: preflight'
@@ -102,6 +149,15 @@ if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != "x86_64" ]; then
 	die 'need linux/amd64'
 fi
 docker info >/dev/null 2>&1 || die 'docker unreachable'
+# Isolation guards: this must be a copy nobody mounts, with no .env of a
+# checkout, no e2e* leftovers, and enough disk (the root filesystem of a
+# small production VM was at 98 % when this was written).
+[ ! -e "$repo/.env" ] || die "refusing: $repo/.env exists in the copy (it must never hold a real .env)"
+e2e_refuse_if_mounted "$(CDPATH='' cd -- "$repo" && pwd -P)" || die 'refusing: a running container mounts this directory'
+e2e_check_no_leftovers || die 'refusing: e2e* resources already exist'
+e2e_check_free_space "$(docker info --format '{{.DockerRootDir}}')" 4194304 'the Docker filesystem' \
+	|| die 'refusing: less than 4 GiB free for Docker'
+e2e_check_free_space "$repo" 1048576 'the work directory' || die 'refusing: less than 1 GiB free in the work directory'
 for p in 5433 8001 8081 8082 4443 8444; do
 	if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('127.0.0.1',$p)) == 0 else 1)"; then
 		die "loopback port $p is busy (stop whatever holds it)"
@@ -116,14 +172,10 @@ esac
 if grep -n 'docker compose' "$0" | grep -v -- '-p e2e' | grep -q .; then
 	die 'a compose call bypasses the -p e2e isolation'
 fi
-# Snapshot a pre-existing dev stack, if any: the final phase proves the
-# run never recreated it (same container id + start time).
-if docker inspect cadence-backend-1 >/dev/null 2>&1; then
-	DEV_BACKEND=$(docker inspect --format '{{.Id}}{{.State.StartedAt}}' cadence-backend-1)
-else
-	DEV_BACKEND=none
-fi
-pass 'preflight (tools, platform, ports free, compose isolated)'
+# Snapshot everything outside the e2e project: the final phase proves the run
+# changed none of it (containers, production image tags, the origin's ./dist).
+PROD_BEFORE=$(e2e_prod_snapshot "$E2E_ORIGIN")
+pass 'preflight (tools, platform, ports free, disk, compose isolated, no leftovers)'
 
 # --- helpers ------------------------------------------------------------------
 api() { # api METHOD PATH [JSON] -> body; dies on transport/HTTP error
@@ -195,18 +247,21 @@ mkdir -p "$RREL"
 cp -r "$repo/agent" "$RREL/agent"
 rm -rf "$RREL/agent/bin" # local build outputs are gitignored for real; keep the tag clean
 mkdir -p "$RREL/agent/bin" # user-owned dir: docker-as-root drops files we can still delete
-# The whole test fleet (N included) must embed the TEST root of trust,
-# exactly as a production fleet embeds the production one: swap both the
-# committed pubkey file and the compiled literal, keeping them in sync.
+# The whole test fleet (N included) must embed the TEST active key as its
+# root of trust, exactly as a production fleet embeds the production one:
+# swap both the committed pubkey file and the compiled activePubKeyText
+# literal, keeping them in sync. The committed backup key (agent/
+# minisign-backup.pub, copied above with the rest of agent/) stays as the
+# second trust set member: it is a public key, and nothing here signs with it.
 cp "$T/e2e-minisign.pub" "$RREL/agent/minisign.pub"
 python3 - "$RREL/agent/internal/upgrade/trust.go" "$T/e2e-minisign.pub" <<'EOF' \
 	|| die 'test-key embed patch failed'
 import re, sys
 dst, pub = sys.argv[1], sys.argv[2]
 comment, key = open(pub).read().strip().split('\n')
-new = 'const trustedPubKeyText = `%s\\n%s`' % (comment, key)
+new = 'const activePubKeyText = `%s\\n%s`' % (comment, key)
 src = open(dst).read()
-src, n = re.subn(r'const trustedPubKeyText = `[^`]*`', new, src)
+src, n = re.subn(r'const activePubKeyText = `[^`]*`', new, src)
 assert n == 1, 'const block not found'
 open(dst, 'w').write(src)
 EOF
@@ -220,13 +275,12 @@ EOF
 for v in $ALL_VERS; do
 	log "building release $v"
 	CADENCE_RELEASE_REPO=$RREL CADENCE_SIGNING_KEY=$T/e2e-minisign.key \
-		CADENCE_RELEASE_PUBKEY=$T/e2e-minisign.pub \
 		sh "$repo/scripts/build-agent-release.sh" "$v" "$T/bundle-$v" >/dev/null \
 		|| die "build-agent-release.sh $v failed"
 	test -x "$T/bundle-$v/cadence-agent-linux-amd64" || die "bundle $v missing amd64"
 	rm -f "$RREL/agent/bin"/* # keep the next tag-discipline check clean
 done
-pass 'seven key-holder builds, signed with the test key (server never saw it)'
+pass 'seven break-glass builds, signed with the test key (server never saw it)'
 
 # --- phase 2: throwaway stack ---------------------------------------------------
 log 'phase 2/11: starting throwaway stack'
@@ -234,7 +288,28 @@ PG_USER=e2e; PG_PASSWORD=$(openssl rand -hex 16); PG_DB=e2e
 ADMIN_KEY=$(openssl rand -hex 24)
 FERNET=$(python3 -c 'import secrets,base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())')
 PROXY_KEY=$(openssl rand -hex 24)
-cat >"$T/e2e.env" <<EOF
+# The disposable .env of this run: random test secrets, and every setting that
+# would make the server call out turned off (compose passes this file to the
+# db, backend and scheduler through env_file, and reads it for interpolation):
+#   CADENCE_ADVISORY_REFRESH_ENABLED  Debian DSA/DLA feeds       (default on)
+#   CADENCE_CVE_SCORE_REFRESH_ENABLED NVD CVE scores             (default on)
+#   CADENCE_NVD_API_KEY               the NVD credential         (left empty)
+#   CADENCE_ADVISORY_FEED_URLS        custom feed URLs           (left empty)
+#   CADENCE_OIDC_ENABLED, _ISSUER     OIDC discovery and login   (off, empty)
+#   CADENCE_WEBHOOK_ALLOW_PRIVATE_IPS webhook delivery to private addresses
+#                                     (off: the test webhook points at
+#                                     127.0.0.1:9 and must stay undeliverable)
+# What stays outbound is not a setting: the host containers reach the
+# Internet (apt), see the header.
+umask 077
+cat >"$repo/.env" <<EOF
+CADENCE_ADVISORY_REFRESH_ENABLED=false
+CADENCE_CVE_SCORE_REFRESH_ENABLED=false
+CADENCE_NVD_API_KEY=
+CADENCE_ADVISORY_FEED_URLS=
+CADENCE_OIDC_ENABLED=false
+CADENCE_OIDC_ISSUER=
+CADENCE_WEBHOOK_ALLOW_PRIVATE_IPS=false
 POSTGRES_USER=$PG_USER
 POSTGRES_PASSWORD=$PG_PASSWORD
 POSTGRES_DB=$PG_DB
@@ -745,13 +820,13 @@ pass 'events: one canary failed, campaign.stopped, nothing for stage 2'
 
 # --- phase 10: isolation re-verified + verdict -----------------------------------------
 log 'phase 10/11: done'
-if [ "$DEV_BACKEND" = none ]; then
-	pass 'no dev stack pre-existed; e2e project only'
-else
-	[ "$(docker inspect --format '{{.Id}}{{.State.StartedAt}}' cadence-backend-1 2>/dev/null)" = "$DEV_BACKEND" ] \
-		|| die 'dev stack was recreated mid-run (isolation broken)'
-	pass 'dev stack untouched (same container id + start time)'
+PROD_AFTER=$(e2e_prod_snapshot "$E2E_ORIGIN")
+if [ "$PROD_AFTER" != "$PROD_BEFORE" ]; then
+	log 'isolation broken: the non-e2e side changed during the run'
+	printf '%s\n' "--- before" "$PROD_BEFORE" "--- after" "$PROD_AFTER" >&2
+	die 'containers, production image tags or the origin dist changed (isolation broken)'
 fi
+pass 'non-e2e side untouched (containers id/start/image, cadence-backend and cadence-frontend tags, origin dist hash)'
 log "PASS count (main flow): $PASS"
 log 'PRIMITIVE UNITAIRE VALIDEE POUR ORCHESTRATION'
 log 'FLEET CAMPAIGN E2E GREEN (canary + gate + blast radius contained)'
