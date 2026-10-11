@@ -671,5 +671,45 @@ chain_case() {
 chain_case kept
 chain_case removed
 
+echo "7. minisign missing is found before anything is downloaded"
+# A PATH that has every tool the script needs, the fake tools, and no minisign.
+NOMINI=$T/bin-nominisign
+mkdir -p "$NOMINI"
+for tool in sh sed od tr base64 awk sha256sum mktemp rm grep cat head wc chmod timeout env date mkdir cp cut dirname; do
+	if p=$(command -v "$tool" 2>/dev/null); then ln -sf "$p" "$NOMINI/$tool"; fi
+done
+cp -p "$BIN"/* "$NOMINI"/
+if PATH=$NOMINI command -v minisign >/dev/null 2>&1; then
+	echo "install-test: the minisign-free PATH still finds minisign" >&2
+	exit 1
+fi
+
+new_case nomini a
+run_install PATH="$NOMINI" CADENCE_MINISIGN_PUB="$T/keys/a.pub"
+expect_fail "PUB set, minisign missing" "CADENCE_MINISIGN_PUB is set but minisign is not installed"
+if [ "$(downloads)" -eq 0 ]; then ok "PUB set, minisign missing: no download"; else fail "PUB set, minisign missing: $(downloads) download(s)"; fi
+
+new_case nomini2 a
+run_install PATH="$NOMINI" CADENCE_MINISIGN_PUB="$T/keys/a.pub" CADENCE_MINISIGN_PUB2="$T/keys/b.pub"
+expect_fail "PUB and PUB2 set, minisign missing" "CADENCE_MINISIGN_PUB is set but minisign is not installed"
+if [ "$(downloads)" -eq 0 ]; then ok "PUB and PUB2 set, minisign missing: no download"; else fail "PUB and PUB2 set, minisign missing: $(downloads) download(s)"; fi
+
+new_up_case nomini v:0.15.0
+mk_agent "$(LEGACY)" v:0.14.0
+: >"$TRACE"
+run_up PATH="$NOMINI" "$PUB_A"
+expect_up_refuse "upgrade-only, minisign missing" "CADENCE_MINISIGN_PUB is set but minisign is not installed" 0
+if [ ! -s "$TRACE" ]; then ok "upgrade-only, minisign missing: no binary was executed"; else fail "something ran: $(cat "$TRACE")"; fi
+
+# a malformed key is still reported as such, before the tool check
+new_case nomini3 a
+run_install PATH="$NOMINI" CADENCE_MINISIGN_PUB="RWQnotakey"
+expect_fail "malformed PUB with minisign missing: the shape error comes first" "CADENCE_MINISIGN_PUB must be"
+
+# no key asked for: minisign is not needed, the sha256-only path still works
+new_case nomini4 a
+run_install PATH="$NOMINI"
+expect_pass "no key, minisign missing: sha256 only" none
+
 echo "install-test: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]

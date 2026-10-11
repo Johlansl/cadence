@@ -259,6 +259,12 @@ fi
 if [ -n "$pub2" ]; then
 	check_pub CADENCE_MINISIGN_PUB2 "$pub2" || exit 1
 fi
+# A key was asked for, so the tool that checks it must be there: found out
+# now, not after two downloads.
+if [ -n "$pub" ] && ! command -v minisign >/dev/null 2>&1; then
+	echo "install.sh: CADENCE_MINISIGN_PUB is set but minisign is not installed" >&2
+	exit 1
+fi
 if [ "$upgrade_only" = "true" ]; then
 	if [ -z "$pub" ]; then
 		echo "install.sh: CADENCE_UPGRADE_ONLY requires CADENCE_MINISIGN_PUB: the downgrade check executes the downloaded binary, which is only safe once its signature is verified" >&2
@@ -304,10 +310,6 @@ if [ "$want" != "$got" ]; then
 fi
 
 if [ -n "$pub" ]; then
-	if ! command -v minisign >/dev/null 2>&1; then
-		echo "install.sh: CADENCE_MINISIGN_PUB is set but minisign is not installed" >&2
-		exit 1
-	fi
 	fetch agent/cadence-agent.minisig "$temporary/cadence-agent.minisig"
 	# PUB first; PUB2 only when it is set and the first verification failed.
 	if try_key "$pub"; then
