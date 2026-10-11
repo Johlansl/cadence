@@ -545,11 +545,18 @@ fi
 # publish refuses. Reuses the same bundle shape as the existing foreign-
 # signature case (test 10) but asserted here as the 2-key end state.
 minisign -G -W -p "$T/keys/other2.pub" -s "$T/keys/other2.key" >/dev/null 2>&1
-mksigned 9.9.16 "$T/b16"
+# The version is above everything published so far (9.9.42), so that the refusal
+# can only come from the signature check and not from the publish floor.
+mksigned 9.9.43 "$T/b16"
 minisign -S -s "$T/keys/other2.key" -m "$T/b16/cadence-agent-linux-amd64" \
 	-t "forged" >/dev/null 2>&1
-expect_fail "neither key verifies" sh scripts/publish-agent.sh publish 9.9.16 "$T/b16"
-if [ ! -e "$DIST/agent/v9.9.16" ]; then
+out=$(sh scripts/publish-agent.sh publish 9.9.43 "$T/b16" 2>&1) && res=0 || res=$?
+if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "no trusted key verified the signature"; then
+	ok "neither key verifies: refused by the signature check, not by anything else"
+else
+	fail "neither key verifies (exit=$res): $out"
+fi
+if [ ! -e "$DIST/agent/v9.9.43" ]; then
 	ok "no public dir when neither trusted key verifies"
 else
 	fail "public dir when neither trusted key verifies"
@@ -557,31 +564,31 @@ fi
 
 # 17. active and backup public keys share a key ID: refuse to start, no
 # bundle inspection at all. Scoped to this one invocation only.
-mksigned 9.9.17 "$T/b17"
+mksigned 9.9.44 "$T/b17"
 CADENCE_PUBLISH_PUBKEY_BACKUP="$PUB" \
-	expect_fail "duplicate trust keys" sh scripts/publish-agent.sh publish 9.9.17 "$T/b17"
-if [ ! -e "$DIST/agent/v9.9.17" ]; then
+	expect_fail "duplicate trust keys" sh scripts/publish-agent.sh publish 9.9.44 "$T/b17"
+if [ ! -e "$DIST/agent/v9.9.44" ]; then
 	ok "no public dir when active and backup keys are identical"
 else
 	fail "public dir when active and backup keys are identical"
 fi
 
 # 18. backup public key absent: refuse to start
-mksigned 9.9.18 "$T/b18"
+mksigned 9.9.45 "$T/b18"
 CADENCE_PUBLISH_PUBKEY_BACKUP="$T/keys/absent-backup.pub" \
-	expect_fail "backup pubkey absent" sh scripts/publish-agent.sh publish 9.9.18 "$T/b18"
-if [ ! -e "$DIST/agent/v9.9.18" ]; then
+	expect_fail "backup pubkey absent" sh scripts/publish-agent.sh publish 9.9.45 "$T/b18"
+if [ ! -e "$DIST/agent/v9.9.45" ]; then
 	ok "no public dir when the backup public key is absent"
 else
 	fail "public dir when the backup public key is absent"
 fi
 
 # 19. backup public key malformed: refuse to start
-mksigned 9.9.19 "$T/b19"
+mksigned 9.9.46 "$T/b19"
 printf 'not a minisign key\nat all\n' >"$T/keys/garbage-backup.pub"
 CADENCE_PUBLISH_PUBKEY_BACKUP="$T/keys/garbage-backup.pub" \
-	expect_fail "backup pubkey malformed" sh scripts/publish-agent.sh publish 9.9.19 "$T/b19"
-if [ ! -e "$DIST/agent/v9.9.19" ]; then
+	expect_fail "backup pubkey malformed" sh scripts/publish-agent.sh publish 9.9.46 "$T/b19"
+if [ ! -e "$DIST/agent/v9.9.46" ]; then
 	ok "no public dir when the backup public key is malformed"
 else
 	fail "public dir when the backup public key is malformed"
@@ -600,15 +607,15 @@ for tool in dirname pwd find wc tr awk sha256sum od sed cat mkdir rm cp mv \
 	ln -sf "$p" "$NO_MINISIGN_BIN/$tool"
 done
 real_sh=$(command -v sh)
-mksigned 9.9.20 "$T/b20"
-out=$(PATH="$NO_MINISIGN_BIN" "$real_sh" scripts/publish-agent.sh publish 9.9.20 "$T/b20" 2>&1) \
+mksigned 9.9.47 "$T/b20"
+out=$(PATH="$NO_MINISIGN_BIN" "$real_sh" scripts/publish-agent.sh publish 9.9.47 "$T/b20" 2>&1) \
 	&& res=0 || res=$?
 if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -qi "minisign"; then
 	ok "missing minisign: clear message and nonzero exit"
 else
 	fail "missing minisign: unclear behavior (exit=$res): $out"
 fi
-if [ ! -e "$DIST/agent/v9.9.20" ]; then
+if [ ! -e "$DIST/agent/v9.9.47" ]; then
 	ok "no public dir when minisign is missing"
 else
 	fail "public dir when minisign is missing"
@@ -1079,6 +1086,12 @@ if [ "${DOCKER_TESTS:-0}" = "1" ]; then
 		if [ -z "$rel" ]; then
 			fail "no released version heading in agent/CHANGELOG.md"
 		else
+			# The released version (0.15.0 and so on) is older than the 9.9.x test
+			# releases the shared dist holds by now, and the publish floor would
+			# refuse it. A fresh dist is what a server that never published
+			# anything has, which is the case this part stands for.
+			BG_DIST=$T/bg-dist
+			mkdir -p "$BG_DIST/agent"
 			R=$T/rbuild
 			mkdir -p "$R/agent"
 			cp agent/go.mod agent/go.sum agent/CHANGELOG.md "$R/agent/"
@@ -1102,14 +1115,14 @@ if [ "${DOCKER_TESTS:-0}" = "1" ]; then
 			else
 				fail "bundle holds $n files, want 7"
 			fi
-			if sh scripts/publish-agent.sh publish "$rel" "$T/exp" >/dev/null 2>&1; then
+			if CADENCE_PUBLISH_DIST="$BG_DIST" sh scripts/publish-agent.sh publish "$rel" "$T/exp" >/dev/null 2>&1; then
 				ok "real bundle publishes end to end"
-				if [ -e "$DIST/agent/v$rel/version" ]; then
+				if [ -e "$BG_DIST/agent/v$rel/version" ]; then
 					fail "version file leaked into served dir"
 				else
 					ok "served dir holds the triplets only"
 				fi
-				if [ "$("$DIST/agent/v$rel/cadence-agent-linux-amd64" -version)" = "$rel" ]; then
+				if [ "$("$BG_DIST/agent/v$rel/cadence-agent-linux-amd64" -version)" = "$rel" ]; then
 					ok "staged amd64 binary reports the release"
 				else
 					fail "staged amd64 binary misreports its version"
