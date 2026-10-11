@@ -530,9 +530,9 @@ fi
 # the active key, not the backup, for a bundle only the active key signed
 # -- already exercised by every earlier test; assert the log explicitly
 # once here).
-mksigned 9.9.15 "$T/b15"
+mksigned 9.9.42 "$T/b15"
 active_id=$(sed -n '1p' "$PUB" | sed 's/^.*key //')
-out=$(sh scripts/publish-agent.sh publish 9.9.15 "$T/b15" 2>&1) && res=0 || res=$?
+out=$(sh scripts/publish-agent.sh publish 9.9.42 "$T/b15" 2>&1) && res=0 || res=$?
 if [ "$res" -eq 0 ] && printf '%s' "$out" | grep -qF "key $active_id"; then
 	ok "active key alone verifies and is logged"
 else
@@ -612,6 +612,58 @@ else
 	fail "public dir when minisign is missing"
 fi
 
+# 21. floor: a version older than the newest one already published is refused
+# by both commands, before anything is staged or downloaded, and the dist
+# tree and the unversioned install triplet stay byte for byte as they were.
+mksigned 9.9.2 "$T/b21"
+before=$(snapshot)
+out=$(sh scripts/publish-agent.sh publish 9.9.2 "$T/b21" 2>&1) && res=0 || res=$?
+if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "is older than the newest published version 9.9.42"; then
+	ok "floor: publish of an older version refused, naming the newest"
+else
+	fail "floor: publish of an older version (exit=$res): $out"
+fi
+if [ "$(snapshot)" = "$before" ]; then
+	ok "floor: refusal leaves dist and the install triplet untouched"
+else
+	fail "floor: dist changed on a refused older version"
+fi
+out=$(CADENCE_FETCH_BASE_URL="https://127.0.0.1:1" \
+	sh scripts/publish-agent.sh fetch 9.9.2 2>&1) && res=0 || res=$?
+if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "is older than the newest published version" &&
+	! printf '%s' "$out" | grep -q "download failed"; then
+	ok "floor: fetch of an older version refused before any download"
+else
+	fail "floor: fetch of an older version (exit=$res): $out"
+fi
+
+# 22. floor: versions compare as numbers, not as text, in a fresh dist. 9.10.0
+# is newer than 9.9.99 (a text comparison says the opposite), so after 9.10.0
+# 9.9.99 is refused and 9.10.1 is accepted.
+FLOOR_DIST="$T/floor-dist"
+mkdir -p "$FLOOR_DIST/agent"
+mksigned 9.10.0 "$T/b22a"
+mksigned 9.9.99 "$T/b22b"
+mksigned 9.10.1 "$T/b22c"
+if CADENCE_PUBLISH_DIST="$FLOOR_DIST" sh scripts/publish-agent.sh publish 9.10.0 "$T/b22a" >/dev/null 2>&1; then
+	ok "floor: 9.10.0 published into an empty dist"
+else
+	fail "floor: 9.10.0 refused in an empty dist"
+fi
+out=$(CADENCE_PUBLISH_DIST="$FLOOR_DIST" sh scripts/publish-agent.sh publish 9.9.99 "$T/b22b" 2>&1) && res=0 || res=$?
+if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -q "older than the newest published version 9.10.0" &&
+	[ ! -e "$FLOOR_DIST/agent/v9.9.99" ]; then
+	ok "floor: 9.9.99 refused after 9.10.0 (numeric comparison)"
+else
+	fail "floor: 9.9.99 after 9.10.0 (exit=$res): $out"
+fi
+if CADENCE_PUBLISH_DIST="$FLOOR_DIST" sh scripts/publish-agent.sh publish 9.10.1 "$T/b22c" >/dev/null 2>&1 &&
+	[ -e "$FLOOR_DIST/agent/v9.10.1" ]; then
+	ok "floor: 9.10.1 accepted after 9.10.0"
+else
+	fail "floor: 9.10.1 refused after 9.10.0"
+fi
+
 # --- part 1c: fetch, against a throwaway local HTTPS server -------------
 # No real network to GitHub. A real curl client against a real TLS
 # listener is trusted the standard curl way (CURL_CA_BUNDLE naming our
@@ -655,14 +707,14 @@ else
 		-keyout "$T/tls/key.pem" -out "$T/tls/cert.pem" \
 		-subj '/CN=127.0.0.1' >/dev/null 2>&1
 
-	# Nominal release (9.9.21), one with a missing asset (9.9.22, no
-	# .minisig), one signed by a foreign key (9.9.23). Laid out as a real
+	# Nominal release (9.9.61), one with a missing asset (9.9.62, no
+	# .minisig), one signed by a foreign key (9.9.63). Laid out as a real
 	# GitHub Release would serve them: releases/download/agent-v<ver>/<name>.
-	mkrelease_assets 9.9.21 "$ASSETDIR/agent-v9.9.21" "$KEY"
-	mkrelease_assets 9.9.22 "$ASSETDIR/agent-v9.9.22" "$KEY"
-	rm "$ASSETDIR/agent-v9.9.22/cadence-agent-linux-amd64.minisig"
+	mkrelease_assets 9.9.61 "$ASSETDIR/agent-v9.9.61" "$KEY"
+	mkrelease_assets 9.9.62 "$ASSETDIR/agent-v9.9.62" "$KEY"
+	rm "$ASSETDIR/agent-v9.9.62/cadence-agent-linux-amd64.minisig"
 	minisign -G -W -p "$T/keys/other3.pub" -s "$T/keys/other3.key" >/dev/null 2>&1
-	mkrelease_assets 9.9.23 "$ASSETDIR/agent-v9.9.23" "$T/keys/other3.key"
+	mkrelease_assets 9.9.63 "$ASSETDIR/agent-v9.9.63" "$T/keys/other3.key"
 
 	python3 -c '
 import http.server, ssl, sys
@@ -729,8 +781,8 @@ httpd.serve_forever()
 	fi
 
 	# 23. missing asset in the release: clean failure, nothing staged.
-	expect_fail "fetch: missing release asset" sh scripts/publish-agent.sh fetch 9.9.22
-	if [ ! -e "$DIST/agent/v9.9.22" ]; then
+	expect_fail "fetch: missing release asset" sh scripts/publish-agent.sh fetch 9.9.62
+	if [ ! -e "$DIST/agent/v9.9.62" ]; then
 		ok "fetch: no public dir when a release asset is missing"
 	else
 		fail "fetch: public dir when a release asset is missing"
@@ -742,8 +794,8 @@ httpd.serve_forever()
 	fi
 
 	# 24. invalid signature (foreign key): clean failure, nothing staged.
-	expect_fail "fetch: invalid signature" sh scripts/publish-agent.sh fetch 9.9.23
-	if [ ! -e "$DIST/agent/v9.9.23" ]; then
+	expect_fail "fetch: invalid signature" sh scripts/publish-agent.sh fetch 9.9.63
+	if [ ! -e "$DIST/agent/v9.9.63" ]; then
 		ok "fetch: no public dir for a foreign-signed release"
 	else
 		fail "fetch: public dir for a foreign-signed release"
@@ -751,20 +803,20 @@ httpd.serve_forever()
 
 	# 25. nominal case: correct staging, identical to a local publish of
 	# the same bytes.
-	if sh scripts/publish-agent.sh fetch 9.9.21 >/dev/null 2>&1; then
-		n=$(find "$DIST/agent/v9.9.21" -type f | wc -l)
+	if sh scripts/publish-agent.sh fetch 9.9.61 >/dev/null 2>&1; then
+		n=$(find "$DIST/agent/v9.9.61" -type f | wc -l)
 		if [ "$n" = "6" ]; then
 			ok "fetch: nominal case stages 6 files"
 		else
 			fail "fetch: nominal case staged $n files, want 6"
 		fi
-		if cmp -s "$ASSETDIR/agent-v9.9.21/cadence-agent-linux-amd64" \
-			"$DIST/agent/v9.9.21/cadence-agent-linux-amd64"; then
+		if cmp -s "$ASSETDIR/agent-v9.9.61/cadence-agent-linux-amd64" \
+			"$DIST/agent/v9.9.61/cadence-agent-linux-amd64"; then
 			ok "fetch: staged bytes are byte-identical to the release asset"
 		else
 			fail "fetch: staged bytes differ from the release asset"
 		fi
-		if cmp -s "$DIST/agent/v9.9.21/cadence-agent-linux-amd64" "$DIST/agent/cadence-agent"; then
+		if cmp -s "$DIST/agent/v9.9.61/cadence-agent-linux-amd64" "$DIST/agent/cadence-agent"; then
 			ok "fetch: unversioned triplet refreshed from amd64"
 		else
 			fail "fetch: unversioned triplet not refreshed"
@@ -946,12 +998,12 @@ rm -rf "$SHAT"
 # Black-box proof the real publish path uses this stricter parser: a
 # single-space .sha256 (accepted by the old lenient awk-based parser) must
 # now refuse the whole triplet.
-mksigned 9.9.24 "$T/b24"
+mksigned 9.9.70 "$T/b24"
 realhash=$(awk '{print $1}' "$T/b24/cadence-agent-linux-amd64.sha256")
 printf '%s cadence-agent-linux-amd64\n' "$realhash" >"$T/b24/cadence-agent-linux-amd64.sha256"
 expect_fail "single-space .sha256 (strict parser)" \
-	sh scripts/publish-agent.sh publish 9.9.24 "$T/b24"
-if [ ! -e "$DIST/agent/v9.9.24" ]; then
+	sh scripts/publish-agent.sh publish 9.9.70 "$T/b24"
+if [ ! -e "$DIST/agent/v9.9.70" ]; then
 	ok "no public dir for a single-space .sha256"
 else
 	fail "public dir for a single-space .sha256"

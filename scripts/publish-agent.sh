@@ -35,6 +35,9 @@
 #      HTTPS enforced through redirects, bounded size and time, hard
 #      failure on any HTTP error) but the decision to stage is minisign
 #      -V against the trust set alone, not the download succeeding.
+#   Both refuse a version older than the newest dist/agent/v<N.N.N> already
+#   staged (numeric comparison, no override): the unversioned install triplet
+#   is refreshed from the last release staged and must never move backwards.
 #   scripts/publish-agent.sh publish <version> <indir>
 #      The break-glass and air-gap path, for an operator-assembled bundle
 #      (normally produced by scripts/build-agent-release.sh, signed by hand
@@ -156,6 +159,51 @@ check_version() {
 		case $_v in 0*) [ "$_v" = "0" ] || return 1 ;; esac
 	done
 	return 0
+}
+
+# version_gt <a> <b>: succeed when canonical N.N.N <a> is strictly newer than
+# <b>. Both must already have passed check_version. A longer component is the
+# larger number (no leading zeros), so no integer test ever sees a huge value.
+version_gt() {
+	_ga=$1
+	_gb=$2
+	for _i in 1 2 3; do
+		_ca=${_ga%%.*}
+		_cb=${_gb%%.*}
+		if [ "${#_ca}" -ne "${#_cb}" ]; then
+			[ "${#_ca}" -gt "${#_cb}" ]
+			return
+		fi
+		if [ "$_ca" != "$_cb" ]; then
+			[ "$_ca" -gt "$_cb" ]
+			return
+		fi
+		_ga=${_ga#*.}
+		_gb=${_gb#*.}
+	done
+	return 1
+}
+
+# Refuse to stage a version older than the newest one already published. The
+# unversioned install triplet is refreshed from whatever is staged last, so
+# staging an older release would move every later bootstrap backwards. This
+# guards the operator against a mistake (the wrong tag, an old bundle); it does
+# not protect against a compromised server, which can delete dist/ and reset
+# it. There is no override: a fix for an older branch cannot be published from
+# a server that already holds a newer release.
+check_not_below_published() {
+	# check_version uses _v, _v1.._v3 and _rest: keep clear of those names
+	floor_newest=""
+	for floor_dir in "$dist"/agent/v*; do
+		[ -d "$floor_dir" ] || continue
+		floor_ver=${floor_dir##*/v}
+		check_version "$floor_ver" || continue
+		if [ -z "$floor_newest" ] || version_gt "$floor_ver" "$floor_newest"; then floor_newest=$floor_ver; fi
+	done
+	if [ -n "$floor_newest" ] && version_gt "$floor_newest" "$1"; then
+		echo "publish-agent.sh: version $1 is older than the newest published version $floor_newest (dist/agent/v$floor_newest): refusing, the unversioned install triplet must never move backwards" >&2
+		exit 1
+	fi
 }
 
 # Print the ELF e_machine of a file (amd64 = 62, arm64 = 183), or fail.
@@ -448,6 +496,7 @@ cmd_publish() {
 		echo "publish-agent.sh: dist/agent/v$ver already published (immutable, never overwrite)" >&2
 		exit 1
 	fi
+	check_not_below_published "$ver"
 	stage_version "$ver" "$indir"
 }
 
@@ -547,6 +596,7 @@ cmd_fetch() {
 		exit 1
 	}
 	tag="agent-v$ver"
+	check_not_below_published "$ver"
 
 	tmp=$(mktemp -d "${TMPDIR:-/tmp}/publish-agent-fetch.XXXXXX")
 	cleanup_fetch_tmp=$tmp

@@ -191,7 +191,10 @@ scripts/publish-agent.sh publish <version> <dir>     # verify + atomic stage
 
 This publishes the CA at the one intentionally unauthenticated path and every
 executable artifact over HTTPS only. Published versions are immutable: a bad
-release needs a new version, never a republish.
+release needs a new version, never a republish. A server also never stages a
+version older than the newest one it already holds (both `fetch` and `publish`
+refuse, with no override), so the unversioned install triplet cannot move
+backwards by mistake.
 
 **2. Create an enrollment code** (on the server, reads `CADENCE_ADMIN_KEY`
 from `.env`):
