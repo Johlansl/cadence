@@ -213,6 +213,43 @@ probe_version() {
 	fi
 }
 
+# sha256_want <file>: parse a .sha256 file as strictly as the agent
+# (parseSHA256File) and scripts/publish-agent.sh do, and set want. At most one
+# trailing newline; then no newline and no carriage return anywhere; exactly
+# "<64 lowercase hex>", two spaces, and the file name. Two names are accepted:
+# cadence-agent (what servers staged before 0.15.0 serve) and
+# cadence-agent-linux-amd64 (what publish-agent.sh stages now). Anything else
+# refuses, so a lenient first-field parse can no longer read a hash out of a
+# file that says something else.
+sha256_want() {
+	_nl='
+'
+	_cr=$(printf '\rX')
+	_cr=${_cr%X}
+	_sha=$(
+		cat "$1"
+		printf X
+	) || return 1
+	_sha=${_sha%X}
+	_sha=${_sha%"$_nl"}
+	case $_sha in
+	*"$_nl"* | *"$_cr"*) return 1 ;;
+	esac
+	case $_sha in
+	*"  "*) ;;
+	*) return 1 ;;
+	esac
+	case ${_sha#*"  "} in
+	cadence-agent | cadence-agent-linux-amd64) ;;
+	*) return 1 ;;
+	esac
+	want=${_sha%%"  "*}
+	[ "${#want}" -eq 64 ] || return 1
+	case $want in
+	*[!0-9a-f]*) return 1 ;;
+	esac
+}
+
 floor_found=0
 floor_maj=0
 floor_min=0
@@ -302,7 +339,10 @@ echo "install.sh: authenticated server $base"
 # origin authentication; sha256 still detects truncation or staging mistakes.
 fetch agent/cadence-agent "$temporary/cadence-agent"
 fetch agent/cadence-agent.sha256 "$temporary/cadence-agent.sha256"
-want=$(awk '{print $1}' "$temporary/cadence-agent.sha256")
+if ! sha256_want "$temporary/cadence-agent.sha256"; then
+	echo "install.sh: cadence-agent.sha256 is not a single line '<64 lowercase hex>  cadence-agent': refusing" >&2
+	exit 1
+fi
 got=$(sha256sum "$temporary/cadence-agent" | awk '{print $1}')
 if [ "$want" != "$got" ]; then
 	echo "install.sh: checksum mismatch (want $want, got $got)" >&2

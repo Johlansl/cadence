@@ -711,5 +711,53 @@ new_case nomini4 a
 run_install PATH="$NOMINI"
 expect_pass "no key, minisign missing: sha256 only" none
 
+echo "8. the .sha256 file is parsed as strictly as the agent does"
+# sha_case <label> <pass|reject> <printf format of the file, with %s for the hash> [hash override]
+SHN=0
+sha_case() {
+	SHN=$((SHN + 1))
+	new_case "sha$SHN" a
+	_h=$(sha256sum "$FIX_DIR/agent/cadence-agent" | cut -d' ' -f1)
+	_hash=${4:-$_h}
+	# shellcheck disable=SC2059
+	printf "$3" "$_hash" >"$FIX_DIR/agent/cadence-agent.sha256"
+	run_install CADENCE_MINISIGN_PUB="$T/keys/a.pub"
+	if [ "$2" = pass ]; then
+		expect_pass "sha256: $1" "$ID_A"
+	else
+		expect_fail "sha256: $1" "is not a single line"
+		if [ "$(downloads)" -eq 2 ]; then ok "sha256: $1: refused right after the two downloads"; else fail "sha256: $1: $(downloads) download(s)"; fi
+	fi
+}
+sha_case "the name the file has always had" pass '%s  cadence-agent\n'
+sha_case "the name publish-agent.sh stages now" pass '%s  cadence-agent-linux-amd64\n'
+sha_case "no trailing newline" pass '%s  cadence-agent'
+sha_case "CRLF line ending" reject '%s  cadence-agent\r\n'
+sha_case "a second line" reject '%s  cadence-agent\nextra\n'
+sha_case "two trailing newlines" reject '%s  cadence-agent\n\n'
+sha_case "a leading blank line" reject '\n%s  cadence-agent\n'
+sha_case "a single space between hash and name" reject '%s cadence-agent\n'
+sha_case "three spaces" reject '%s   cadence-agent\n'
+sha_case "a tab instead of the two spaces" reject '%s\tcadence-agent\n'
+sha_case "binary mode marker (star)" reject '%s *cadence-agent\n'
+sha_case "the other architecture name" reject '%s  cadence-agent-linux-arm64\n'
+sha_case "a longer name" reject '%s  cadence-agent-linux-amd64.old\n'
+sha_case "a name with a path" reject '%s  ./cadence-agent\n'
+sha_case "no name" reject '%s\n'
+sha_case "trailing text after the name" reject '%s  cadence-agent trailing\n'
+sha_case "uppercase hash" reject '%s  cadence-agent\n' "$(sha256sum "$T/keys/a.pub" | cut -d' ' -f1 | tr a-f A-F)"
+sha_case "short hash" reject '%s  cadence-agent\n' "abc123"
+sha_case "hash of 65 characters" reject '%s0  cadence-agent\n'
+sha_case "non hex hash of 64 characters" reject '%s  cadence-agent\n' "$(printf 'g%.0s' $(seq 1 64))"
+# the lenient parser read the first field and ignored the rest: a file that is
+# well formed in its first field only must not pass any more
+sha_case "right hash first, then anything" reject '%s  cadence-agent  and more\n'
+
+# a wrong hash in a well formed file is still a checksum mismatch, not a format error
+new_case shamis a
+printf '%s  cadence-agent\n' "$(printf '0%.0s' $(seq 1 64))" >"$FIX_DIR/agent/cadence-agent.sha256"
+run_install CADENCE_MINISIGN_PUB="$T/keys/a.pub"
+expect_fail "sha256: a well formed but wrong hash" "checksum mismatch"
+
 echo "install-test: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]

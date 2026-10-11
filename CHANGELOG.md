@@ -79,6 +79,14 @@ signed in CI with a two-key trust set. The agent side is in
   downloaded binary is executed (`-version`, empty environment, 30 second
   timeout) only after its SHA-256 and signature are verified. There is no
   override. See `SECURITY.md` "Rollback".
+- `scripts/agent-install.sh` now looks for `minisign` before it downloads anything
+  when `CADENCE_MINISIGN_PUB` is set, and reads the served `cadence-agent.sha256`
+  as strictly as the agent and `publish-agent.sh` do (one line, 64 lowercase hex
+  characters, two spaces, and the name `cadence-agent` or
+  `cadence-agent-linux-amd64`). A server that stages the triplet with
+  `publish-agent.sh` already serves a conforming file. `publish-agent.sh` also
+  refuses a version older than the newest one it holds, and takes the key ID of
+  the two trusted keys from the key bytes rather than from the `.pub` comment.
 
 ## 0.5.0
 
