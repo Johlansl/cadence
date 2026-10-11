@@ -257,7 +257,43 @@ pubkey_id() {
 		echo "publish-agent.sh: $f is not a well-formed minisign public key (extra content after line 2)" >&2
 		return 1
 	fi
-	printf '%s' "$id"
+	# The comment is untrusted text: the ID this script uses and logs comes
+	# from the key bytes. Line 2 is base64 of 42 bytes: "Ed", the 8 byte key
+	# ID (stored least significant byte first), the 32 byte Ed25519 key.
+	case $second in
+	RW*) ;;
+	*)
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (key line does not start with RW)" >&2
+		return 1
+		;;
+	esac
+	case $second in
+	*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/]*)
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (key line is not base64)" >&2
+		return 1
+		;;
+	esac
+	raw=$(printf '%s' "$second" | base64 -d 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n') || raw=""
+	if [ "${#raw}" -ne 84 ]; then
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (key line does not decode to 42 bytes)" >&2
+		return 1
+	fi
+	case $raw in
+	4564*) ;;
+	*)
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (not an Ed25519 key)" >&2
+		return 1
+		;;
+	esac
+	computed=$(printf '%s' "$raw" | cut -c5-20 |
+		sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)$/\8\7\6\5\4\3\2\1/' |
+		tr 'a-f' 'A-F')
+	shown=$(printf '%s' "$id" | tr 'a-f' 'A-F')
+	if [ "$computed" != "$shown" ]; then
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (the key ID in its comment, $id, is not the ID of the key, $computed)" >&2
+		return 1
+	fi
+	printf '%s' "$computed"
 }
 
 # Refuse to start if minisign is missing, either trusted public key is

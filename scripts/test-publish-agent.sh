@@ -664,6 +664,57 @@ else
 	fail "floor: 9.10.1 refused after 9.10.0"
 fi
 
+# 23. the key ID this script uses and logs comes from the key bytes, never from
+# the "untrusted comment". A comment that disagrees with the key is refused,
+# for the active and for the backup key, before any bundle is looked at.
+IDK="$T/idkeys"
+mkdir -p "$IDK"
+keyline=$(sed -n 2p "$PUB")
+cid=$(sed -n 1p "$PUB" | sed 's/^.*key //')
+mksigned 9.9.80 "$T/b23"
+# idcase <label> <active|backup> <pub file> <message fragment>
+idcase() {
+	if [ "$2" = active ]; then
+		out=$(CADENCE_PUBLISH_PUBKEY="$3" sh scripts/publish-agent.sh publish 9.9.80 "$T/b23" 2>&1) && res=0 || res=$?
+	else
+		out=$(CADENCE_PUBLISH_PUBKEY_BACKUP="$3" sh scripts/publish-agent.sh publish 9.9.80 "$T/b23" 2>&1) && res=0 || res=$?
+	fi
+	if [ "$res" -ne 0 ] && printf '%s' "$out" | grep -qF -- "$4" && [ ! -e "$DIST/agent/v9.9.80" ]; then
+		ok "$1"
+	else
+		fail "$1 (exit=$res): $out"
+	fi
+}
+printf 'untrusted comment: minisign public key 0000000000000000\n%s\n' "$keyline" >"$IDK/lie.pub"
+idcase "key ID: a comment naming another ID is refused (active key)" active "$IDK/lie.pub" "is not the ID of the key, $cid"
+printf 'untrusted comment: minisign public key 0000000000000000\n%s\n' "$(sed -n 2p "$PUB_BACKUP")" >"$IDK/lie-backup.pub"
+idcase "key ID: a comment naming another ID is refused (backup key)" backup "$IDK/lie-backup.pub" "is not the ID of the key"
+# bytes changed inside the ID field (characters 6 and 7 of the key line), same comment
+c6=$(printf '%s' "$keyline" | cut -c6)
+if [ "$c6" = A ]; then n6=B; else n6=A; fi
+printf 'untrusted comment: minisign public key %s\n%s\n' "$cid" "$(printf '%s' "$keyline" | cut -c1-5)$n6$(printf '%s' "$keyline" | cut -c7-)" >"$IDK/bytes.pub"
+idcase "key ID: key bytes that disagree with the comment are refused" active "$IDK/bytes.pub" "is not the ID of the key"
+printf 'untrusted comment: minisign public key %s\n%s\n' "$cid" "$(printf '%s' "$keyline" | sed 's/^RW/RX/')" >"$IDK/notrw.pub"
+idcase "key ID: a key line that does not start with RW" active "$IDK/notrw.pub" "does not start with RW"
+printf 'untrusted comment: minisign public key %s\n%s\n' "$cid" "$(printf '%s' "$keyline" | sed 's/.$/!/')" >"$IDK/notb64.pub"
+idcase "key ID: a key line that is not base64" active "$IDK/notb64.pub" "is not base64"
+# 42 bytes whose algorithm field is "Ec" instead of "Ed"
+wrongalg=$({ printf 'Ec'; printf '%s' "$keyline" | base64 -d | tail -c 40; } | base64 | tr -d '\n')
+printf 'untrusted comment: minisign public key %s\n%s\n' "$cid" "$wrongalg" >"$IDK/alg.pub"
+idcase "key ID: a key that is not Ed25519" active "$IDK/alg.pub" "not an Ed25519 key"
+# a lowercase ID in the comment is the same ID: accepted, and logged in capitals
+lowid=$(printf '%s' "$cid" | tr 'A-F' 'a-f')
+printf 'untrusted comment: minisign public key %s\n%s\n' "$lowid" "$keyline" >"$IDK/lower.pub"
+mkdir -p "$IDK/dist/agent"
+mksigned 9.9.81 "$T/b23b"
+out=$(CADENCE_PUBLISH_DIST="$IDK/dist" CADENCE_PUBLISH_PUBKEY="$IDK/lower.pub" \
+	sh scripts/publish-agent.sh publish 9.9.81 "$T/b23b" 2>&1) && res=0 || res=$?
+if [ "$res" -eq 0 ] && printf '%s' "$out" | grep -qF "key $cid"; then
+	ok "key ID: a lowercase comment ID is accepted and logged from the bytes ($cid)"
+else
+	fail "key ID: lowercase comment (exit=$res): $out"
+fi
+
 # --- part 1c: fetch, against a throwaway local HTTPS server -------------
 # No real network to GitHub. A real curl client against a real TLS
 # listener is trusted the standard curl way (CURL_CA_BUNDLE naming our
