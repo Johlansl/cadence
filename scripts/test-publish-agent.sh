@@ -280,12 +280,14 @@ mksigned() {
 }
 
 snapshot() {
-	(cd "$DIST" && find . -type f | sort | xargs sha256sum)
+	# find runs sha256sum itself: an empty dist gives an empty snapshot instead
+	# of a sha256sum with no argument waiting on stdin
+	(cd "$DIST" && find . -type f -exec sha256sum {} + | sort)
 }
 
 # 1. happy path
 mksigned 9.9.1 "$T/b1"
-if sh scripts/publish-agent.sh publish 9.9.1 "$T/b1" >/dev/null 2>&1; then
+if out=$(sh scripts/publish-agent.sh publish 9.9.1 "$T/b1" 2>&1); then
 	n=$(find "$DIST/agent/v9.9.1" -type f | wc -l)
 	if [ "$n" = "6" ]; then
 		ok "happy path stages 6 files"
@@ -306,7 +308,8 @@ if sh scripts/publish-agent.sh publish 9.9.1 "$T/b1" >/dev/null 2>&1; then
 		fail "unversioned triplet mismatch"
 	fi
 else
-	fail "happy path publish failed"
+	# what publish-agent.sh said is the whole diagnosis: never swallow it
+	fail "happy path publish failed: $out"
 fi
 
 # 2. tampered binary after signing
@@ -368,8 +371,17 @@ fi
 # 6. atomicity: late failure leaves nothing behind, unversioned intact
 mksigned 9.9.7 "$T/b7"
 printf 'x' | dd of="$T/b7/cadence-agent-linux-arm64" bs=1 seek=200 conv=notrunc 2>/dev/null
-unv_before=$(sha256sum "$DIST/agent/cadence-agent" "$DIST/agent/cadence-agent.sha256" \
-	"$DIST/agent/cadence-agent.minisig")
+# The three unversioned files must exist (the happy path staged them). When they
+# do not, say so and carry on with a placeholder, instead of letting sha256sum
+# kill the whole script on a missing file.
+unv_hash() {
+	sha256sum "$DIST/agent/cadence-agent" "$DIST/agent/cadence-agent.sha256" \
+		"$DIST/agent/cadence-agent.minisig" 2>/dev/null || echo "MISSING"
+}
+unv_before=$(unv_hash)
+if [ "$unv_before" = "MISSING" ]; then
+	fail "atomicity test: the unversioned triplet is missing (the happy path staged nothing)"
+fi
 expect_fail "bad arm64 late" sh scripts/publish-agent.sh publish 9.9.7 "$T/b7"
 if [ ! -e "$DIST/agent/v9.9.7" ]; then
 	ok "no public dir after late failure"
@@ -381,9 +393,8 @@ if ls "$DIST"/.staging-* >/dev/null 2>&1; then
 else
 	ok "no staging temp left behind"
 fi
-unv_after=$(sha256sum "$DIST/agent/cadence-agent" "$DIST/agent/cadence-agent.sha256" \
-	"$DIST/agent/cadence-agent.minisig")
-if [ "$unv_before" = "$unv_after" ]; then
+unv_after=$(unv_hash)
+if [ "$unv_before" != "MISSING" ] && [ "$unv_before" = "$unv_after" ]; then
 	ok "unversioned triplet untouched by failed publish"
 else
 	fail "failed publish touched the unversioned triplet"
