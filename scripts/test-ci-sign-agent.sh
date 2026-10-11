@@ -290,7 +290,10 @@ if [ "$drift" -eq 0 ]; then ok "version_current: the installer reads a running a
 
 # key ID: agent-install.sh and agent-sign-lib.sh work on a base64 line,
 # publish-agent.sh on a .pub file. Same keys, same expected IDs, taken from
-# the comment minisign itself wrote (the oracle: the scripts never trust it).
+# the comment minisign itself wrote (the oracle: the scripts never trust it),
+# completed with leading zeros to 16 characters: minisign 0.11 writes the ID
+# without them for 1 key in 16, 0.12 pads, and the three copies print 16.
+pad16() { _p=$1; while [ "${#_p}" -lt 16 ]; do _p=0$_p; done; printf '%s\n' "$_p"; }
 eval "$(sed -n '/^key_id() {/,/^}/p' "$HERE/agent-install.sh" | sed 's/^key_id()/inst_key_id()/')"
 eval "$(sed -n '/^key_id() {/,/^}/p' "$HERE/agent-sign-lib.sh" | sed 's/^key_id()/lib_key_id()/')"
 eval "$(sed -n '/^pubkey_id() {/,/^}/p' "$HERE/publish-agent.sh")"
@@ -298,7 +301,7 @@ drift=0
 n=0
 for pub in "$T/keys/good.pub" "$HERE/../agent/minisign.pub" "$HERE/../agent/minisign-backup.pub"; do
 	line=$(sed -n 2p "$pub")
-	oracle=$(sed -n 1p "$pub" | sed 's/^.*key //')
+	oracle=$(pad16 "$(sed -n 1p "$pub" | sed 's/^.*key //')")
 	i=$(inst_key_id "$line")
 	l=$(lib_key_id "$line")
 	p=$(pubkey_id "$pub" 2>/dev/null) || p="refused"
@@ -313,7 +316,7 @@ if [ "$drift" -eq 0 ] && [ "$n" -eq 3 ]; then ok "key ID: the three copies agree
 echo payload >"$T/idpayload"
 minisign -S -s "$T/keys/good.key" -m "$T/idpayload" -x "$T/idpayload.minisig" >/dev/null 2>&1
 sigline=$(sed -n 2p "$T/idpayload.minisig")
-oracle=$(sed -n 1p "$T/keys/good.pub" | sed 's/^.*key //')
+oracle=$(pad16 "$(sed -n 1p "$T/keys/good.pub" | sed 's/^.*key //')")
 if [ "$(inst_key_id "$sigline")" = "$oracle" ] && [ "$(lib_key_id "$sigline")" = "$oracle" ]; then
 	ok "key ID: the two base64 copies read the ID of a signature line"
 else

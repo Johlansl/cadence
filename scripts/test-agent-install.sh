@@ -91,8 +91,11 @@ for k in a b c; do
 	minisign -G -W -f -p "$T/keys/$k.pub" -s "$T/keys/$k.key" >/dev/null
 done
 # Expected IDs come from the comment minisign itself wrote (test oracle only;
-# the script under test never trusts that comment).
-idof() { sed -n 1p "$T/keys/$1.pub" | awk '{print $NF}'; }
+# the script under test never trusts that comment), completed with leading zeros
+# to 16 characters: minisign 0.11 writes the ID without them (1 key in 16), 0.12
+# pads, and the scripts under test always print 16 characters.
+pad16() { _p=$1; while [ "${#_p}" -lt 16 ]; do _p=0$_p; done; printf '%s\n' "$_p"; }
+idof() { pad16 "$(sed -n 1p "$T/keys/$1.pub" | awk '{print $NF}')"; }
 ID_A=$(idof a)
 ID_B=$(idof b)
 ID_C=$(idof c)

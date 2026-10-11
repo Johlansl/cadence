@@ -279,6 +279,12 @@ mksigned() {
 		-t "test $ver" >/dev/null 2>&1
 }
 
+# Test oracle for a key ID: what minisign wrote in the comment of the .pub, completed
+# with leading zeros to 16 characters. minisign 0.11 (the Ubuntu package, so the
+# GitHub runner) writes the ID without them for 1 key in 16; 0.12 pads. The script
+# under test always prints 16 characters.
+pad16() { _p=$1; while [ "${#_p}" -lt 16 ]; do _p=0$_p; done; printf '%s\n' "$_p"; }
+
 snapshot() {
 	# find runs sha256sum itself: an empty dist gives an empty snapshot instead
 	# of a sha256sum with no argument waiting on stdin
@@ -488,7 +494,7 @@ if [ "$res" -eq 0 ] && [ -e "$DIST/agent/v9.9.14" ]; then
 else
 	fail "backup key alone did not verify (exit=$res): $out"
 fi
-backup_id=$(sed -n '1p' "$PUB_BACKUP" | sed 's/^.*key //')
+backup_id=$(pad16 "$(sed -n '1p' "$PUB_BACKUP" | sed 's/^.*key //')")
 if printf '%s' "$out" | grep -qF "key $backup_id"; then
 	ok "publish logs the backup key ID that verified"
 else
@@ -544,7 +550,7 @@ fi
 # -- already exercised by every earlier test; assert the log explicitly
 # once here).
 mksigned 9.9.42 "$T/b15"
-active_id=$(sed -n '1p' "$PUB" | sed 's/^.*key //')
+active_id=$(pad16 "$(sed -n '1p' "$PUB" | sed 's/^.*key //')")
 out=$(sh scripts/publish-agent.sh publish 9.9.42 "$T/b15" 2>&1) && res=0 || res=$?
 if [ "$res" -eq 0 ] && printf '%s' "$out" | grep -qF "key $active_id"; then
 	ok "active key alone verifies and is logged"
@@ -690,7 +696,7 @@ fi
 IDK="$T/idkeys"
 mkdir -p "$IDK"
 keyline=$(sed -n 2p "$PUB")
-cid=$(sed -n 1p "$PUB" | sed 's/^.*key //')
+cid=$(pad16 "$(sed -n 1p "$PUB" | sed 's/^.*key //')")
 mksigned 9.9.80 "$T/b23"
 # idcase <label> <active|backup> <pub file> <message fragment>
 idcase() {
