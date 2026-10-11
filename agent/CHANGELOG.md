@@ -3,6 +3,13 @@
 The agent reports its version to the server on every report; `cadence-agent
 -version` prints it.
 
+## 0.15.1
+
+Released 2026-10-11.
+
+No functional change. This release exists to exercise `agent_upgrade` end to end,
+from 0.15.0 to 0.15.1, on a real fleet.
+
 ## 0.15.0
 
 Released 2026-10-11.
