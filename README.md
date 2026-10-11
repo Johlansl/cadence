@@ -669,13 +669,19 @@ and the server does not check the agent version for you. Some of those hosts
 also still run the binary from `/usr/local/bin`, which `agent_upgrade` refuses.
 Such a host goes through the installer one time, and campaigns work from then
 on. The installer is downloaded over HTTPS with the CA the host already pinned,
-saved to a file and run as root with `CADENCE_UPGRADE_ONLY=true`:
+saved to a file and run as root with `CADENCE_UPGRADE_ONLY=true`. Install
+`minisign` on the host first (`apt-get install minisign`), and copy the two public
+keys of the project, `agent/minisign.pub` and `agent/minisign-backup.pub` from a
+checkout, to the host **out of band** (not by downloading them from the server):
+the example below expects them in `/root/keys/`.
 
 ```sh
 curl -fsSL --cacert /usr/local/share/ca-certificates/cadence-server.crt \
   https://<site>/install.sh -o install.sh
 sudo CADENCE_BASE_URL=https://<site> \
   CADENCE_VERIFIED_CA=/usr/local/share/ca-certificates/cadence-server.crt \
+  CADENCE_MINISIGN_PUB=/root/keys/minisign.pub \
+  CADENCE_MINISIGN_PUB2=/root/keys/minisign-backup.pub \
   CADENCE_UPGRADE_ONLY=true sh install.sh
 ```
 

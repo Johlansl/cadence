@@ -73,7 +73,8 @@ timers, and fires one report:
 
 ```sh
 CADENCE_BASE_URL=https://<site> CADENCE_VERIFIED_CA=<pinned-ca> \
-  CADENCE_MINISIGN_PUB=<active key> CADENCE_MINISIGN_PUB2=<backup key> \
+  CADENCE_MINISIGN_PUB=<path to agent/minisign.pub, copied out of band> \
+  CADENCE_MINISIGN_PUB2=<path to agent/minisign-backup.pub, copied out of band> \
   CADENCE_UPGRADE_ONLY=true sh agent-install.sh
 ```
 

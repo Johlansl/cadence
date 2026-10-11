@@ -329,7 +329,11 @@ key is accepted by hosts that run the old agent.
    step because the secret is empty (and if a secret were still there, at the
    check of the signatures against the new `agent/minisign.pub`); `publish` needs
    `sign`, so it is skipped and no Release is created. The Sigstore attestations
-   `build` produces are the only trace.
+   `build` produces are the only trace. If the `release` environment still
+   requires an approval, `sign` does not start by itself: it waits for a reviewer
+   before running any step. **Reject that approval request.** The result is the
+   same, `sign` does not run and `publish` is skipped, so there is no Release; do
+   not approve it to "see it fail".
 4. Restore the backup key to a tmpfs, build and sign with it, then delete it:
 
    ```sh
