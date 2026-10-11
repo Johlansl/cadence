@@ -7,7 +7,11 @@
 #   backup-signing-key.sh     is the key one of the trust set?
 #   restore-signing-key.sh    same, plus the encryption check
 # (agent-install.sh and publish-agent.sh stay standalone on purpose: the
-# first is copied alone to hosts, the second must not depend on signing code.)
+# first is copied alone to hosts, the second must not depend on signing code,
+# so each keeps its own key ID code. publish-agent.sh sources only
+# agent-version-lib.sh, the version grammar. scripts/test-ci-sign-agent.sh feeds
+# the same keys to the three key ID copies and the same versions to the copies of
+# the grammar, so none can drift unnoticed.)
 #
 # The trust set is the two committed public keys, in this order:
 #   agent/minisign.pub          active key (signs releases in CI)

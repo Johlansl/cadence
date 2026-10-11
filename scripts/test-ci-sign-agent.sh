@@ -203,19 +203,126 @@ for v in 0.15.0 0.0.0 10.20.30 1.0.0; do
 	fi
 done
 
-# parity with the real grammar: publish-agent.sh's check_version, extracted
-# verbatim (never retyped), must agree with ours on every sample.
-eval "$(sed -n '/^check_version() {/,/^}/p' "$HERE/publish-agent.sh" | sed 's/^check_version()/pub_check_version()/')"
-eval "$(sed -n '/^check_version() {/,/^}/p' "$SIGN")"
+# --- shared definitions: one lib, plus copies that must stay in step ---------
+# check_version lives in agent-version-lib.sh and is SOURCED by publish-agent.sh,
+# ci-sign-agent.sh and check-release-source.sh: prove each of them uses it and
+# keeps no copy, then feed the same list of versions to the lib and to the copy
+# that agent-install.sh must keep (it runs alone on hosts, without a checkout).
+# The same is done for the key ID, which has three copies for the same reason.
+LIBV=$HERE/agent-version-lib.sh
+for s in publish-agent.sh ci-sign-agent.sh check-release-source.sh; do
+	if grep -q 'agent-version-lib.sh"$' "$HERE/$s" && ! grep -q '^check_version() {' "$HERE/$s"; then
+		ok "$s sources agent-version-lib.sh and keeps no copy of check_version"
+	else
+		fail "$s defines its own check_version or does not source the lib"
+	fi
+done
+
+eval "$(sed -n '/^check_version() {/,/^}/p' "$LIBV")"
+eval "$(sed -n '/^version_triple() {/,/^}/p' "$HERE/agent-install.sh")"
+eval "$(sed -n '/^version_current() {/,/^}/p' "$HERE/agent-install.sh")"
 drift=0
-for v in 0.15.0 0.0.0 1.0 01.2.3 0.15.0-rc 1.2.3.4 1.02.3 1.2.03 .1.2 1.2. 1..2 10.20.30 a.b.c 1.2.3-x ""; do
+# <version> followed by 1 when the grammar accepts it, 0 when it refuses it
+while IFS='|' read -r v want; do
 	a=0
 	b=0
-	pub_check_version "$v" || a=1
-	check_version "$v" || b=1
-	[ "$a" -eq "$b" ] || { drift=1; echo "  grammar differs on '$v': publish-agent=$a ci-sign=$b"; }
+	check_version "$v" && a=1
+	version_triple "$v" && b=1
+	if [ "$a" != "$want" ] || [ "$b" != "$want" ]; then
+		drift=1
+		echo "  grammar differs on '$v': want $want, lib=$a agent-install=$b"
+	fi
+done <<'EOF'
+0.15.0|1
+0.0.0|1
+10.20.30|1
+1.0.0|1
+123456789.0.1|1
+|0
+1|0
+1.0|0
+01.2.3|0
+00.0.0|0
+0.00.0|0
+0.15.0-rc|0
+1.2.3.4|0
+1.02.3|0
+1.2.03|0
+.1.2|0
+1.2.|0
+1..2|0
+a.b.c|0
+1.2.3-x|0
+1.2.3 |0
+ 1.2.3|0
++1.2.3|0
+1.2.+3|0
+v1.2.3|0
+EOF
+if [ "$drift" -eq 0 ]; then ok "version grammar: the lib and the agent-install.sh copy agree on every sample"; else fail "version grammar drifted between the lib and agent-install.sh"; fi
+# the one difference on purpose: shell integers stay exact, so the installer
+# stops at 9 digits per component while the lib has no such limit
+if check_version 1234567890.0.0 && ! version_triple 1234567890.0.0; then
+	ok "version grammar: the installer refuses a 10 digit component, as documented"
+else
+	fail "version grammar: the documented 9 digit limit of the installer changed"
+fi
+# the installer also reads the version of a running agent (git describe builds)
+drift=0
+while IFS='|' read -r v want; do
+	a=0
+	version_current "$v" && a=1
+	[ "$a" = "$want" ] || { drift=1; echo "  version_current on '$v': want $want got $a"; }
+done <<'EOF'
+0.14.0|1
+0.14.0-51-ge946197|1
+0.15.0-3-gabc|1
+0.14.0-|0
+-5|0
+0.14|0
+01.2.3-x|0
+1.2.3-|0
+|0
+EOF
+if [ "$drift" -eq 0 ]; then ok "version_current: the installer reads a running agent's version as the agent does"; else fail "version_current drifted"; fi
+
+# key ID: agent-install.sh and agent-sign-lib.sh work on a base64 line,
+# publish-agent.sh on a .pub file. Same keys, same expected IDs, taken from
+# the comment minisign itself wrote (the oracle: the scripts never trust it).
+eval "$(sed -n '/^key_id() {/,/^}/p' "$HERE/agent-install.sh" | sed 's/^key_id()/inst_key_id()/')"
+eval "$(sed -n '/^key_id() {/,/^}/p' "$HERE/agent-sign-lib.sh" | sed 's/^key_id()/lib_key_id()/')"
+eval "$(sed -n '/^pubkey_id() {/,/^}/p' "$HERE/publish-agent.sh")"
+drift=0
+n=0
+for pub in "$T/keys/good.pub" "$HERE/../agent/minisign.pub" "$HERE/../agent/minisign-backup.pub"; do
+	line=$(sed -n 2p "$pub")
+	oracle=$(sed -n 1p "$pub" | sed 's/^.*key //')
+	i=$(inst_key_id "$line")
+	l=$(lib_key_id "$line")
+	p=$(pubkey_id "$pub" 2>/dev/null) || p="refused"
+	n=$((n + 1))
+	if [ "$i" != "$oracle" ] || [ "$l" != "$oracle" ] || [ "$p" != "$oracle" ]; then
+		drift=1
+		echo "  key ID of $pub: want $oracle, agent-install=$i sign-lib=$l publish-agent=$p"
+	fi
 done
-if [ "$drift" -eq 0 ]; then ok "version grammar agrees with publish-agent.sh"; else fail "version grammar drifted from publish-agent.sh"; fi
+if [ "$drift" -eq 0 ] && [ "$n" -eq 3 ]; then ok "key ID: the three copies agree with minisign on $n keys"; else fail "key ID copies drifted"; fi
+# and on a signature line: the ID the signature claims is the signing key's
+echo payload >"$T/idpayload"
+minisign -S -s "$T/keys/good.key" -m "$T/idpayload" -x "$T/idpayload.minisig" >/dev/null 2>&1
+sigline=$(sed -n 2p "$T/idpayload.minisig")
+oracle=$(sed -n 1p "$T/keys/good.pub" | sed 's/^.*key //')
+if [ "$(inst_key_id "$sigline")" = "$oracle" ] && [ "$(lib_key_id "$sigline")" = "$oracle" ]; then
+	ok "key ID: the two base64 copies read the ID of a signature line"
+else
+	fail "key ID of a signature line: install=$(inst_key_id "$sigline") lib=$(lib_key_id "$sigline") want $oracle"
+fi
+# a line that is not a key: every copy says "?" or refuses, none invents an ID
+if [ "$(inst_key_id "not base64 at all")" = "?" ] && [ "$(lib_key_id "not base64 at all")" = "?" ]; then
+	ok "key ID: both base64 copies answer ? for garbage"
+else
+	fail "key ID: a copy invented an ID for garbage"
+fi
 
 new_case spacever
 RC=0

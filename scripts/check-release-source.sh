@@ -37,38 +37,14 @@ if [ $# -ne 1 ]; then
 fi
 ver=$1
 
-case $ver in
-*[!0-9.]*|""|.*|*.|*..*)
-	echo "check-release-source.sh: '$ver' is not strict N.N.N" >&2
-	exit 1
-	;;
-esac
-_v1=${ver%%.*}; _rest=${ver#*.}
-case $_rest in *.*) ;; *)
-	echo "check-release-source.sh: '$ver' is not strict N.N.N" >&2
-	exit 1
-	;;
-esac
-_v2=${_rest%%.*}; _v3=${_rest#*.}
-case $_v3 in *.*)
-	echo "check-release-source.sh: '$ver' is not strict N.N.N" >&2
-	exit 1
-	;;
-esac
-if [ -z "$_v1" ] || [ -z "$_v2" ] || [ -z "$_v3" ]; then
-	echo "check-release-source.sh: '$ver' is not strict N.N.N" >&2
+# Strict canonical N.N.N, one spelling per release ("01.2.3" refuses): the
+# grammar shared with publish-agent.sh and ci-sign-agent.sh.
+# shellcheck source=scripts/agent-version-lib.sh
+. "$here/agent-version-lib.sh"
+if ! check_version "$ver"; then
+	echo "check-release-source.sh: '$ver' is not strict canonical N.N.N" >&2
 	exit 1
 fi
-# Canonical decimal only (6B): one release, one spelling ("01.2.3" refuses).
-for _v in "$_v1" "$_v2" "$_v3"; do
-	case $_v in 0*)
-		if [ "$_v" != "0" ]; then
-			echo "check-release-source.sh: '$ver' is not canonical N.N.N" >&2
-			exit 1
-		fi
-		;;
-	esac
-done
 
 if [ ! -f agent/CHANGELOG.md ] || ! grep -q "^## $ver$" agent/CHANGELOG.md; then
 	echo "check-release-source.sh: no '## $ver' heading in agent/CHANGELOG.md" >&2

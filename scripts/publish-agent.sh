@@ -141,25 +141,11 @@ usage() {
 	exit 2
 }
 
-# Strict canonical N.N.N grammar for publishable versions: suffixes refused,
-# and so are leading zeros (a component is "0" or starts with 1-9, "01.2.3"
-# refuses like the agent does; see the loop at the end of the function).
-check_version() {
-	case $1 in
-	*[!0-9.]*|""|.*|*.|*..*) return 1 ;;
-	esac
-	_v1=${1%%.*}; _rest=${1#*.}
-	case $_rest in *.*) ;; *) return 1 ;; esac
-	_v2=${_rest%%.*}; _v3=${_rest#*.}
-	case $_v3 in *.*) return 1 ;; esac
-	[ -n "$_v1" ] && [ -n "$_v2" ] && [ -n "$_v3" ] || return 1
-	# Canonical decimal only (6B): one release, one spelling. A component
-	# is "0" or starts with 1-9; "01.2.3" refuses like the agent does.
-	for _v in "$_v1" "$_v2" "$_v3"; do
-		case $_v in 0*) [ "$_v" = "0" ] || return 1 ;; esac
-	done
-	return 0
-}
+# Strict canonical N.N.N grammar for publishable versions (suffixes and
+# leading zeros refused, like the agent): check_version, defined once for the
+# scripts that stage, sign and build releases.
+# shellcheck source=scripts/agent-version-lib.sh
+. "$here/agent-version-lib.sh"
 
 # version_gt <a> <b>: succeed when canonical N.N.N <a> is strictly newer than
 # <b>. Both must already have passed check_version. A longer component is the

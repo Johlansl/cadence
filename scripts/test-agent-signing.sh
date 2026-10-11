@@ -276,7 +276,8 @@ else
 fi
 
 # --- 6. the sign job of release.yml has every file ci-sign-agent.sh needs -------------------
-# ci-sign-agent.sh sources scripts/agent-sign-lib.sh from its own directory. The
+# ci-sign-agent.sh sources scripts/agent-sign-lib.sh and
+# scripts/agent-version-lib.sh from its own directory. The
 # `sign` job runs `sh scripts/ci-sign-agent.sh` from the workspace root, so the
 # job must check the whole tree out there. These static checks fail if a later
 # edit adds a sparse checkout, a checkout path, a working-directory or a
@@ -322,8 +323,9 @@ sign_job_gets() {
 }
 
 sourced=$(sourced_files "$HERE/ci-sign-agent.sh")
-if [ "$sourced" = "scripts/agent-sign-lib.sh" ]; then
-	ok "ci-sign-agent.sh sources exactly scripts/agent-sign-lib.sh (a new sourced file must be added here on purpose)"
+if [ "$sourced" = "scripts/agent-sign-lib.sh
+scripts/agent-version-lib.sh" ]; then
+	ok "ci-sign-agent.sh sources exactly scripts/agent-sign-lib.sh and scripts/agent-version-lib.sh (a new sourced file must be added here on purpose)"
 else
 	fail "ci-sign-agent.sh sources: '$sourced'"
 fi

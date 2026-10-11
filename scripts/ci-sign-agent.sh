@@ -40,26 +40,10 @@ die() {
 	exit 1
 }
 
-# Strict canonical N.N.N, the same grammar as check_version in
-# publish-agent.sh and the agent's version parser (scripts/test-ci-sign-agent.sh
-# keeps this copy in step with publish-agent.sh): digits and dots only, three
-# components, each "0" or starting with 1-9. No suffix, no leading zero.
-check_version() {
-	case $1 in
-	*[!0-9.]* | "" | .* | *. | *..*) return 1 ;;
-	esac
-	_v1=${1%%.*}
-	_rest=${1#*.}
-	case $_rest in *.*) ;; *) return 1 ;; esac
-	_v2=${_rest%%.*}
-	_v3=${_rest#*.}
-	case $_v3 in *.*) return 1 ;; esac
-	[ -n "$_v1" ] && [ -n "$_v2" ] && [ -n "$_v3" ] || return 1
-	for _v in "$_v1" "$_v2" "$_v3"; do
-		case $_v in 0*) [ "$_v" = "0" ] || return 1 ;; esac
-	done
-	return 0
-}
+# Strict canonical N.N.N (check_version): one definition, shared with
+# publish-agent.sh and check-release-source.sh.
+# shellcheck source=scripts/agent-version-lib.sh
+. "$here/agent-version-lib.sh"
 
 if [ "$#" -lt 5 ]; then
 	echo "usage: ci-sign-agent.sh <version> <pubkey> <seckey> <dir> <arch>=<sha256> ..." >&2
