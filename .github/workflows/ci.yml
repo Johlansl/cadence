@@ -31,6 +31,7 @@ jobs:
       frontend: ${{ steps.f.outputs.frontend }}
       scripts: ${{ steps.f.outputs.scripts }}
       go-pins: ${{ steps.f.outputs.go-pins }}
+      actionlint: ${{ steps.f.outputs.actionlint }}
       stack: ${{ steps.f.outputs.stack }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -49,6 +50,7 @@ jobs:
             {
               echo "agent=true"; echo "backend=true"; echo "frontend=true"
               echo "scripts=true"; echo "go-pins=true"; echo "stack=true"
+              echo "actionlint=true"
             } >> "$GITHUB_OUTPUT"
             echo "changes: range undetermined -> running the full matrix"
             exit 0
@@ -80,6 +82,7 @@ jobs:
             echo "frontend=$(match '^frontend/|^\.github/workflows/ci\.yml$')"
             echo "scripts=$(match '^scripts/|^caddy/|^packaging/.*\.sh$|^\.github/workflows/ci\.yml$')"
             echo "go-pins=$(match '^agent/go\.mod$|^\.gitlab-ci\.yml$|^\.github/workflows/ci\.yml$|^\.github/workflows/release\.yml$|^scripts/publish-agent\.sh$|^scripts/check-go-pins\.sh$|^README\.md$|^CONTRIBUTING\.md$|^CLAUDE\.md$')"
+            echo "actionlint=$(match '^\.github/workflows/')"
             echo "stack=$(match '^docker-compose\.yml$|^Caddyfile$|^caddy/|^backend/|^frontend/|^\.env\.example$|^\.github/workflows/ci\.yml$')"
           } >> "$GITHUB_OUTPUT"
 
@@ -201,6 +204,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: sh scripts/check-go-pins.sh
+
+  # Lints every workflow with actionlint (it runs shellcheck on each `run:`
+  # step). The image is pinned by digest and must stay identical to the one in
+  # .gitlab-ci.yml; the entrypoint of the image is actionlint itself.
+  actionlint:
+    needs: changes
+    if: needs.changes.outputs.actionlint == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: actionlint
+        run: >-
+          docker run --rm -v "$PWD":/repo:ro -w /repo
+          rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
 
   backend:
     needs: changes
@@ -325,7 +343,7 @@ jobs:
   # Single required-check surface. Green when every component job either passed
   # or was skipped; red if any executed job failed or was cancelled.
   gate:
-    needs: [changes, agent, backend, frontend, scripts, go-pins, stack]
+    needs: [changes, agent, backend, frontend, scripts, go-pins, actionlint, stack]
     if: always()
     runs-on: ubuntu-latest
     steps:
