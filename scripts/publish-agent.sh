@@ -200,14 +200,19 @@ elf_machine() {
 	od -A n -t u2 -j 18 -N 2 "$1" 2>/dev/null | tr -d ' \n'
 }
 
-# Extract and validate the 16-hex-char key ID from a minisign .pub file's
-# own comment line, on stdout, without needing the private key or the Go
-# library: exactly two lines, the expected comment prefix, a 16-hex-char
-# ID, and a key body of the length every minisign Ed25519 public key
-# encodes to. A structural check only (same spirit as the SHA-256 hex
-# check above), not a substitute for the minisign -V calls that follow: a
-# key that passes here but is otherwise bogus simply never verifies any
-# real signature.
+# Derive and print the 16-hex-char key ID of a minisign .pub file, without
+# needing the private key or the Go library: exactly two lines, the expected
+# comment prefix, a hex ID in the comment, and a key body of the length every
+# minisign Ed25519 public key encodes to. The ID printed comes from the key
+# BYTES; the comment is untrusted text that has to agree with them. It may be
+# written without its leading zeros: minisign 0.11 (the Ubuntu package) prints
+# the ID with %X and no padding, so 1 key in 16 has a 15 character ID in its
+# comment (0.12 pads to 16). The two are compared with their leading zeros
+# removed, so an honest short ID is accepted, and an empty one, one longer than
+# 16 characters, a non hex one or a different one is refused. A structural
+# check only (same spirit as the SHA-256 hex check above), not a substitute for
+# the minisign -V calls that follow: a key that passes here but is otherwise
+# bogus simply never verifies any real signature.
 pubkey_id() {
 	f=$1
 	if [ ! -f "$f" ]; then
@@ -225,8 +230,8 @@ pubkey_id() {
 		return 1
 		;;
 	esac
-	if [ "${#id}" -ne 16 ]; then
-		echo "publish-agent.sh: $f is not a well-formed minisign public key (key ID is not 16 hex characters)" >&2
+	if [ -z "$id" ] || [ "${#id}" -gt 16 ]; then
+		echo "publish-agent.sh: $f is not a well-formed minisign public key (key ID is not 1 to 16 hex characters)" >&2
 		return 1
 	fi
 	case $id in
@@ -275,7 +280,12 @@ pubkey_id() {
 		sed 's/^\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)$/\8\7\6\5\4\3\2\1/' |
 		tr 'a-f' 'A-F')
 	shown=$(printf '%s' "$id" | tr 'a-f' 'A-F')
-	if [ "$computed" != "$shown" ]; then
+	# compare without the leading zeros of either side (see the header)
+	computed_cmp=$computed
+	while [ "${computed_cmp#0}" != "$computed_cmp" ]; do computed_cmp=${computed_cmp#0}; done
+	shown_cmp=$shown
+	while [ "${shown_cmp#0}" != "$shown_cmp" ]; do shown_cmp=${shown_cmp#0}; done
+	if [ "$computed_cmp" != "$shown_cmp" ]; then
 		echo "publish-agent.sh: $f is not a well-formed minisign public key (the key ID in its comment, $id, is not the ID of the key, $computed)" >&2
 		return 1
 	fi

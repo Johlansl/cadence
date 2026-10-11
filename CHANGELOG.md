@@ -79,6 +79,12 @@ signed in CI with a two-key trust set. The agent side is in
   downloaded binary is executed (`-version`, empty environment, 30 second
   timeout) only after its SHA-256 and signature are verified. There is no
   override. See `SECURITY.md` "Rollback".
+- `scripts/publish-agent.sh` accepts a trusted public key whose comment line gives
+  the key ID without its leading zeros. `minisign` 0.11 (for example the Ubuntu
+  package) writes it that way for 1 key in 16 and 0.12 pads it to 16 characters;
+  the script used to refuse such a key as malformed. The ID it prints and checks
+  against comes from the key bytes, as before, and a comment that disagrees with the
+  key, is empty, is longer than 16 characters or is not hexadecimal is still refused.
 - Audit of the shell scripts. `scripts/backup.sh` now prunes only the directories
   named like the backups it creates (`YYYYMMDDTHHMMSSZ`), never a symlink, and
   counts only those toward `CADENCE_BACKUP_KEEP`: a `CADENCE_BACKUP_DIR` that also

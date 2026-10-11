@@ -741,6 +741,67 @@ else
 	fail "key ID: lowercase comment (exit=$res): $out"
 fi
 
+# 24. a key ID written without its leading zeros. minisign 0.11 (the Ubuntu package,
+# so the GitHub runner) writes the ID in the comment with %X and no padding, which
+# makes it 15 characters long for 1 key in 16 (0.12 pads). Such a key is valid and
+# must be accepted, with the full 16 character ID printed; a short ID that does not
+# match the key, one longer than 16 characters, an empty one and a non hex one are
+# still refused. The test needs a key whose ID starts with 0: generate until one does
+# (16 tries on average, 400 at most).
+n=0
+zfull=""
+while [ "$n" -lt 400 ]; do
+	n=$((n + 1))
+	minisign -G -W -f -p "$IDK/zero.pub" -s "$IDK/zero.key" >/dev/null 2>&1
+	zfull=$(pad16 "$(sed -n 1p "$IDK/zero.pub" | sed 's/^.*key //')")
+	case $zfull in 0*) break ;; esac
+	zfull=""
+done
+if [ -z "$zfull" ]; then
+	fail "key ID with a leading zero: no such key in 400 tries"
+else
+	ok "key ID with a leading zero: generated $zfull after $n tries"
+	zshort=$zfull
+	while [ "${zshort#0}" != "$zshort" ]; do zshort=${zshort#0}; done
+	zkeyline=$(sed -n 2p "$IDK/zero.pub")
+	# the comment as minisign 0.11 writes it
+	printf 'untrusted comment: minisign public key %s\n%s\n' "$zshort" "$zkeyline" >"$IDK/zero-short.pub"
+	mkdir -p "$IDK/zdist/agent"
+	mksigned 9.9.90 "$T/b24"
+	for a in amd64 arm64; do
+		minisign -S -s "$IDK/zero.key" -m "$T/b24/cadence-agent-linux-$a" -t "test 9.9.90" >/dev/null 2>&1
+	done
+	out=$(CADENCE_PUBLISH_DIST="$IDK/zdist" CADENCE_PUBLISH_PUBKEY="$IDK/zero-short.pub" \
+		sh scripts/publish-agent.sh publish 9.9.90 "$T/b24" 2>&1) && res=0 || res=$?
+	if [ "$res" -eq 0 ] && printf '%s' "$out" | grep -qF "key $zfull"; then
+		ok "key ID: a comment without its leading zeros (${#zshort} characters) is accepted, and the full ID $zfull is printed"
+	else
+		fail "key ID without leading zeros (exit=$res): $out"
+	fi
+	# the same key written the way minisign 0.12 does (padded) is accepted too
+	printf 'untrusted comment: minisign public key %s\n%s\n' "$zfull" "$zkeyline" >"$IDK/zero-full.pub"
+	mkdir -p "$IDK/zdist2/agent"
+	out=$(CADENCE_PUBLISH_DIST="$IDK/zdist2" CADENCE_PUBLISH_PUBKEY="$IDK/zero-full.pub" \
+		sh scripts/publish-agent.sh publish 9.9.90 "$T/b24" 2>&1) && res=0 || res=$?
+	if [ "$res" -eq 0 ] && printf '%s' "$out" | grep -qF "key $zfull"; then
+		ok "key ID: the padded comment of the same key is accepted"
+	else
+		fail "key ID padded (exit=$res): $out"
+	fi
+	# a short ID that is not the key's: same length as the honest one, last digit changed
+	zlast=$(printf '%s' "$zshort" | tail -c 1)
+	if [ "$zlast" = A ]; then znew=B; else znew=A; fi
+	printf 'untrusted comment: minisign public key %s\n%s\n' "${zshort%?}$znew" "$zkeyline" >"$IDK/zero-wrong.pub"
+	idcase "key ID: a ${#zshort} character comment that is not the key's ID is refused" active "$IDK/zero-wrong.pub" "is not the ID of the key, $zfull"
+	# the key's own ID with one more digit: longer than 16 characters
+	printf 'untrusted comment: minisign public key 0%s\n%s\n' "$zfull" "$zkeyline" >"$IDK/zero-long.pub"
+	idcase "key ID: a comment of 17 characters is refused" active "$IDK/zero-long.pub" "not 1 to 16 hex characters"
+	printf 'untrusted comment: minisign public key \n%s\n' "$zkeyline" >"$IDK/zero-empty.pub"
+	idcase "key ID: an empty ID in the comment is refused" active "$IDK/zero-empty.pub" "not 1 to 16 hex characters"
+	printf 'untrusted comment: minisign public key %sG\n%s\n' "${zshort%?}" "$zkeyline" >"$IDK/zero-nothex.pub"
+	idcase "key ID: a non hex ID in the comment is refused" active "$IDK/zero-nothex.pub" "key ID is not hex"
+fi
+
 # --- part 1c: fetch, against a throwaway local HTTPS server -------------
 # No real network to GitHub. A real curl client against a real TLS
 # listener is trusted the standard curl way (CURL_CA_BUNDLE naming our
