@@ -18,7 +18,9 @@ ok() { printf '  ok   %s\n' "$1"; pass=$((pass + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; failed=$((failed + 1)); }
 
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT INT TERM
+trap 'rm -rf "$T"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Two independent key pairs: "good" signs, "other" is a stranger.
 mkdir -p "$T/keys"

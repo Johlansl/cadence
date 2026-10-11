@@ -79,6 +79,14 @@ signed in CI with a two-key trust set. The agent side is in
   downloaded binary is executed (`-version`, empty environment, 30 second
   timeout) only after its SHA-256 and signature are verified. There is no
   override. See `SECURITY.md` "Rollback".
+- Audit of the shell scripts. `scripts/backup.sh` now prunes only the directories
+  named like the backups it creates (`YYYYMMDDTHHMMSSZ`), never a symlink, and
+  counts only those toward `CADENCE_BACKUP_KEEP`: a `CADENCE_BACKUP_DIR` that also
+  holds other directories no longer loses them. `scripts/rotate-dashboard-password.sh`
+  removes its temporary copy of `.env` (secrets included) when it fails.
+  `agent-install.sh`, `agent-bootstrap.sh` and `build-agent-release.sh` now stop
+  on SIGHUP, SIGINT or SIGTERM (exit 129, 130, 143) instead of going on after
+  deleting their working directory.
 - `scripts/agent-install.sh` now looks for `minisign` before it downloads anything
   when `CADENCE_MINISIGN_PUB` is set, and reads the served `cadence-agent.sha256`
   as strictly as the agent and `publish-agent.sh` do (one line, 64 lowercase hex

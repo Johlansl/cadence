@@ -107,7 +107,11 @@ fi
 stage="$out.tmp.$$"
 rm -rf "$stage"
 mkdir -p "$stage"
-trap 'rm -rf "$stage"' EXIT INT TERM
+# A signal trap that only cleans up lets the build carry on afterwards: the
+# signal traps exit (128 + signal) and the EXIT trap does the cleaning.
+trap 'rm -rf "$stage"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "build-agent-release.sh: building agent $ver (linux/amd64+arm64, static)"
 for arch in $ARCHS; do

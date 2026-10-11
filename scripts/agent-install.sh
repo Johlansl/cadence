@@ -314,7 +314,13 @@ if [ "$upgrade_only" = "true" ]; then
 fi
 
 temporary=$(mktemp -d)
-trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+# A trap on a signal only runs its command and then lets the script carry on:
+# the temporary directory would be gone while the install went on. The signal
+# traps therefore exit (128 + signal), and the EXIT trap does the cleaning.
+trap 'rm -rf "$temporary"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The floor: the highest version the host already runs. Read before the first
 # download, so a host that cannot establish it never fetches anything.

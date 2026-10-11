@@ -54,7 +54,12 @@ fi
 ca_url="http://$host/agent/ca.crt"
 
 temporary=$(mktemp -d)
-trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+# A signal trap that only cleans up lets the script carry on afterwards: the
+# signal traps exit (128 + signal) and the EXIT trap does the cleaning.
+trap 'rm -rf "$temporary"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 ca_file=$temporary/server-ca.crt
 installer=$temporary/install.sh
 code_file=$temporary/enrollment-code

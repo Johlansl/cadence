@@ -119,9 +119,13 @@ alembic_rev=$(docker compose exec -T backend alembic current 2>/dev/null \
 
 # 5. Prune old backups, keep the newest $keep.
 if [ "$keep" -gt 0 ]; then
-	# backup dirs are timestamp-named (no spaces/newlines), so ls is safe here
-	# shellcheck disable=SC2012
-	ls -1d "$backup_dir"/*/ 2>/dev/null | sort | head -n "-$keep" | while read -r old; do
+	# Only directories named like the ones this script creates (a UTC stamp,
+	# YYYYMMDDTHHMMSSZ: no spaces or newlines, so ls is safe here) are counted
+	# or pruned, and a symlink is never followed. CADENCE_BACKUP_DIR may point at
+	# a directory that holds other things; it must never lose them to a prune.
+	# shellcheck disable=SC2010,SC2012
+	ls -1d "$backup_dir"/*/ 2>/dev/null | grep -E '/[0-9]{8}T[0-9]{6}Z/$' | sort | head -n "-$keep" | while read -r old; do
+		if [ -L "${old%/}" ]; then continue; fi
 		echo "backup.sh: pruning $old"
 		rm -rf "$old"
 	done

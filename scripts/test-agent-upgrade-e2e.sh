@@ -84,7 +84,12 @@ V_BLAST=90.0.7
 ALL_VERS="$V_N $V_NEXT $V_BRICK $V_TAMP $V_OFF $V_CAMP $V_BLAST"
 
 T=$(mktemp -d)
-trap 'e2e_cleanup' EXIT HUP INT TERM
+# A signal trap that only cleans up lets the run carry on afterwards: the
+# signal traps exit (128 + signal) and the EXIT trap (e2e_cleanup) cleans.
+trap 'e2e_cleanup' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 PASS=0
 log()  { printf '[e2e %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }

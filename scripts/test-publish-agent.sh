@@ -198,7 +198,9 @@ rm -rf "$S"
 
 # --- part 1: fixture matrix ---------------------------------------------
 T=$(mktemp -d)
-trap 'rm -rf "$T" "$S"' EXIT INT TERM
+trap 'rm -rf "$T" "$S"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 export HOME="$T/emptyhome"
 mkdir -p "$HOME"
 DIST="$T/dist"
@@ -784,7 +786,9 @@ httpd.serve_forever()
 	# would otherwise fail and that failure would become this whole
 	# script's exit status, silently turning "109 passed, 0 failed" into
 	# a failed job.
-	trap 'kill "$RELPID" 2>/dev/null || true; rm -rf "$T" "$S"' EXIT INT TERM
+	trap 'kill "$RELPID" 2>/dev/null || true; rm -rf "$T" "$S"' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
 
 	export CADENCE_FETCH_REPO="$REPO_SLUG"
 	export CADENCE_FETCH_BASE_URL="https://127.0.0.1:$RELPORT"

@@ -139,6 +139,7 @@ jobs:
       - run: sh scripts/test-agent-key-backup.sh
       - run: sh scripts/test-e2e-workdir.sh
       - run: sh scripts/test-ci-parity.sh
+      - run: sh scripts/test-script-hygiene.sh
       - name: agent .deb carries the canonical binary path
         # Platform-specific proof: GitHub runners have docker and free
         # minutes, while the GitLab `scripts` job (metered minutes, no

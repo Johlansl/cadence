@@ -36,7 +36,9 @@ ok() { printf '  ok   %s\n' "$1"; pass=$((pass + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; failed=$((failed + 1)); }
 
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT INT TERM
+trap 'rm -rf "$T"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # --- fake tools -----------------------------------------------------------
 BIN=$T/bin
@@ -758,6 +760,50 @@ new_case shamis a
 printf '%s  cadence-agent\n' "$(printf '0%.0s' $(seq 1 64))" >"$FIX_DIR/agent/cadence-agent.sha256"
 run_install CADENCE_MINISIGN_PUB="$T/keys/a.pub"
 expect_fail "sha256: a well formed but wrong hash" "checksum mismatch"
+
+echo "9. a signal stops the installer, and the temporary directory goes with it"
+# A trap that only deletes the directory lets the script carry on after the
+# signal. The fake curl takes two seconds (the trap runs when it returns), then
+# fails, so a script that carries on would exit 22, and one that stops exits
+# with 128 plus the signal number.
+BIN_SLOW=$T/bin-slow
+mkdir -p "$BIN_SLOW"
+cat >"$BIN_SLOW/curl" <<'EOF'
+#!/bin/sh
+: >"$FAKE_DIR/curl.started"
+sleep 2
+exit 22
+EOF
+chmod +x "$BIN_SLOW/curl"
+
+# signal_case <signal name> <expected exit status>
+signal_case() {
+	new_case "sig$1" a
+	env -u CADENCE_MINISIGN_PUB -u CADENCE_MINISIGN_PUB2 -u CADENCE_UPGRADE_ONLY \
+		PATH="$BIN_SLOW:$BIN:$PATH" TMPDIR="$TD" FAKE_DIR="$FAKE_DIR" FIX_DIR="$FIX_DIR" \
+		CADENCE_BASE_URL=https://cadence.test CADENCE_VERIFIED_CA="$CASE/ca.crt" \
+		sh "$INSTALL" >"$OUT" 2>&1 &
+	_pid=$!
+	_n=0
+	while [ ! -f "$FAKE_DIR/curl.started" ] && [ "$_n" -lt 100 ]; do
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	kill -s "$1" "$_pid"
+	RC=0
+	wait "$_pid" || RC=$?
+	if [ "$RC" -eq "$2" ] && no_leftovers && ! reached_install && no_unexpected; then
+		ok "SIG$1 while downloading: exit $RC, nothing left behind, nothing installed"
+	else
+		fail "SIG$1 while downloading: exit $RC (want $2), temp dir: $(find "$TD" -mindepth 1 -maxdepth 1 | tr '\n' ' '): $(cat "$OUT")"
+	fi
+}
+# SIGINT is not tested here: a job started with & by a non interactive shell
+# starts with SIGINT ignored, and a signal ignored on entry cannot be trapped,
+# so this harness cannot deliver it. A terminal Ctrl-C reaches a foreground
+# script normally; test-script-hygiene.sh checks that every INT trap exits.
+signal_case HUP 129
+signal_case TERM 143
 
 echo "install-test: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]

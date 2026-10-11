@@ -39,6 +39,16 @@ new_hash_esc=$(printf '%s' "$new_hash" | sed 's/[$]/$$/g')
 backup=".env.bak.$(date +%Y%m%d%H%M%S)"
 cp .env "$backup"
 
+# The temporary copy holds the whole .env, secrets included: whatever stops
+# the script (a failing sed, a signal), it must not stay behind in /tmp.
+tmp=""
+cleanup() {
+	if [ -n "$tmp" ]; then rm -f -- "$tmp"; fi
+	return 0
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 tmp=$(mktemp)
 sed "s|^CADENCE_DASHBOARD_PASSWORD_HASH=.*|CADENCE_DASHBOARD_PASSWORD_HASH=$new_hash_esc|" .env >"$tmp"
 cat "$tmp" >.env
