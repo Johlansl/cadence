@@ -10,12 +10,27 @@
 #                          key), same format; requires CADENCE_MINISIGN_PUB
 # The signature is accepted if either key verifies it. Both values must be
 # well formed even when the first key verifies. Keys are never fetched.
+#
+# CADENCE_UPGRADE_ONLY=true additionally refuses to install a release older
+# than what the host already runs, with no way around it:
+#   - CADENCE_MINISIGN_PUB (and so minisign) is mandatory, because the version
+#     of the downloaded binary is only trusted, and the binary only executed,
+#     after its signature has been verified;
+#   - the floor is the highest version reported by -version among the two
+#     agent paths this installer has ever used (the canonical one and the
+#     historical one); a path that exists but cannot be read as an agent
+#     (symlink, directory, not executable, unreadable version) refuses;
+#   - no agent binary at either path refuses.
+# Versions are compared on their three leading integers only: 0.15.0-3-gabc
+# counts as 0.15.0, and an equal version is accepted (reinstall).
 
 set -eu
 
 base=${CADENCE_BASE_URL:-https://cadence.lan}
 verified_ca=${CADENCE_VERIFIED_CA:-}
 upgrade_only=${CADENCE_UPGRADE_ONLY:-false}
+canon_bin=/usr/bin/cadence-agent
+legacy_bin=/usr/local/bin/cadence-agent
 case "$base" in
 https://*) ;;
 *) echo "install.sh: CADENCE_BASE_URL must use https" >&2; exit 2 ;;
@@ -107,6 +122,128 @@ try_key() {
 		-x "$temporary/cadence-agent.minisig" >/dev/null 2>&1
 }
 
+# --- downgrade check (CADENCE_UPGRADE_ONLY=true) -----------------------------
+
+# version_triple <string>: succeed, and set v_maj v_min v_pat, only for a
+# strict canonical N.N.N: digits and dots, three components, each "0" or
+# starting with 1-9, at most 9 digits (shell integer tests stay exact). Same
+# grammar as check_version in scripts/publish-agent.sh and ParseTarget in the
+# agent; scripts/test-ci-sign-agent.sh keeps the copies in step.
+version_triple() {
+	case $1 in
+	*[!0-9.]* | "" | .* | *. | *..*) return 1 ;;
+	esac
+	v_maj=${1%%.*}
+	_rest=${1#*.}
+	case $_rest in *.*) ;; *) return 1 ;; esac
+	v_min=${_rest%%.*}
+	v_pat=${_rest#*.}
+	case $v_pat in *.*) return 1 ;; esac
+	for _c in "$v_maj" "$v_min" "$v_pat"; do
+		case $_c in
+		"") return 1 ;;
+		0) ;;
+		0*) return 1 ;;
+		esac
+		[ "${#_c}" -le 9 ] || return 1
+	done
+}
+
+# version_current <string>: the -version of an installed agent, as the agent
+# itself reads it (ParseCurrent): N.N.N, optionally followed by "-" and a
+# non-empty suffix (git describe builds look like 0.14.0-51-ge946197). Only
+# the three integers count; the suffix is dropped.
+version_current() {
+	[ "${#1}" -le 316 ] || return 1
+	case $1 in
+	*-*)
+		[ -n "${1#*-}" ] || return 1
+		version_triple "${1%%-*}"
+		;;
+	*) version_triple "$1" ;;
+	esac
+}
+
+# triple_gt <a1> <a2> <a3> <b1> <b2> <b3>: succeed when a is strictly newer.
+triple_gt() {
+	[ "$1" -gt "$4" ] && return 0
+	[ "$1" -lt "$4" ] && return 1
+	[ "$2" -gt "$5" ] && return 0
+	[ "$2" -lt "$5" ] && return 1
+	[ "$3" -gt "$6" ]
+}
+
+# probe_version <binary>: run "<binary> -version" and set probe_text to its
+# single output line. This is the only place an agent binary is executed:
+# stdin closed, stderr dropped, empty environment, killed after 30 seconds,
+# output cut at 4096 bytes. On any failure it sets probe_err and fails.
+probe_version() {
+	probe_err=""
+	probe_text=""
+	rm -f "$temporary/probe.rc" "$temporary/probe.out"
+	{
+		_rc=0
+		timeout -s KILL 30 env -i "$1" -version </dev/null 2>/dev/null || _rc=$?
+		printf '%s\n' "$_rc" >"$temporary/probe.rc"
+	} | head -c 4097 >"$temporary/probe.out"
+	_rc=$(cat "$temporary/probe.rc" 2>/dev/null) || _rc=""
+	if [ "$_rc" != "0" ]; then
+		probe_err="exit status ${_rc:-unknown}"
+		return 1
+	fi
+	_size=$(wc -c <"$temporary/probe.out" | tr -d ' ')
+	if [ "$_size" -gt 4096 ]; then
+		probe_err="output longer than 4096 bytes"
+		return 1
+	fi
+	probe_text=$(cat "$temporary/probe.out")
+	# exactly one line: no newline inside the text, and the text plus its own
+	# newline is the whole output (so no extra blank line, no missing newline)
+	_nl='
+'
+	case $probe_text in
+	*"$_nl"*)
+		probe_err="output is not exactly one line"
+		return 1
+		;;
+	esac
+	if [ "$_size" -ne $((${#probe_text} + 1)) ]; then
+		probe_err="output is not exactly one line"
+		return 1
+	fi
+}
+
+floor_found=0
+floor_maj=0
+floor_min=0
+floor_pat=0
+
+# read_floor <path>: fold the version of an installed agent into the floor.
+# A missing path is skipped; a path that exists but cannot be trusted as an
+# agent refuses the whole run (fail closed, never skipped).
+read_floor() {
+	if [ ! -e "$1" ] && [ ! -L "$1" ]; then return 0; fi
+	if [ -L "$1" ] || [ ! -f "$1" ] || [ ! -x "$1" ]; then
+		echo "install.sh: $1 exists but is not a regular executable file (symlink, directory or not executable): refusing, the running version cannot be established. Recovery: docs/agent-path-migration.md, section 6" >&2
+		exit 1
+	fi
+	if ! probe_version "$1"; then
+		echo "install.sh: cannot read the version of $1 ($probe_err): refusing. Recovery: docs/agent-path-migration.md, section 6" >&2
+		exit 1
+	fi
+	if ! version_current "$probe_text"; then
+		echo "install.sh: $1 does not report a valid version: refusing. Recovery: docs/agent-path-migration.md, section 6" >&2
+		exit 1
+	fi
+	if [ "$floor_found" -eq 0 ] ||
+		triple_gt "$v_maj" "$v_min" "$v_pat" "$floor_maj" "$floor_min" "$floor_pat"; then
+		floor_maj=$v_maj
+		floor_min=$v_min
+		floor_pat=$v_pat
+	fi
+	floor_found=1
+}
+
 # Shape checks come first, before anything is downloaded, and apply to both
 # keys even when the first one would verify: a malformed second key is a
 # configuration error, never silently ignored.
@@ -122,9 +259,31 @@ fi
 if [ -n "$pub2" ]; then
 	check_pub CADENCE_MINISIGN_PUB2 "$pub2" || exit 1
 fi
+if [ "$upgrade_only" = "true" ]; then
+	if [ -z "$pub" ]; then
+		echo "install.sh: CADENCE_UPGRADE_ONLY requires CADENCE_MINISIGN_PUB: the downgrade check executes the downloaded binary, which is only safe once its signature is verified" >&2
+		exit 1
+	fi
+	if ! command -v timeout >/dev/null 2>&1; then
+		echo "install.sh: CADENCE_UPGRADE_ONLY requires the timeout command (coreutils)" >&2
+		exit 1
+	fi
+fi
 
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+
+# The floor: the highest version the host already runs. Read before the first
+# download, so a host that cannot establish it never fetches anything.
+if [ "$upgrade_only" = "true" ]; then
+	read_floor "$canon_bin"
+	read_floor "$legacy_bin"
+	if [ "$floor_found" -eq 0 ]; then
+		echo "install.sh: CADENCE_UPGRADE_ONLY found no agent binary at $canon_bin or $legacy_bin: refusing, there is no running version to compare with. Reinstall without CADENCE_UPGRADE_ONLY, with a new enrollment code" >&2
+		exit 1
+	fi
+	echo "install.sh: running agent version $floor_maj.$floor_min.$floor_pat (downgrade floor)"
+fi
 
 fetch() {
 	curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 \
@@ -166,6 +325,24 @@ if [ -n "$pub" ]; then
 		exit 1
 	fi
 	echo "install.sh: minisign signature OK (key $(key_id "$(pub_key "$signer")"))"
+	if [ "$upgrade_only" = "true" ]; then
+		# FIRST EXECUTION POINT of the downloaded binary: sha256 and signature
+		# are both verified, and nothing on the host has changed yet.
+		chmod 0700 "$temporary/cadence-agent"
+		if ! probe_version "$temporary/cadence-agent"; then
+			echo "install.sh: the downloaded agent cannot report its version ($probe_err): refusing" >&2
+			exit 1
+		fi
+		if ! version_triple "$probe_text"; then
+			echo "install.sh: the downloaded agent does not report a strict N.N.N version: refusing" >&2
+			exit 1
+		fi
+		if triple_gt "$floor_maj" "$floor_min" "$floor_pat" "$v_maj" "$v_min" "$v_pat"; then
+			echo "install.sh: refusing to downgrade: the host runs $floor_maj.$floor_min.$floor_pat, the server offers $v_maj.$v_min.$v_pat" >&2
+			exit 1
+		fi
+		echo "install.sh: downgrade check OK (host $floor_maj.$floor_min.$floor_pat, server $v_maj.$v_min.$v_pat)"
+	fi
 else
 	echo "install.sh: authenticated download and sha256 OK"
 fi

@@ -230,12 +230,26 @@ damage.
   below the version it is running (`upgrade.Decide` returns `RefusedDowngrade`,
   applied in `agent/cmd/agent/main.go`; the backend does not check it) and it
   requires the downloaded binary's `-version` to print exactly the target.
-  Another path has no such protection. A host that runs the installer
-  (`agent-install.sh`, a fresh bootstrap or `CADENCE_UPGRADE_ONLY=true`) installs
-  whatever signed binary the server serves at the unversioned install path, and
-  the installer does not compare versions. A compromised server can therefore
-  put such a host back on an older release that is validly signed but
-  vulnerable. There is no anti-rollback check on that path yet.
+  The installer path has its own check, in `CADENCE_UPGRADE_ONLY=true` mode,
+  with no way around it. Before it downloads anything it reads the version the
+  host runs, as the highest `-version` of the two agent paths this installer has
+  ever used (`/usr/bin/cadence-agent` and the historical
+  `/usr/local/bin/cadence-agent`, a closed list: no other path is ever read or
+  executed). After the download it verifies the SHA-256 and the signature, only
+  then runs the downloaded binary with `-version` (empty environment, 30 second
+  timeout, output capped at 4096 bytes), and refuses to install a version below
+  the one the host runs. It refuses, rather than guesses, when `minisign` or
+  `CADENCE_MINISIGN_PUB` is missing, when neither path holds an agent, or when a
+  path that exists is not a regular executable file (a symlink, a directory) or
+  does not report a valid version. The cost of reading both paths: a stale,
+  unreadable file at the historical path blocks the installer until it is removed
+  (`docs/agent-path-migration.md`, section 6). Versions are compared on their three
+  leading integers, so `0.15.0-3-gabc` counts as `0.15.0`, and an equal version is
+  accepted (a repair reinstall). What this does not cover: a fresh install (not
+  upgrade-only), which needs an enrollment code typed by hand. And, like the key
+  itself (see the `install.sh` bullet below), this check only protects against a
+  compromised server if `install.sh` reached the host out of band: the server
+  serves `install.sh` too and could serve one without the check.
 - Someone who has only a signing key cannot deliver anything to an enrolled
   fleet. Agents download upgrades from their own Cadence server, at a URL they
   derive locally, never from GitHub. To use a stolen key against a fleet the

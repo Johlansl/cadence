@@ -678,8 +678,16 @@ sudo CADENCE_BASE_URL=https://<site> \
 
 This mode refuses to run unless the host is already enrolled, preserves its HMAC
 token and mTLS credentials, installs the binary at `/usr/bin/cadence-agent` and
-refreshes the units. Add `CADENCE_MINISIGN_PUB` (and `CADENCE_MINISIGN_PUB2`) to
-that command to check the binary's signature as described above. Afterwards
+refreshes the units. It also refuses to install a release older than the one the
+host runs, so it **requires `minisign` on the host and `CADENCE_MINISIGN_PUB`**
+(plus `CADENCE_MINISIGN_PUB2` for the backup key, see above): the version of the
+downloaded binary is only trusted, and the binary only executed, after its
+signature has been verified. This is a breaking change for anyone who ran this
+mode without a key. The running version is the highest `-version` of
+`/usr/bin/cadence-agent` and `/usr/local/bin/cadence-agent`, so a host still on
+the historical path is handled; `0.15.0-3-gabc` counts as `0.15.0`, an equal
+version is accepted, and a missing agent, a symlink or an unreadable version is
+refused (see `SECURITY.md` "Rollback"). Afterwards
 `scripts/check-agent-host-upgrade-readiness.sh` should print `6B-READY`;
 [docs/agent-path-migration.md](docs/agent-path-migration.md) covers the other
 historical states. Never fetch or execute the installer over HTTP. See also

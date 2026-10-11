@@ -65,8 +65,12 @@ else
 			fail "scripts/agent-install.sh lacks '$line'"
 		fi
 	done
-	if grep -q 'usr/local/bin/cadence-agent' scripts/agent-install.sh; then
-		fail "old binary path still present in scripts/agent-install.sh"
+	# The historical path may appear on exactly one line: the constant the
+	# downgrade check reads the running version from. Never in an install,
+	# an enrollment or any other use; any other occurrence is an error.
+	old_lines=$(grep 'usr/local/bin/cadence-agent' scripts/agent-install.sh || true)
+	if [ -n "$old_lines" ] && [ "$old_lines" != 'legacy_bin=/usr/local/bin/cadence-agent' ]; then
+		fail "old binary path used in scripts/agent-install.sh beyond the legacy_bin constant"
 	fi
 	if [ "$failed" -eq "$block_failed" ]; then
 		echo "agent-paths: scripts/agent-install.sh installs/invokes /usr/bin/cadence-agent"

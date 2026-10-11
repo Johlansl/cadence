@@ -73,8 +73,18 @@ timers, and fires one report:
 
 ```sh
 CADENCE_BASE_URL=https://<site> CADENCE_VERIFIED_CA=<pinned-ca> \
+  CADENCE_MINISIGN_PUB=<active key> CADENCE_MINISIGN_PUB2=<backup key> \
   CADENCE_UPGRADE_ONLY=true sh agent-install.sh
 ```
+
+This mode refuses to downgrade, so it needs `minisign` and
+`CADENCE_MINISIGN_PUB` on the host and exits before any download without
+them. It reads the version the host runs from **both** `/usr/bin/cadence-agent`
+and `/usr/local/bin/cadence-agent` and keeps the higher one, which is what makes
+a host still on the historical path (state A) work, and also protects a host
+whose first run was interrupted between the binary and the units. Nothing else
+is ever read or executed. A version suffix is ignored (`0.15.0-3-gabc` counts
+as `0.15.0`) and an equal version is accepted.
 
 From a repo checkout instead, re-running `agent/systemd/install.sh`
 (needs a freshly built PR6 binary as argument) does the same for binary
@@ -177,6 +187,15 @@ rm /usr/local/bin/cadence-agent
 If the script reports the residue as still referenced, STOP: deleting
 it would break the running agent. Migrate the units first. Never
 `rm -f` blindly.
+
+The installer's downgrade check (`CADENCE_UPGRADE_ONLY=true`) also reads this
+file, and that has one cost. While the historical file exists it counts toward
+the version the host runs, so a stale copy that is no longer readable (not
+executable, a symlink, `-version` failing) makes the installer refuse, with a
+message that names the path and points here. The fix is the removal above once
+its conditions hold; there is deliberately no override. If the conditions do not
+hold yet because the units still reference the file, repair the file itself
+(restore the executable bit or the binary) instead of bypassing the check.
 
 ## 7. Canary progression (mandatory)
 

@@ -26,7 +26,12 @@ GitHub Release:
   true) refuses these jobs on a host.
 - `/usr/bin/cadence-agent` is the single canonical binary path: the systemd units,
   the installer and the `.deb` all use it. A host must be migrated to it before it
-  can self-upgrade (`docs/agent-path-migration.md`).
+  can self-upgrade (`docs/agent-path-migration.md`). The installer in
+  `CADENCE_UPGRADE_ONLY=true` mode is a breaking change: it refuses to install a
+  version older than the one the host runs (highest `-version` of
+  `/usr/bin/cadence-agent` and `/usr/local/bin/cadence-agent`), so it needs
+  `minisign` and `CADENCE_MINISIGN_PUB` on the host. It is how a host still on
+  `/usr/local/bin` reaches this release.
 - Two-key trust set: the agent compiles in two minisign public keys, the active
   key (`C9EDE89E1DEEED37`, `agent/minisign.pub`) and an offline backup key
   (`2167C9939EC0F4FC`, `agent/minisign-backup.pub`), and accepts a signature from

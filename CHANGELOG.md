@@ -69,6 +69,16 @@ signed in CI with a two-key trust set. The agent side is in
   in a throwaway copy of the checkout with its own disposable `.env`, names its
   Docker image `e2e-backend` instead of `cadence-backend`, and refuses to start
   with less than 4 GiB free for Docker.
+- Breaking change for `scripts/agent-install.sh` with `CADENCE_UPGRADE_ONLY=true`:
+  it now refuses to install a release older than the one the host runs, and
+  therefore requires `minisign` and `CADENCE_MINISIGN_PUB` on the host (it exits
+  before downloading anything otherwise). The running version is the highest
+  `-version` of `/usr/bin/cadence-agent` and the historical
+  `/usr/local/bin/cadence-agent`; no agent at either path, a symlink or a path
+  that does not report a version also refuse. An equal version is accepted. The
+  downloaded binary is executed (`-version`, empty environment, 30 second
+  timeout) only after its SHA-256 and signature are verified. There is no
+  override. See `SECURITY.md` "Rollback".
 
 ## 0.5.0
 

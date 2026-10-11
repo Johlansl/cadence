@@ -105,7 +105,9 @@ For later binary-only upgrades, download the installer over HTTPS with the
 already pinned `/usr/local/share/ca-certificates/cadence-server.crt`, save it
 to a local file, and run it with `CADENCE_UPGRADE_ONLY=true`. This mode refuses
 to run unless an enrolled `agent.env` already exists and never replaces its
-token or certificate paths.
+token or certificate paths. It also refuses to install an older release than the
+one the host runs, and so needs `minisign` and `CADENCE_MINISIGN_PUB` on the host
+(see `README.md` and `SECURITY.md` "Rollback").
 
 ## Recovery and revocation
 
