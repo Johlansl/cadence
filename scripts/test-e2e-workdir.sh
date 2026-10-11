@@ -345,5 +345,102 @@ else
 	echo "  skip cleanup test: needs minisign, python3, openssl and curl"
 fi
 
+# --- the publish order of the E2E (static) --------------------------------------------------
+# The E2E publishes with the real scripts/publish-agent.sh, which refuses a version
+# older than the newest one already published. So the `publish "$V_..."` calls of
+# the E2E must, in the order they appear in the file, name strictly ascending
+# versions, and none may sit inside a scenario_* function (those run in parallel
+# subshells: two publishes there would race each other against the floor).
+echo "publish order of the E2E"
+eval "$(sed -n '/^check_version() {/,/^}/p' "$HERE/agent-version-lib.sh")"
+eval "$(sed -n '/^version_gt() {/,/^}/p' "$HERE/publish-agent.sh")"
+
+# publish_order_problems <file>: prints one line per problem, nothing when fine.
+publish_order_problems() {
+	_calls=$(awk '
+		/^V_[A-Z]+=[0-9.]+$/ { split($0, a, "="); val[a[1]] = a[2] }
+		/^scenario_[a-z_]+\(\) \{/ { infn = 1 }
+		/^\}/ { infn = 0 }
+		/^[[:space:]]*publish "\$V_[A-Z]+"/ {
+			name = $0
+			sub(/^[^$]*\$/, "", name)
+			sub(/".*$/, "", name)
+			print (infn ? "SCENARIO " : "") name " " val[name]
+		}' "$1")
+	_n=0
+	_prev=""
+	_prevname=""
+	while read -r _a _b _c; do
+		[ -n "$_a" ] || continue
+		_n=$((_n + 1))
+		if [ "$_a" = SCENARIO ]; then
+			echo "publish of $_b is inside a parallel scenario function"
+			_name=$_b
+			_ver=$_c
+		else
+			_name=$_a
+			_ver=$_b
+		fi
+		if ! check_version "$_ver"; then
+			echo "$_name has no canonical version ('$_ver')"
+			continue
+		fi
+		if [ -n "$_prev" ] && ! version_gt "$_ver" "$_prev"; then
+			echo "$_name ($_ver) is not newer than the previous publish $_prevname ($_prev)"
+		fi
+		_prev=$_ver
+		_prevname=$_name
+	done <<EOF
+$_calls
+EOF
+	if [ "$_n" -lt 2 ]; then echo "found $_n publish call(s), expected the E2E's six"; fi
+}
+
+problems=$(publish_order_problems "$E2E")
+if [ -z "$problems" ]; then
+	ok "the E2E publishes in strictly ascending version order, outside the parallel scenarios"
+else
+	fail "E2E publish order: $problems"
+fi
+# the single quotes are on purpose in the lines below: literal dollar signs
+# shellcheck disable=SC2016
+n_pub=$(grep -c -E '^[[:space:]]*publish "\$V_[A-Z]+"' "$E2E" || true)
+if [ "$n_pub" -eq 6 ]; then ok "the E2E has six publish calls"; else fail "the E2E has $n_pub publish calls, this test expects six"; fi
+if grep -qF 'is older than the newest published version' "$E2E"; then
+	ok "the E2E asserts the publish floor (an older version is refused with its message)"
+else
+	fail "the E2E has no publish floor assertion"
+fi
+
+# the check itself must see what it is meant to see
+# shellcheck disable=SC2016
+printf '%s\n' 'V_A=1.0.1' 'V_B=1.0.2' 'V_C=1.0.3' 'publish "$V_A"' 'publish "$V_C"' 'publish "$V_B"' >"$T/descending.sh"
+if publish_order_problems "$T/descending.sh" | grep -q 'V_B (1.0.2) is not newer'; then
+	ok "the check flags a version published after a newer one"
+else
+	fail "the check missed a descending order"
+fi
+# shellcheck disable=SC2016
+printf '%s\n' 'V_A=1.0.1' 'V_B=1.0.2' 'publish "$V_A"' 'scenario_x() {' '	publish "$V_B"' '}' >"$T/inscenario.sh"
+if publish_order_problems "$T/inscenario.sh" | grep -q 'inside a parallel scenario'; then
+	ok "the check flags a publish inside a scenario function"
+else
+	fail "the check missed a publish inside a scenario"
+fi
+# shellcheck disable=SC2016
+printf '%s\n' 'V_A=1.0.1' 'V_B=1.0.1' 'publish "$V_A"' 'publish "$V_B"' >"$T/equal.sh"
+if publish_order_problems "$T/equal.sh" | grep -q 'not newer'; then
+	ok "the check flags two publishes of the same version"
+else
+	fail "the check missed an equal version"
+fi
+# shellcheck disable=SC2016
+printf '%s\n' 'V_A=1.0.9' 'V_B=1.0.10' 'publish "$V_A"' 'publish "$V_B"' >"$T/numeric.sh"
+if [ -z "$(publish_order_problems "$T/numeric.sh")" ]; then
+	ok "the check compares as numbers (1.0.10 follows 1.0.9)"
+else
+	fail "the check compared versions as text"
+fi
+
 echo "e2e-workdir-test: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]

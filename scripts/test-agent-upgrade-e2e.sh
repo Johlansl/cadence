@@ -74,14 +74,22 @@ E2E_ORIGIN=$(sed -n 's/^origin=//p' "$repo/$E2E_MARKER")
 [ -n "$E2E_ORIGIN" ] || { echo "e2e: $repo/$E2E_MARKER has no origin: refusing" >&2; exit 1; }
 cd "$repo"
 
+# The server refuses to publish a version older than the newest one it holds
+# (the publish floor of scripts/publish-agent.sh), and this test uses the real
+# one. So every `publish` below runs in strictly ascending version order, one at
+# a time, in the order the calls appear in this file: V_NEXT, V_BRICK, V_OFF,
+# V_TAMP, V_CAMP, V_BLAST. None runs inside the parallel scenarios.
+# scripts/test-e2e-workdir.sh checks that statically. V_LOW is never published:
+# it is what the floor assertion at the end tries to publish after V_BLAST.
+V_LOW=90.0.0
 V_N=90.0.1
 V_NEXT=90.0.2
 V_BRICK=90.0.3
-V_TAMP=90.0.4
-V_OFF=90.0.5
+V_OFF=90.0.4
+V_TAMP=90.0.5
 V_CAMP=90.0.6
 V_BLAST=90.0.7
-ALL_VERS="$V_N $V_NEXT $V_BRICK $V_TAMP $V_OFF $V_CAMP $V_BLAST"
+ALL_VERS="$V_LOW $V_N $V_NEXT $V_BRICK $V_OFF $V_TAMP $V_CAMP $V_BLAST"
 
 T=$(mktemp -d)
 # A signal trap that only cleans up lets the run carry on afterwards: the
@@ -242,7 +250,7 @@ snapshot_creds() { # snapshot_creds CONTAINER OUTFILE (hashes only)
 	hexec "$1" sh -c 'sha256sum /etc/cadence/*; stat -c "%n %a %u" /etc/cadence/*' >"$2"
 }
 
-# --- phase 1: test key, release repo, seven signed bundles ----------------------
+# --- phase 1: test key, release repo, eight signed bundles ----------------------
 log 'phase 1/11: test key + release builds (real PR2 workflow)'
 minisign -G -W -s "$T/e2e-minisign.key" -p "$T/e2e-minisign.pub" >/dev/null 2>&1 \
 	|| die 'minisign -G failed'
@@ -285,7 +293,7 @@ for v in $ALL_VERS; do
 	test -x "$T/bundle-$v/cadence-agent-linux-amd64" || die "bundle $v missing amd64"
 	rm -f "$RREL/agent/bin"/* # keep the next tag-discipline check clean
 done
-pass 'seven break-glass builds, signed with the test key (server never saw it)'
+pass 'eight break-glass builds, signed with the test key (server never saw it)'
 
 # --- phase 2: throwaway stack ---------------------------------------------------
 log 'phase 2/11: starting throwaway stack'
@@ -565,9 +573,13 @@ pass 'no token/key material in server logs or host journal'
 # Both wait out the same real 420s proof timeout; running them together
 # keeps the suite near 25 minutes instead of 35.
 log 'phase 5+6/11: recovery-after-timeout (A) and offline-host (B) in parallel'
+# Both scenarios' releases are published here, in ascending order, BEFORE the
+# two scenarios start: a publish inside a parallel scenario would race the
+# other one against the publish floor.
+publish "$V_BRICK"
+publish "$V_OFF"
 
 scenario_recovery() { # N+1 -> N+2 installs, never proves, operator restores .prev
-	publish "$V_BRICK"
 	J2=$(make_job "$A_ID" "$V_BRICK")
 	wait_until 'recovery claim' 240 probe_job_status "$J2" running
 	# Freeze timers the instant the claim lands: otherwise a poll firing
@@ -602,7 +614,6 @@ scenario_recovery() { # N+1 -> N+2 installs, never proves, operator restores .pr
 }
 
 scenario_offline() { # claim, stall download, kill host, timeout, resume with old binary
-	publish "$V_OFF"
 	# Deterministic stall: swap the served amd64 bytes for a FIFO nobody
 	# writes to. Caddy blocks serving it, so the claiming agent wedges
 	# inside its download (within the 300s local deadline) and the kill
@@ -822,6 +833,24 @@ pass 'blast radius contained: stage 2 never exposed, no rename anywhere'
 [ "$(psql_e2e "SELECT count(*) FROM webhook_deliveries WHERE event_type = 'campaign.stopped' AND payload->'data'->>'campaign_id' = '$C2'")" = 1 ] \
 	|| die 'blast: campaign.stopped event missing'
 pass 'events: one canary failed, campaign.stopped, nothing for stage 2'
+
+# --- the publish floor, after the last publication --------------------------------------
+# Every version above was accepted in ascending order. Now publish a fully valid,
+# signed bundle that is OLDER than the newest one on the server: the floor must
+# refuse it (before it even looks at the bundle), with its message, and nothing
+# under ./dist may change (a FIFO is not a file: -type f skips it).
+log 'phase 9b: publish floor (an older version after the newest)'
+dist_state() { (cd "$repo/dist" && find . | sort && find . -type f -exec sha256sum {} + | sort); }
+DIST_BEFORE=$(dist_state)
+FLOOR_RC=0
+FLOOR_OUT=$(CADENCE_PUBLISH_PUBKEY=$T/e2e-minisign.pub \
+	sh "$repo/scripts/publish-agent.sh" publish "$V_LOW" "$T/bundle-$V_LOW" 2>&1) || FLOOR_RC=$?
+[ "$FLOOR_RC" -ne 0 ] || die "floor: publishing $V_LOW after $V_BLAST was accepted"
+printf '%s' "$FLOOR_OUT" | grep -qF "version $V_LOW is older than the newest published version $V_BLAST" \
+	|| die "floor: refused for another reason: $FLOOR_OUT"
+[ ! -e "$repo/dist/agent/v$V_LOW" ] || die "floor: v$V_LOW exists in dist after a refusal"
+[ "$(dist_state)" = "$DIST_BEFORE" ] || die 'floor: ./dist changed on a refused publication'
+pass "publish floor: $V_LOW refused after $V_BLAST with the expected message, ./dist unchanged"
 
 # --- phase 10: isolation re-verified + verdict -----------------------------------------
 log 'phase 10/11: done'
