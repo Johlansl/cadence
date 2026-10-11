@@ -5,6 +5,8 @@ The agent reports its version to the server on every report; `cadence-agent
 
 ## 0.15.0
 
+Released 2026-10-11.
+
 Self-upgrade by the server (6B), reboot proof (6A) and a two-key trust set. This
 is the first release signed in CI, so it is the first with a `.minisig` on its
 GitHub Release:

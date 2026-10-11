@@ -6,7 +6,9 @@ unit under a single version (`backend/app/__init__.py` `__version__`,
 [`agent/CHANGELOG.md`](agent/CHANGELOG.md) and
 [`docs/decisions.md`](docs/decisions.md) "Versioning".
 
-## Unreleased
+## 0.6.0
+
+Released 2026-10-11.
 
 Sequenced reboots (6A), fleet self-upgrade of the agent (6B), and agent releases
 signed in CI with a two-key trust set. The agent side is in
